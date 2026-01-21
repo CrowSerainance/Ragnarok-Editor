@@ -1,0 +1,92 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# Ragnarok Editor / ROMapOverlayEditor — .gitignore for .NET / WPF / Visual Studio
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Build outputs
+[Bb]in/
+[Oo]bj/
+[Oo]ut/
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+[Aa]rm/
+[Aa]rm64/
+bld/
+
+# Visual Studio
+.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.rsuser
+*.userprefs
+*.pidb
+*.ncb
+*.sdf
+*.opensdf
+*.VC.db
+*.VC.VC.opendb
+ipch/
+
+# JetBrains Rider
+.idea/
+*.sln.iml
+
+# VS Code (optional; remove if you share .vscode config)
+.vscode/
+
+# Build logs and temporary files (can contain local paths)
+[Bb]uild[Ll]og.*
+msbuild.log
+msbuild.err
+msbuild.wrn
+*.log
+[Ee]rr.log
+[Ee]rror.log
+build_error.txt
+build_log*.txt
+build_output.txt
+
+# NuGet
+packages/
+*.nupkg
+*.snupkg
+**/[Pp]ackages/*
+!**/[Pp]ackages/build/
+project.lock.json
+project.fragment.lock.json
+*.nuget.props
+*.nuget.targets
+
+# User / IDE
+*.rsuser
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# OS
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+Desktop.ini
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Backup / scratch
+*~
+*.bak
+*.swp
+*.tmp
+*.temp
+*.orig
+
+# Test / coverage (if added later)
+[Tt]est[Rr]esult*/
+[Cc]overage/
+*.coverage
+*.coveragexml

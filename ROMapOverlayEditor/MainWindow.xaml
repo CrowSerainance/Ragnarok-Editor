@@ -1,0 +1,151 @@
+<Window x:Class="ROMapOverlayEditor.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:ROMapOverlayEditor"
+        xmlns:uc="clr-namespace:ROMapOverlayEditor.UserControls"
+        Title="RO Map Overlay Editor (MVP)" Width="1400" Height="850"
+        WindowStartupLocation="CenterScreen" Focusable="True"
+        PreviewKeyDown="MainWindow_PreviewKeyDown" Closing="MainWindow_Closing">
+    <DockPanel>
+        <!-- TOP TOOLBAR -->
+        <ToolBarTray DockPanel.Dock="Top" Background="#F5F6F7" IsLocked="True">
+            <ToolBar Band="0" BandIndex="0">
+                <Button Content="New Pj" Click="New_Click" ToolTip="New Project"/>
+                <Button Content="Save" Click="Save_Click"/>
+                <Separator/>
+                <Button Content="Load Map Img" Click="LoadImage_Click" ToolTip="Load map image from file"/>
+                <Separator/>
+                <Button Content="Open GRF" Click="OpenGrf_Click" ToolTip="Pick a GRF file (BMPs + assets); Town list from GRF or Lua folder"/>
+                <Button Content="Set Lua Folder…" Click="SetLuaFolder_Click" ToolTip="Folder containing Towninfo.lua/lub (if not in GRF)"/>
+                <Separator/>
+
+                <TextBlock Text="Town:" VerticalAlignment="Center" Margin="6,0,4,0"/>
+                <ComboBox x:Name="TownCombo"
+                          Width="220"
+                          IsEnabled="False"
+                          DisplayMemberPath="Name"
+                          SelectedValuePath="Name"
+                          SelectionChanged="TownCombo_SelectionChanged" />
+
+                <Button x:Name="CopyExportBtn"
+                        Content="📋 Copy Export"
+                        IsEnabled="False"
+                        Margin="8,0,0,0"
+                        Click="CopyExport_Click"/>
+            </ToolBar>
+        </ToolBarTray>
+        
+        <!-- STATUS BAR -->
+        <StatusBar DockPanel.Dock="Bottom">
+            <StatusBarItem>
+                <TextBlock x:Name="StatusText" Text="Ready" />
+            </StatusBarItem>
+        </StatusBar>
+
+        <!-- RIGHT PANEL -->
+        <Border DockPanel.Dock="Right" Width="400" BorderBrush="#ccc" BorderThickness="1,0,0,0" Background="#FAFAFA">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="200"/>
+                </Grid.RowDefinitions>
+
+                <!-- TABS (INSPECTOR, DB, PROJECT) -->
+                <TabControl x:Name="RightTabs" Grid.Row="0" BorderThickness="0" Background="Transparent" Margin="2">
+                    <TabControl.Resources>
+                        <Style TargetType="TabItem">
+                            <Setter Property="FontSize" Value="12"/>
+                            <Setter Property="FontWeight" Value="SemiBold"/>
+                            <Setter Property="Padding" Value="12,6"/>
+                        </Style>
+                    </TabControl.Resources>
+                    
+                    <TabItem Header="INSPECTOR">
+                        <!-- DataContext will be set in code-behind to SelectedObject -->
+                        <uc:InspectorView x:Name="Inspector" 
+                                          FocusRequested="Inspector_FocusRequested" 
+                                          DeleteRequested="Inspector_DeleteRequested"/>
+                    </TabItem>
+                    
+                    <TabItem Header="DATABASE">
+                        <uc:DatabaseView x:Name="DbView" SpawnRequested="DbView_SpawnRequested"/>
+                    </TabItem>
+                    
+                    <TabItem Header="PROJECT">
+                        <uc:ProjectView x:Name="ProjectView"
+                                        ValidateRequested="ProjectView_ValidateRequested"
+                                        ExportNpcsRequested="ExportNpcs_Click"
+                                        ExportWarpsRequested="ExportWarps_Click"
+                                        ExportAllRequested="ProjectView_ExportAllRequested"/>
+                    </TabItem>
+                </TabControl>
+
+                <!-- SPLITTER -->
+                <GridSplitter Grid.Row="1" Height="5" HorizontalAlignment="Stretch" VerticalAlignment="Center" Background="#DDD"/>
+
+                <!-- SHARED OBJECTS LIST -->
+                <GroupBox Grid.Row="2" Header="All Added Objects" Margin="4">
+                    <ListBox x:Name="ObjectsList" SelectionChanged="ObjectsList_SelectionChanged" BorderThickness="0" Background="Transparent" ScrollViewer.VerticalScrollBarVisibility="Auto">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="{Binding Kind}" Foreground="#666" Width="45" FontSize="11" VerticalAlignment="Center" FontStyle="Italic"/>
+                                    <TextBlock Text="{Binding Label}" FontWeight="Bold" Margin="4,0"/>
+                                    <TextBlock Text="{Binding X}" Margin="8,0,0,0" Foreground="#888" FontSize="10" VerticalAlignment="Center" ToolTip="X"/>
+                                    <TextBlock Text="," Foreground="#888" FontSize="10" VerticalAlignment="Center"/>
+                                    <TextBlock Text="{Binding Y}" Margin="2,0,0,0" Foreground="#888" FontSize="10" VerticalAlignment="Center" ToolTip="Y"/>
+                                </StackPanel>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </GroupBox>
+            </Grid>
+        </Border>
+
+        <!-- MAIN TABS: MAP | MOB | NPC | QUEST -->
+        <TabControl x:Name="MainTabs" BorderThickness="0" Background="#1A1A1A">
+            <TabControl.Resources>
+                <Style TargetType="TabItem">
+                    <Setter Property="FontWeight" Value="SemiBold"/>
+                    <Setter Property="Padding" Value="16,8"/>
+                </Style>
+            </TabControl.Resources>
+
+            <TabItem Header="MAP EDITOR">
+                <DockPanel>
+                    <ToolBar DockPanel.Dock="Top" Background="#F0F0F0">
+                        <RadioButton x:Name="ModeSelect" GroupName="Modes" Content="Pointer" IsChecked="True" Click="Relocate_Click" ToolTip="Select / Relocate (F1)" Margin="2,0"/>
+                        <RadioButton x:Name="ModeNpc" GroupName="Modes" Content="+ NPC" Click="AddNpcMode_Click" ToolTip="Add NPC (F2)" Margin="2,0"/>
+                        <RadioButton x:Name="ModeWarp" GroupName="Modes" Content="+ Warp" Click="AddWarpMode_Click" ToolTip="Add Warp (F3)" Margin="2,0"/>
+                        <RadioButton x:Name="ModeSpawn" GroupName="Modes" Content="+ Spawn" Click="AddSpawnMode_Click" ToolTip="Add Spawn (F4)" Margin="2,0"/>
+                        <Separator/>
+                        <Button Content="Fit" Click="Fit_Click"/>
+                        <Button Content="1:1" Click="ResetView_Click"/>
+                        <Separator/>
+                        <CheckBox x:Name="GridToggle" Content="Grid" IsChecked="True" Checked="GridToggle_Changed" Unchecked="GridToggle_Changed"/>
+                        <CheckBox x:Name="SnapToGridToggle" Content="Snap" IsChecked="True" Margin="4,0,0,0"/>
+                        <CheckBox x:Name="LabelsToggle" Content="Labels" IsChecked="True" Margin="4,0,0,0" Checked="LabelsToggle_Changed" Unchecked="LabelsToggle_Changed"/>
+                    </ToolBar>
+                    <Border Background="#1A1A1A" ClipToBounds="True">
+                        <local:ZoomPanCanvas x:Name="ZCanvas" MouseLeftButtonDown="ZCanvas_MouseLeftButtonDown" MouseMove="ZCanvas_MouseMove" MouseLeftButtonUp="ZCanvas_MouseLeftButtonUp">
+                            <Image x:Name="BgImage" Stretch="None" />
+                            <Canvas x:Name="GridLayer" IsHitTestVisible="False"/>
+                            <Canvas x:Name="OverlayLayer"/>
+                        </local:ZoomPanCanvas>
+                    </Border>
+                </DockPanel>
+            </TabItem>
+
+            <TabItem Header="MOB EDITOR">
+                <Grid><TextBlock Text="Mob Editor – Coming soon" HorizontalAlignment="Center" VerticalAlignment="Center" FontSize="16" Foreground="#888"/></Grid>
+            </TabItem>
+            <TabItem Header="NPC EDITOR">
+                <Grid><TextBlock Text="NPC Editor – Coming soon" HorizontalAlignment="Center" VerticalAlignment="Center" FontSize="16" Foreground="#888"/></Grid>
+            </TabItem>
+            <TabItem Header="QUEST EDITOR">
+                <Grid><TextBlock Text="Quest Editor – Coming soon" HorizontalAlignment="Center" VerticalAlignment="Center" FontSize="16" Foreground="#888"/></Grid>
+            </TabItem>
+        </TabControl>
+    </DockPanel>
+</Window>

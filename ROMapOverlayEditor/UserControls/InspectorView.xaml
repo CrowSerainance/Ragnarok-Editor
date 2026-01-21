@@ -1,0 +1,64 @@
+<UserControl x:Class="ROMapOverlayEditor.UserControls.InspectorView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel Margin="8">
+            <TextBlock Text="{Binding Label}" FontWeight="Bold" FontSize="16"/>
+            <TextBlock Text="{Binding Kind}" FontStyle="Italic"/>
+            
+            <TextBlock Text="Map:" FontWeight="Bold" Margin="0,8,0,0"/>
+            <TextBox Text="{Binding MapName}" IsReadOnly="True"/>
+            
+            <TextBlock Text="X:" FontWeight="Bold"/>
+            <TextBox Text="{Binding X}"/>
+            
+            <TextBlock Text="Y:" FontWeight="Bold"/>
+            <TextBox Text="{Binding Y}"/>
+            
+            <Button Content="Focus" Click="Focus_Click" Margin="0,8,0,0"/>
+            <Button Content="Delete" Click="Delete_Click" Margin="0,4,0,0" Foreground="Red"/>
+
+            <!-- Specific Properties -->
+            <StackPanel x:Name="NpcPanel" Margin="0,8,0,0">
+                <Border Background="#EEE" Padding="4" Margin="0,0,0,4">
+                    <TextBlock Text="NPC PLACED" FontWeight="Bold" HorizontalAlignment="Center"/>
+                </Border>
+                
+                <TextBlock Text="Unique Name (Type):" Margin="0,4,0,0"/>
+                <TextBox Text="{Binding ScriptName}"/>
+                
+                <TextBlock Text="Asset Selection (Look):" Margin="0,4,0,0"/>
+                <ComboBox x:Name="SpriteCombo" IsEditable="True" Text="{Binding Sprite}"/>
+                
+                <TextBlock Text="Script Code:" Margin="0,4,0,0"/>
+                <TextBox Text="{Binding ScriptBody}" AcceptsReturn="True" Height="150" FontFamily="Consolas" VerticalScrollBarVisibility="Auto"/>
+            </StackPanel>
+
+            <StackPanel x:Name="WarpPanel" Margin="0,8,0,0">
+                <TextBlock Text="Warp Properties" FontWeight="Bold"/>
+                <TextBlock Text="Warp Name:"/>
+                <TextBox Text="{Binding WarpName}"/>
+                <TextBlock Text="Width:"/>
+                <TextBox Text="{Binding W}"/>
+                <TextBlock Text="Height:"/>
+                <TextBox Text="{Binding H}"/>
+                <TextBlock Text="Dest Map:"/>
+                <TextBox Text="{Binding DestMap}"/>
+                <TextBlock Text="Dest X:"/>
+                <TextBox Text="{Binding DestX}"/>
+                <TextBlock Text="Dest Y:"/>
+                <TextBox Text="{Binding DestY}"/>
+            </StackPanel>
+
+            <StackPanel x:Name="SpawnPanel" Margin="0,8,0,0">
+                <TextBlock Text="Spawn Properties" FontWeight="Bold"/>
+                <TextBlock Text="Mob ID:"/>
+                <TextBox Text="{Binding MobId}"/>
+                <TextBlock Text="Count:"/>
+                <TextBox Text="{Binding Count}"/>
+                <CheckBox Content="MVP" IsChecked="{Binding IsMvp}"/>
+            </StackPanel>
+
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

@@ -1,0 +1,71 @@
+<UserControl x:Class="ROMapOverlayEditor.UserControls.ProjectView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" 
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008" 
+             xmlns:local="clr-namespace:ROMapOverlayEditor"
+             mc:Ignorable="d" 
+             d:DesignHeight="600" d:DesignWidth="360"
+             Loaded="UserControl_Loaded">
+    <UserControl.Resources>
+         <Style TargetType="Button">
+            <Setter Property="Margin" Value="0,2"/>
+            <Setter Property="Padding" Value="4"/>
+        </Style>
+    </UserControl.Resources>
+    
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel Margin="8">
+            <GroupBox Header="Project Settings" Margin="0,0,0,12">
+                <StackPanel Margin="4">
+                    <TextBlock Text="Project Name"/>
+                    <TextBox Text="{Binding ProjectName}" Margin="0,0,0,8"/>
+                    
+                    <TextBlock Text="Map Name (Target)"/>
+                    <TextBox Text="{Binding MapName}" Margin="0,0,0,8"/>
+                    
+                    <TextBlock Text="Pixels Per Tile"/>
+                    <TextBox Text="{Binding PixelsPerTile}" Margin="0,0,0,8"/>
+                    
+                    <CheckBox Content="Origin Bottom-Left" IsChecked="{Binding OriginBottomLeft}" Margin="0,4"/>
+                </StackPanel>
+            </GroupBox>
+
+            <GroupBox Header="Paths (project folder)" Margin="0,0,0,12">
+                <StackPanel Margin="4">
+                    <TextBlock Text="Base Folder"/>
+                    <TextBlock x:Name="BaseFolderText" Text="{Binding BaseFolderPath, TargetNullValue='(none)'}" TextWrapping="Wrap" Foreground="#666" Margin="0,0,0,6"/>
+                    <TextBlock Text="Export scripts →" FontSize="10" Foreground="#888"/>
+                    <TextBox Text="{Binding ExportScriptsPath, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,0,4" ToolTip="e.g. scripts or scripts/custom. Default: scripts"/>
+                    <TextBlock Text="Export DB patches →" FontSize="10" Foreground="#888"/>
+                    <TextBox Text="{Binding ExportDbPatchPath, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,0,4" ToolTip="e.g. db. Default: db"/>
+                    <TextBlock Text="Mob DB source (optional)" FontSize="10" Foreground="#888"/>
+                    <TextBox Text="{Binding MobDbSourcePath, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,0,0" ToolTip="Path to mob_db.yml for Mob Editor"/>
+                </StackPanel>
+            </GroupBox>
+
+            <GroupBox Header="Include Snippet (rAthena)" Margin="0,0,0,12">
+                <StackPanel Margin="4">
+                    <TextBlock Text="Add to npc/scripts_custom.conf or conf/import:" FontSize="10" Foreground="#666" Margin="0,0,0,4"/>
+                    <TextBox x:Name="IncludeSnippetText" IsReadOnly="True" TextWrapping="Wrap" Height="52" VerticalScrollBarVisibility="Auto" FontFamily="Consolas" FontSize="11" Padding="4"/>
+                    <Button Content="Copy" Click="CopySnippet_Click" HorizontalAlignment="Left" Margin="0,4,0,0"/>
+                </StackPanel>
+            </GroupBox>
+
+            <GroupBox Header="Validation" Margin="0,0,0,12">
+                <StackPanel Margin="4">
+                    <Button Content="Validate Project" Click="Validate_Click" Background="#ffffcc"/>
+                    <TextBlock x:Name="ValidationOutput" TextWrapping="Wrap" Foreground="#d00" Margin="0,8,0,0"/>
+                </StackPanel>
+            </GroupBox>
+
+            <GroupBox Header="Export Actions" Margin="0,0,0,12">
+                <StackPanel Margin="4">
+                    <Button Content="Export NPCs" Click="ExportNpcs_Click"/>
+                    <Button Content="Export Warps" Click="ExportWarps_Click"/>
+                    <Button Content="Export All" FontWeight="Bold" Click="ExportAll_Click"/>
+                </StackPanel>
+            </GroupBox>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

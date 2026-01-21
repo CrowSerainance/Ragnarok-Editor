@@ -1,0 +1,70 @@
+<Window x:Class="ROMapOverlayEditor.GrfBrowserWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="GRF Browser" Width="640" Height="480"
+        WindowStartupLocation="CenterOwner" ResizeMode="CanResizeWithGrip">
+    <Grid Margin="10">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- Top: GRF path + Open GRF -->
+        <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,8">
+            <TextBlock Text="GRF:" VerticalAlignment="Center" Margin="0,0,6,0"/>
+            <TextBox x:Name="TxtPath" IsReadOnly="True" MinWidth="280" Padding="4,2" VerticalAlignment="Center"
+                     Text="No GRF loaded" Foreground="#666"/>
+            <Button x:Name="BtnOpenGrf" Content="Open GRF…" Click="BtnOpenGrf_Click" Padding="10,4" Margin="8,0,0,0"/>
+            <TextBlock x:Name="TxtVersion" VerticalAlignment="Center" Margin="12,0,0,0" Foreground="#666" FontSize="12"/>
+        </StackPanel>
+
+        <!-- Filter + Search -->
+        <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,6">
+            <ComboBox x:Name="FilterCombo" Width="140" SelectionChanged="FilterCombo_SelectionChanged" SelectedIndex="0">
+                <ComboBoxItem Content="All files"/>
+                <ComboBoxItem Content="Map images only"/>
+            </ComboBox>
+            <TextBox x:Name="TxtSearch" MinWidth="200" Margin="12,0,0,0" Padding="6,4"
+                     TextChanged="TxtSearch_TextChanged"/>
+            <TextBlock Text="(filter by path)" VerticalAlignment="Center" Margin="6,0,0,0" Foreground="#999" FontSize="11"/>
+        </StackPanel>
+
+        <!-- Main Area: List + Preview -->
+        <Grid Grid.Row="2">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="200"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- List -->
+            <ListBox x:Name="EntriesList" Grid.Column="0" DisplayMemberPath="Path"
+                     SelectionChanged="EntriesList_SelectionChanged" MouseDoubleClick="EntriesList_MouseDoubleClick"
+                     ScrollViewer.HorizontalScrollBarVisibility="Disabled" ScrollViewer.VerticalScrollBarVisibility="Auto"/>
+
+            <!-- Splitter -->
+            <GridSplitter Grid.Column="1" Width="5" HorizontalAlignment="Center" VerticalAlignment="Stretch" Background="#F0F0F0"/>
+
+            <!-- Preview -->
+            <Border Grid.Column="2" BorderBrush="#CCC" BorderThickness="1" Margin="5,0,0,0" Background="#FAFAFA">
+                <Grid>
+                   <Image x:Name="ImgPreview" Stretch="Uniform" />
+                   <TextBox x:Name="TxtContentPreview" Visibility="Collapsed" IsReadOnly="True" 
+                            VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
+                            FontFamily="Consolas" FontSize="11" Background="Transparent" BorderThickness="0" Margin="2"/>
+                   <TextBlock x:Name="TxtPreviewData" HorizontalAlignment="Center" VerticalAlignment="Center" 
+                              Text="No preview" Foreground="#AAA" TextWrapping="Wrap" TextAlignment="Center" Margin="10"/>
+                </Grid>
+            </Border>
+        </Grid>
+
+        <!-- Buttons -->
+        <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,10,0,0">
+            <Button x:Name="BtnOpenAsMap" Content="Open as map" Click="BtnOpenAsMap_Click" IsDefault="True"
+                    IsEnabled="False" Padding="14,6" Margin="0,0,8,0"/>
+            <Button Content="Cancel" IsCancel="True" Click="BtnCancel_Click" Padding="14,6"/>
+        </StackPanel>
+    </Grid>
+</Window>
