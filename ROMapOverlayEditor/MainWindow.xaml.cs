@@ -12,6 +12,8 @@ using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
 using ROMapOverlayEditor.UserControls;
 using ROMapOverlayEditor.GrfTown;
+using ROMapOverlayEditor.Sources;
+using ROMapOverlayEditor.Grf;
 using System.Linq; 
 
 namespace ROMapOverlayEditor;
@@ -34,6 +36,11 @@ public partial class MainWindow : Window
     private GrfTownWorkspace? _grfTown;
     private List<TownEntry> _towns = new();
     private string _towninfoPath = "";
+
+    // Workspace sources (new unified abstraction)
+    private GrfFileSource? _grfSource;
+    private FolderFileSource? _luaFolderSource;
+    private CompositeFileSource? _vfs;
 
     /// <summary>Original NPCs from Towninfo.lub per map, for diff/changelog.</summary>
     private readonly Dictionary<string, List<TownNpc>> _originalTownNpcs = new();
@@ -278,20 +285,56 @@ public partial class MainWindow : Window
     {
         // Unsubscribe old
         _project.PropertyChanged -= _project_PropertyChanged;
-        
+
         _project = d;
         _project.PropertyChanged += _project_PropertyChanged;
-        
+
         ProjectView.DataContext = _project; // Rebind
-        
+
+        // Rebuild sources from project data
+        RebuildSourcesFromProject();
+
         LoadBackgroundImageIfAny();
-        if (!string.IsNullOrEmpty(_project.GrfFilePath))
-            InitializeTownDropdownFromGrf(_project.GrfFilePath);
+        if (_grfSource != null)
+            InitializeTownDropdownFromVfs();
         RedrawGrid();
         RefreshList(selectId);
         RedrawOverlay();
         UpdatePropsPanel(ObjectsList.SelectedItem as Placable);
         if (markDirty) SetDirty();
+    }
+
+    /// <summary>Rebuild workspace sources from current project settings.</summary>
+    private void RebuildSourcesFromProject()
+    {
+        // Dispose old GRF source
+        _grfSource?.Dispose();
+        _grfSource = null;
+
+        // Rebuild GRF source if path is set
+        if (!string.IsNullOrEmpty(_project.GrfFilePath) && File.Exists(_project.GrfFilePath))
+        {
+            try
+            {
+                _grfSource = new GrfFileSource(_project.GrfFilePath);
+            }
+            catch (Exception ex)
+            {
+                UpdateStatus($"Failed to open GRF: {ex.Message}");
+            }
+        }
+
+        // Rebuild Lua folder source if path is set
+        if (!string.IsNullOrEmpty(_project.LuaDataFolderPath) && Directory.Exists(_project.LuaDataFolderPath))
+        {
+            _luaFolderSource = new FolderFileSource(_project.LuaDataFolderPath, "Lua Folder");
+        }
+        else
+        {
+            _luaFolderSource = null;
+        }
+
+        RebuildVfs();
     }
     
     // (Undo/Redo button updates removed as UI elements are gone, logic remains in memory)
@@ -376,11 +419,24 @@ public partial class MainWindow : Window
 
             var path = dlg.FileName;
 
-            // 1) Validate quickly so we can give a better message than “invalid file table offset”
-            var validation = Grf.GrfArchive.TryValidate(path);
-            if (!validation.Ok)
+            // Probe GRF header for diagnostics (before attempting to open)
+            var probeResult = Grf.GrfHeaderProbe.Probe(path);
+            UpdateStatus(probeResult);
+            System.Diagnostics.Debug.WriteLine(probeResult);
+
+            // Use the new GrfFileSource (unified reader) - it validates on construction
+            try
             {
-                MessageBox.Show(validation.UserMessage, "Failed to open GRF", MessageBoxButton.OK, MessageBoxImage.Error);
+                var newSource = new GrfFileSource(path);
+
+                // Dispose old source if any
+                _grfSource?.Dispose();
+                _grfSource = newSource;
+            }
+            catch (Exception ex)
+            {
+                var errorMsg = $"Failed to open GRF:\n\n{ex.Message}\n\n{probeResult}";
+                MessageBox.Show(errorMsg, "Failed to open GRF", MessageBoxButton.OK, MessageBoxImage.Error);
                 return;
             }
 
@@ -389,15 +445,19 @@ public partial class MainWindow : Window
             _project.BackgroundImagePath = null;
             _originalTownNpcs.Clear();
 
-            InitializeTownDropdownFromGrf(path);
+            // Build composite VFS
+            RebuildVfs();
+            InitializeTownDropdownFromVfs();
 
             if (_towns.Count == 0 &&
                 MessageBox.Show("Town data not found in GRF. Select a folder that contains Towninfo.lua or Towninfo.lub?", "Lua data", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes)
             {
-                if (TryPickAndValidateLuaFolder(out var folder))
+                if (TryPickAndValidateLuaFolder(out var folder) && folder != null)
                 {
                     _project.LuaDataFolderPath = folder;
-                    InitializeTownDropdownFromGrf(path);
+                    _luaFolderSource = new FolderFileSource(folder, "Lua Folder");
+                    RebuildVfs();
+                    InitializeTownDropdownFromVfs();
                 }
             }
 
@@ -414,18 +474,53 @@ public partial class MainWindow : Window
 
     private void SetLuaFolder_Click(object sender, RoutedEventArgs e)
     {
-        if (!TryPickAndValidateLuaFolder(out var folder)) return;
+        if (!TryPickAndValidateLuaFolder(out var folder) || folder == null) return;
         _project.LuaDataFolderPath = folder;
+        _luaFolderSource = new FolderFileSource(folder, "Lua Folder");
+        RebuildVfs();
         SetDirty();
-        if (!string.IsNullOrEmpty(_project.GrfFilePath))
+
+        if (_grfSource != null)
         {
-            InitializeTownDropdownFromGrf(_project.GrfFilePath);
+            InitializeTownDropdownFromVfs();
             LoadBackgroundImageIfAny();
             RedrawGrid();
             RedrawOverlay();
+            
+            // Show result
+            if (_towns.Count > 0)
+            {
+                UpdateStatus($"Lua folder set: {IOPath.GetFileName(folder)} — {_towns.Count} towns loaded");
+            }
+            else
+            {
+                UpdateStatus($"Lua folder set: {IOPath.GetFileName(folder)} — no towns parsed (check file format)");
+            }
         }
         else
-            MessageBox.Show("Lua folder set. Open a GRF to load towns.", "Lua Folder", MessageBoxButton.OK, MessageBoxImage.Information);
+        {
+            // Test if we can find Towninfo even without GRF
+            var testVfs = new CompositeFileSource(null, _luaFolderSource);
+            var (testTowns, _, testWarning) = TowninfoResolver.LoadTownList(testVfs);
+            if (testTowns.Count > 0)
+            {
+                MessageBox.Show(
+                    $"Lua folder set successfully.\n\n" +
+                    $"Found {testTowns.Count} towns in:\n{folder}\n\n" +
+                    "Open a GRF file to load map images and complete the setup.",
+                    "Lua Folder", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+            else
+            {
+                MessageBox.Show(
+                    $"Lua folder set, but no towns were parsed.\n\n" +
+                    $"Folder: {folder}\n\n" +
+                    $"Reason: {testWarning}\n\n" +
+                    "The file may be bytecode or use a non-standard format.\n" +
+                    "Try selecting a different folder or use a decompiled Towninfo.lua file.",
+                    "Lua Folder", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+        }
     }
 
     private static bool TryPickAndValidateLuaFolder(out string? folderPath)
@@ -436,71 +531,114 @@ public partial class MainWindow : Window
             Title = "Select folder containing Towninfo.lua or Towninfo.lub (e.g. data\\System or extracted client data)"
         };
         if (dlg.ShowDialog() != true) return false;
+        
         var root = dlg.FolderName;
-        if (string.IsNullOrWhiteSpace(root) || !Directory.Exists(root)) return false;
-        var found = GrfTownWorkspace.FolderTowninfoCandidates.Any(rel => File.Exists(IOPath.Combine(root, rel)));
-        if (!found)
+        if (string.IsNullOrWhiteSpace(root))
         {
-            MessageBox.Show("No Towninfo.lua or Towninfo.lub found in this folder.", "Lua Folder", MessageBoxButton.OK, MessageBoxImage.Warning);
+            MessageBox.Show("No folder was selected. Please select a folder and try again.", "Lua Folder", MessageBoxButton.OK, MessageBoxImage.Warning);
             return false;
         }
+        
+        if (!Directory.Exists(root))
+        {
+            MessageBox.Show($"The selected folder does not exist:\n{root}", "Lua Folder", MessageBoxButton.OK, MessageBoxImage.Error);
+            return false;
+        }
+
+        // Check for Towninfo files specifically (more helpful than just "any Lua file")
+        var towninfoFiles = new List<string>();
+        
+        // Check direct files
+        var directLua = IOPath.Combine(root, "Towninfo.lua");
+        var directLub = IOPath.Combine(root, "Towninfo.lub");
+        if (File.Exists(directLua)) towninfoFiles.Add("Towninfo.lua");
+        if (File.Exists(directLub)) towninfoFiles.Add("Towninfo.lub");
+        
+        // Check System subfolder
+        var systemLua = IOPath.Combine(root, "System", "Towninfo.lua");
+        var systemLub = IOPath.Combine(root, "System", "Towninfo.lub");
+        if (File.Exists(systemLua)) towninfoFiles.Add("System\\Towninfo.lua");
+        if (File.Exists(systemLub)) towninfoFiles.Add("System\\Towninfo.lub");
+        
+        // Check data\System subfolder
+        var dataSystemLua = IOPath.Combine(root, "data", "System", "Towninfo.lua");
+        var dataSystemLub = IOPath.Combine(root, "data", "System", "Towninfo.lub");
+        if (File.Exists(dataSystemLua)) towninfoFiles.Add("data\\System\\Towninfo.lua");
+        if (File.Exists(dataSystemLub)) towninfoFiles.Add("data\\System\\Towninfo.lub");
+        
+        // Also do a recursive search as fallback
+        if (towninfoFiles.Count == 0)
+        {
+            try
+            {
+                var found = Directory.EnumerateFiles(root, "Towninfo.lua", SearchOption.AllDirectories)
+                    .Concat(Directory.EnumerateFiles(root, "Towninfo.lub", SearchOption.AllDirectories))
+                    .Take(5)
+                    .ToList();
+                
+                if (found.Count > 0)
+                {
+                    foreach (var f in found)
+                    {
+                        var rel = IOPath.GetRelativePath(root, f);
+                        towninfoFiles.Add(rel);
+                    }
+                }
+            }
+            catch { }
+        }
+
+        if (towninfoFiles.Count == 0)
+        {
+            var message = $"No Towninfo.lua or Towninfo.lub files found in:\n{root}\n\n" +
+                         "Please select a folder that contains:\n" +
+                         "• Towninfo.lua or Towninfo.lub (directly in the folder), OR\n" +
+                         "• System\\Towninfo.lua/lub, OR\n" +
+                         "• data\\System\\Towninfo.lua/lub\n\n" +
+                         "Tip: If you selected 'data\\System', try selecting 'data' or the client root folder instead.";
+            MessageBox.Show(message, "Lua Folder", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return false;
+        }
+
         folderPath = root;
         return true;
     }
 
-    // OnGrfOpened removed: Open GRF now only picks file and populates Town dropdown (no browser).
-    // (Initialize GrfTown Integration
-        // Note: GrfArchive.Open returns an object that we used in browser but we also need one for the workspace if we want to keep it open.
-        // Actually, GrfBrowserWindow loads the archive. To properly reuse it, we should pass the reader functions.
-        // However, OnGrfOpened only receives the GrfArchive for browser.
-        // We need to re-open or keep the archive open?
-        // GrfArchive is IDisposable. The one passed to OnGrfOpened is disposed by the caller?
-        // Let's check OpenGrf_Click.
-        // OpenGrf_Click: using var grf = Grf.GrfArchive.Open(path); OnGrfOpened(grf);
-        // This means 'grf' is disposed after OnGrfOpened returns.
-        
-        // We need the GrfTownWorkspace to persist. So we need a NEW GrfArchive instance or we must change OpenGrf_Click to keep it alive.
-        // Minimal friction change: Re-open for the workspace, OR just store the path and open on demand?
-        // GrfTownWorkspace takes delegates. Let's create a new lightweight reader manager?
-        // Actually, GrfArchive.Open locks file. Sharing read access is safer. 
-        // Let's just store the path and open a fresh reader for the workspace?
-        // But we want to iterate files. GrfArchive loads table in memory. It's fast.
-        
-    private void InitializeTownDropdownFromGrf(string grfFilePath)
+    /// <summary>Rebuild the composite VFS from current GRF and Lua folder sources.</summary>
+    private void RebuildVfs()
     {
-        // Define simple wrappers for GrfTownWorkspace to use our existing GrfArchive
-        // PROBLEM: We don't want to keep a file stream open forever if we can avoid it.
-        // GrfTownWorkspace does bulk load once, then load image on demand.
-        // On demand reading needs an open handle or re-opening.
-        // Let's re-open on demand.
-        
-        _grfTown = new GrfTownWorkspace(
-            IOPath.GetFileName(grfFilePath),
-            listPaths: () => 
-            {
-                using var grf = Grf.GrfArchive.Open(grfFilePath);
-                return grf.Entries.Select(x => x.Path).ToList();
-            },
-            existsInGrf: (p) => 
-            {
-                using var grf = Grf.GrfArchive.Open(grfFilePath);
-                return grf.Entries.Any(x => x.Path.Equals(p, StringComparison.OrdinalIgnoreCase));
-            },
-            readBytesFromGrf: (p) => 
-            {
-                using var grf = Grf.GrfArchive.Open(grfFilePath);
-                return grf.Extract(p);
-            },
-            luaDataFolderPath: _project.LuaDataFolderPath
-        );
+        _vfs = new CompositeFileSource(_grfSource, _luaFolderSource);
+    }
 
-        var (towns, sourcePath, warning) = _grfTown.LoadTownList();
+    /// <summary>Initialize town dropdown using the VFS and TowninfoResolver.</summary>
+    private void InitializeTownDropdownFromVfs()
+    {
+        if (_vfs == null)
+        {
+            TownCombo.ItemsSource = null;
+            TownCombo.IsEnabled = false;
+            CopyExportBtn.IsEnabled = false;
+            return;
+        }
+
+        var (towns, sourcePath, warning) = TowninfoResolver.LoadTownList(_vfs);
         _towns = towns;
         _towninfoPath = sourcePath;
 
+        // Also update the legacy GrfTownWorkspace for compatibility with LoadTown
+        if (_grfSource != null)
+        {
+            _grfTown = new GrfTownWorkspace(
+                IOPath.GetFileName(_grfSource.GrfPath),
+                listPaths: () => _grfSource.EnumeratePaths().ToList(),
+                existsInGrf: (p) => _grfSource.Exists(p),
+                readBytesFromGrf: (p) => _grfSource.ReadAllBytes(p),
+                luaDataFolderPath: _project.LuaDataFolderPath
+            );
+        }
+
         TownCombo.ItemsSource = _towns;
         TownCombo.IsEnabled = _towns.Count > 0;
-
         CopyExportBtn.IsEnabled = false;
 
         if (!string.IsNullOrWhiteSpace(warning))
@@ -516,6 +654,8 @@ public partial class MainWindow : Window
             else TownCombo.SelectedIndex = 0;
         }
     }
+
+    // Legacy InitializeTownDropdownFromGrf removed - now using InitializeTownDropdownFromVfs with unified sources
 
     private void TownCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
@@ -569,11 +709,11 @@ public partial class MainWindow : Window
 
     private void TryLoadGrfMapImage(string internalPath)
     {
-        if (_grfTown == null) return;
+        if (_grfSource == null) return;
 
         try
         {
-            var bytes = _grfTown.Read(internalPath);
+            var bytes = _grfSource.ReadAllBytes(internalPath);
             using var ms = new MemoryStream(bytes);
 
             // Re-use our existing load helper
@@ -638,6 +778,13 @@ public partial class MainWindow : Window
         
         RefreshList();
         RedrawOverlay();
+        
+        // Auto-fit to content if no background image is present
+        FitViewToOverlayContentIfNeeded();
+        
+        // After town NPCs are loaded, attempt to auto-load minimap + gat from the currently open GRF.
+        TryAutoLoadMapAssetsForTown(town.Name);
+
         SetDirty();
         UpdateWindowTitle();
     }
@@ -688,30 +835,29 @@ public partial class MainWindow : Window
             OverlayLayer.Height = 0;
         }
 
-        // 1) GRF source
-        if (!string.IsNullOrEmpty(_project.GrfFilePath) && !string.IsNullOrEmpty(_project.GrfInternalPath) && File.Exists(_project.GrfFilePath))
+        // 1) GRF source (use unified GrfFileSource if available)
+        if (_grfSource != null && !string.IsNullOrEmpty(_project.GrfInternalPath))
         {
             try
             {
-                using var grf = Grf.GrfArchive.Open(_project.GrfFilePath);
-                byte[] bytes = grf.Extract(_project.GrfInternalPath);
+                byte[] bytes = _grfSource.ReadAllBytes(_project.GrfInternalPath);
                 using var ms = new MemoryStream(bytes);
                 // Helper to load BMP and treat Magenta (255,0,255) as transparent
                 var bmp = LoadBitmapWithTransparency(ms);
-                
+
                 if (BgImage != null) { BgImage.Source = bmp; BgImage.Width = bmp.PixelWidth; BgImage.Height = bmp.PixelHeight; }
                 if (GridLayer != null) { GridLayer.Width = bmp.PixelWidth; GridLayer.Height = bmp.PixelHeight; }
                 if (OverlayLayer != null) { OverlayLayer.Width = bmp.PixelWidth; OverlayLayer.Height = bmp.PixelHeight; }
-                
+
                 // Ensure Layout is updated before fitting
                 Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, new Action(() =>
                 {
-                    if (ZCanvas != null) 
-                    { 
-                        var viewport = new Size(ZCanvas.ActualWidth, ZCanvas.ActualHeight); 
-                        var content = new Size(bmp.PixelWidth, bmp.PixelHeight); 
+                    if (ZCanvas != null)
+                    {
+                        var viewport = new Size(ZCanvas.ActualWidth, ZCanvas.ActualHeight);
+                        var content = new Size(bmp.PixelWidth, bmp.PixelHeight);
                         if (viewport.Width > 0 && viewport.Height > 0)
-                            ZCanvas.FitToView(content, viewport); 
+                            ZCanvas.FitToView(content, viewport);
                     }
                 }));
 
@@ -1317,5 +1463,213 @@ public partial class MainWindow : Window
         var result = BitmapSource.Create(w, h, 96, 96, format, null, pixels, stride);
         result.Freeze();
         return result;
+    }
+    private Size ComputeOverlayContentSizeFromItems(double paddingPx = 64)
+    {
+        // If we have a bitmap loaded, that is the authoritative content size.
+        if (BgImage?.Source is BitmapSource bmp && bmp.PixelWidth > 0 && bmp.PixelHeight > 0)
+            return new Size(bmp.PixelWidth, bmp.PixelHeight);
+
+        // Otherwise infer content bounds from placed items (tile coords -> pixel coords).
+        if (_project.Items == null || _project.Items.Count == 0)
+            return new Size(0, 0);
+
+        var ppt = _project.PixelsPerTile;
+        if (ppt <= 0) ppt = 8.0;
+
+        int maxX = _project.Items.Max(i => i.X);
+        int maxY = _project.Items.Max(i => i.Y);
+
+        // Convert max tile to pixel extent (tile origin + tile width)
+        double w = (maxX + 2) * ppt + paddingPx;
+        double h = (maxY + 2) * ppt + paddingPx;
+
+        // Prevent absurdly tiny results
+        w = Math.Max(w, 512);
+        h = Math.Max(h, 512);
+
+        return new Size(w, h);
+    }
+
+    private void EnsureVirtualCanvasExtents(Size content)
+    {
+        // If there is no bitmap loaded, BgImage.Width/Height are 0,
+        // but we still need the layers to occupy a virtual coordinate space,
+        // otherwise everything is offscreen and FitToView has nothing to target.
+        if (content.Width <= 0 || content.Height <= 0) return;
+
+        if (GridLayer != null)
+        {
+            GridLayer.Width = content.Width;
+            GridLayer.Height = content.Height;
+        }
+
+        if (OverlayLayer != null)
+        {
+            OverlayLayer.Width = content.Width;
+            OverlayLayer.Height = content.Height;
+        }
+    }
+
+    private void FitViewToOverlayContentIfNeeded(bool force = false)
+    {
+        if (ZCanvas == null) return;
+
+        // If a real background image exists, the current behavior already fits on load.
+        // Only auto-fit when there is NO background image (blank canvas) OR when forced.
+        bool hasBmp = BgImage?.Source is BitmapSource bmp && bmp.PixelWidth > 0 && bmp.PixelHeight > 0;
+        if (hasBmp && !force) return;
+
+        var content = ComputeOverlayContentSizeFromItems();
+        if (content.Width <= 0 || content.Height <= 0) return;
+
+        EnsureVirtualCanvasExtents(content);
+
+        // Make sure layout is ready before reading ActualWidth/Height
+        Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, new Action(() =>
+        {
+            var viewport = new Size(ZCanvas.ActualWidth, ZCanvas.ActualHeight);
+            if (viewport.Width <= 0 || viewport.Height <= 0) return;
+
+            ZCanvas.FitToView(content, viewport);
+        }));
+    }
+    private void TryAutoLoadMapAssetsForTown(string mapName)
+    {
+        if (string.IsNullOrWhiteSpace(mapName) || _vfs == null) return;
+
+        // 1) Find Minimap (fuzzy search)
+        // We look for anything ending in "map/{mapName}.bmp" or "map\{mapName}.bmp"
+        // robust to folder structure variations.
+        
+        var bmpCandidates = _vfs.EnumerateBmpFiles()
+            .Where(p => IsMapImageCandidate(p, mapName))
+            .OrderBy(p => p.Length) // shortest path usually "data/texture/map/x.bmp" vs "data/texture/long/weird/x.bmp"
+            .ToList();
+
+        string? bestBmp = bmpCandidates.FirstOrDefault(); // Start with first
+        
+        // Prefer standard RO paths if multiple
+        var preferred = bmpCandidates.FirstOrDefault(p => p.Contains("texture", StringComparison.OrdinalIgnoreCase) && p.Contains("map", StringComparison.OrdinalIgnoreCase));
+        if (preferred != null) bestBmp = preferred;
+
+        BitmapSource? minimap = null;
+        string? minimapPath = null;
+
+        if (bestBmp != null)
+        {
+            try 
+            {
+                var bytes = _vfs.ReadAllBytes(bestBmp);
+                minimap = LoadBitmapWithTransparency(new MemoryStream(bytes));
+                minimapPath = bestBmp;
+            }
+            catch {}
+        }
+        else
+        {
+             // Fallback to MapAssetLoader's heuristic if fuzzy search failed (e.g. TGA/PNG which are not enumerated by EnumerateBmpFiles maybe?)
+             // Actually CompositeFileSource EnumerateBmpFiles only lists BMP.
+             // If we want TGA/PNG support we should expand enumeration or fallback.
+             // For now, let's just stick to BMP as primary.
+        }
+
+        // 2) Find GAT
+        // .gat files are usually in data/ or at root
+        var gatCandidates = new[] {
+            $"data\\{mapName}.gat",
+            $"data\\map\\{mapName}.gat",
+            $"maps\\{mapName}.gat",
+            $"{mapName}.gat"
+        };
+        
+        int gatW = 0, gatH = 0;
+        string? foundGat = null;
+        
+        foreach (var g in gatCandidates)
+        {
+            if (_vfs.Exists(g))
+            {
+                try {
+                    var bytes = _vfs.ReadAllBytes(g);
+                    if (ROMapOverlayEditor.MapAssets.MapAssetLoader.TryReadGatDimensions(bytes, out gatW, out gatH))
+                    {
+                        foundGat = g;
+                        break;
+                    }
+                } catch {} 
+            }
+        }
+
+        // 3) Apply findings
+        
+        // Apply minimap as background if found
+        if (minimap != null)
+        {
+            BgImage.Source = minimap;
+            
+            _project.GrfInternalPath = minimapPath;
+
+            // Ensure layers match the bitmap size
+            if (OverlayLayer != null)
+            {
+                OverlayLayer.Width = minimap.PixelWidth;
+                OverlayLayer.Height = minimap.PixelHeight;
+            }
+            if (GridLayer != null)
+            {
+                GridLayer.Width = minimap.PixelWidth;
+                GridLayer.Height = minimap.PixelHeight;
+            }
+        }
+
+        // If we have GAT dimensions, compute a correct PixelsPerTile
+        if (minimap != null && gatW > 0 && gatH > 0)
+        {
+            double pptX = (double)minimap.PixelWidth / gatW;
+            double pptY = (double)minimap.PixelHeight / gatH;
+
+            // Use average (or choose X); keeps square-ish mapping
+            var ppt = (pptX + pptY) * 0.5;
+
+            // Guard: some minimaps include margins; clamp to sane range
+            ppt = Math.Max(2.0, Math.Min(32.0, ppt));
+
+            _project.PixelsPerTile = ppt;
+        }
+
+        // Fit view to background if we loaded one
+        if (minimap != null)
+        {
+            Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, new Action(() =>
+            {
+                var content = new Size(minimap.PixelWidth, minimap.PixelHeight);
+                var viewport = new Size(ZCanvas.ActualWidth, ZCanvas.ActualHeight);
+                if (viewport.Width > 0 && viewport.Height > 0)
+                    ZCanvas.FitToView(content, viewport);
+            }));
+        }
+
+        // Finally redraw overlay on top of new background/scale
+        RedrawOverlay();
+
+        // Optional debug status so you KNOW what loaded
+        UpdateStatus($"Map assets: minimap={(minimapPath ?? "none")} | gat={(foundGat ?? "none")} | ppt={_project.PixelsPerTile:0.##}");
+    }
+
+    private bool IsMapImageCandidate(string path, string mapName)
+    {
+        // path is normalized (forward slashes) from GrfFileSource/CompositeFileSource
+        var name = System.IO.Path.GetFileNameWithoutExtension(path);
+        // extension check implicit by EnumerateBmpFiles but good to be safe
+        var ext = System.IO.Path.GetExtension(path);
+        
+        if (!string.Equals(name, mapName, StringComparison.OrdinalIgnoreCase)) return false;
+        
+        // Ensure it is in a "map" folder or simply is the file
+        // To avoid picking up "texture/effect/mapname.bmp" if that exists (unlikely but possible)
+        // Best approach: ensure "map" segment exists in path?
+        return path.Contains("/map/", StringComparison.OrdinalIgnoreCase) || 
+               path.Contains("texture/", StringComparison.OrdinalIgnoreCase); 
     }
 }

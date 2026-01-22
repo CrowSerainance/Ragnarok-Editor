@@ -3,105 +3,110 @@
 // PURPOSE: Parses Towninfo.lub from RO client to extract NPC locations by map
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// WHAT THIS FILE DOES:
-// - Reads Towninfo.lub (a Lua table file) from your RO client
-// - Can read from FILESYSTEM or from INSIDE A GRF ARCHIVE
-// - Extracts all town NPCs organized by map name
-// - Converts the NPC TYPE values (0-7) into recognizable sprite names
-// - Returns data that can be added to your project's Items list
+// SEARCH PRIORITY:
+// 1. FILESYSTEM FIRST - Checks extracted data\System\ folder (plain text)
+// 2. GRF FALLBACK - Only if filesystem doesn't have it (bytecode)
 //
-// TOWNINFO.LUB LOCATION INSIDE GRF:
-// - Usually at: data\System\Towninfo.lub
-// - Or: data\luafiles514\lua files\signboardlist\Towninfo.lub (older clients)
+// COMMON FILESYSTEM PATHS SEARCHED:
+// - {ClientFolder}\data\System\Towninfo.lub
+// - {ClientFolder}\data\luafiles514\lua files\signboardlist\Towninfo.lub
+// - {ClientFolder}\System\Towninfo.lub
 //
-// TOWNINFO.LUB FORMAT:
-// mapNPCInfoTable = { 
-//   prontera = { { name = [=[Kafra Employee]=], X = 146, Y = 89, TYPE = 6 }, ... }, 
-//   geffen = { ... },
-//   ...
-// }
-//
-// TYPE VALUES:
-// 0 = Tool Dealer, 1 = Weapon Dealer, 2 = Armor Dealer, 3 = Smith
-// 4 = Guide, 5 = Inn, 6 = Kafra Employee, 7 = Styling Shop
 // ═══════════════════════════════════════════════════════════════════════════════
 
+using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
 using ROMapOverlayEditor.Grf;
+using ROMapOverlayEditor.Sources;
 
 namespace ROMapOverlayEditor;
 
 /// <summary>
 /// Single NPC entry from Towninfo.lub before converting to NpcPlacable.
-/// This is an intermediate format used during the import process.
 /// </summary>
 public class TownNpcInfo
 {
-    /// <summary>Display name shown in-game (e.g., "Kafra Employee")</summary>
     public string Name { get; set; } = "";
-    
-    /// <summary>X coordinate on the map (in tiles)</summary>
     public int X { get; set; }
-    
-    /// <summary>Y coordinate on the map (in tiles)</summary>
     public int Y { get; set; }
-    
-    /// <summary>NPC type from 0-7 determining their role and sprite</summary>
     public int Type { get; set; }
-    
-    /// <summary>The map this NPC belongs to (e.g., "prontera")</summary>
     public string MapName { get; set; } = "";
 }
 
 /// <summary>
-/// Enum representing the TYPE values found in Towninfo.lub.
-/// Each type corresponds to a specific NPC role in the game.
+/// TYPE values in Towninfo.lub.
 /// </summary>
 public enum TownNpcType
 {
-    ToolDealer = 0,      // Sells consumables like potions
-    WeaponDealer = 1,    // Sells weapons
-    ArmorDealer = 2,     // Sells armor and shields
-    Smith = 3,           // Upgrade/refine services
-    Guide = 4,           // Navigation info NPC
-    Inn = 5,             // Save point/rest
-    KafraEmployee = 6,   // Storage/teleport services
-    StylingShop = 7      // Hairstyle changes
+    ToolDealer = 0,
+    WeaponDealer = 1,
+    ArmorDealer = 2,
+    Smith = 3,
+    Guide = 4,
+    Inn = 5,
+    KafraEmployee = 6,
+    StylingShop = 7
+}
+
+/// <summary>
+/// Result of searching for Towninfo.lub
+/// </summary>
+public class TowninfoSearchResult
+{
+    public bool Found { get; set; }
+    public string FilePath { get; set; } = "";
+    public string Content { get; set; } = "";
+    public string Source { get; set; } = ""; // "Filesystem" or "GRF"
+    public List<string> AvailableMaps { get; set; } = new();
 }
 
 /// <summary>
 /// Imports NPC data from Towninfo.lub using regex-based parsing.
-/// Supports reading from both filesystem AND from inside GRF archives.
+/// Prioritizes FILESYSTEM over GRF (filesystem = plain text, GRF = bytecode).
 /// </summary>
 public static class TowninfoImporter
 {
     // ═══════════════════════════════════════════════════════════════════════════
-    // CONSTANTS - Common paths where Towninfo.lub is found inside GRF
+    // SEARCH PATHS
     // ═══════════════════════════════════════════════════════════════════════════
     
     /// <summary>
-    /// Common internal paths where Towninfo.lub might be located inside a GRF.
-    /// The importer will try each path in order until one is found.
+    /// Relative paths to search for Towninfo.lub in the filesystem.
+    /// These are relative to the client folder.
     /// </summary>
-    public static readonly string[] CommonTowninfoGrfPaths = new[]
+    public static readonly string[] FilesystemSearchPaths = new[]
+    {
+        @"data\System\Towninfo.lub",
+        @"data\System\Towninfo.lua",
+        @"data\SystemEN\Towninfo.lub",
+        @"data\SystemEN\Towninfo.lua",
+        @"data\luafiles514\lua files\signboardlist\Towninfo.lub",
+        @"data\luafiles514\lua files\signboardlist\Towninfo.lua",
+        @"System\Towninfo.lub",
+        @"System\Towninfo.lua",
+        @"SystemEN\Towninfo.lub",
+        @"SystemEN\Towninfo.lua",
+    };
+    
+    /// <summary>
+    /// Paths to search inside GRF archives.
+    /// </summary>
+    public static readonly string[] GrfSearchPaths = new[]
     {
         @"data\System\Towninfo.lub",
         @"data\luafiles514\lua files\signboardlist\Towninfo.lub",
-        @"data\luafiles514\lua files\navigation\Towninfo.lub",
-        @"System\Towninfo.lub"
+        @"System\Towninfo.lub",
     };
-    
+
     // ═══════════════════════════════════════════════════════════════════════════
     // SPRITE AND LABEL MAPPINGS
     // ═══════════════════════════════════════════════════════════════════════════
 
-    /// <summary>
-    /// Maps TownNpcType to sprite names used in-game.
-    /// These sprites are found in data.grf under data\sprite\npc\.
-    /// </summary>
     public static readonly Dictionary<TownNpcType, string> TypeToSprite = new()
     {
         { TownNpcType.ToolDealer, "4_M_MERCHANT" },
@@ -114,9 +119,6 @@ public static class TowninfoImporter
         { TownNpcType.StylingShop, "4_F_BEAUTYMASTER" }
     };
 
-    /// <summary>
-    /// Maps TownNpcType to human-readable labels for the editor UI.
-    /// </summary>
     public static readonly Dictionary<TownNpcType, string> TypeToLabel = new()
     {
         { TownNpcType.ToolDealer, "Tool Dealer" },
@@ -128,335 +130,439 @@ public static class TowninfoImporter
         { TownNpcType.KafraEmployee, "Kafra Employee" },
         { TownNpcType.StylingShop, "Styling Shop" }
     };
+    
+    public static readonly Dictionary<TownNpcType, string> TypeToShortLabel = new()
+    {
+        { TownNpcType.ToolDealer, "Tool" },
+        { TownNpcType.WeaponDealer, "Weapon" },
+        { TownNpcType.ArmorDealer, "Armor" },
+        { TownNpcType.Smith, "Smith" },
+        { TownNpcType.Guide, "Guide" },
+        { TownNpcType.Inn, "Inn" },
+        { TownNpcType.KafraEmployee, "Kafra" },
+        { TownNpcType.StylingShop, "Styling" }
+    };
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // REGEX PATTERNS FOR PARSING LUA
+    // REGEX PATTERNS
     // ═══════════════════════════════════════════════════════════════════════════
 
-    /// <summary>
-    /// Matches a map block in the Lua table: mapname = { ... }
-    /// </summary>
+    // ═══════════════════════════════════════════════════════════════════════════
+    // REGEX EXPLANATION:
+    // Towninfo.lub uses tab-based indentation:
+    //   - 0 tabs: mapNPCInfoTable = { (outer table - we skip this)
+    //   - 1 tab:  prontera = { ... }, (town blocks - we capture these)
+    //   - 2 tabs: { name = ... }, (NPC entries inside towns)
+    //
+    // Pattern breakdown:
+    //   ^\t        - Line starts with exactly 1 tab (matches town names, not mapNPCInfoTable)
+    //   (\w+)      - Capture town name (prontera, geffen, etc.)
+    //   \s*=\s*\{  - Match " = {"
+    //   ([\s\S]*?) - Capture content (non-greedy)
+    //   ^\t\}      - Match line starting with 1 tab + "}" (town block close)
+    // ═══════════════════════════════════════════════════════════════════════════
     private static readonly Regex MapBlockRegex = new(
-        @"(\w+)\s*=\s*\{([\s\S]*?)\}(?=\s*,|\s*\})",
+        @"^\t(\w+)\s*=\s*\{([\s\S]*?)^\t\}",
         RegexOptions.Compiled | RegexOptions.Multiline);
 
     /// <summary>
-    /// Matches individual NPC entries: { name = [=[Name]=], X = 123, Y = 456, TYPE = 6 }
+    /// Fallback regex: matches any "word = {" pattern for non-standard formats
+    /// Less precise but more flexible
     /// </summary>
+    private static readonly Regex MapBlockRegexFallback = new(
+        @"(?<!\w)(\w+)\s*=\s*\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}",
+        RegexOptions.Compiled);
+
     private static readonly Regex NpcEntryRegex = new(
-        @"\{\s*name\s*=\s*(?:\[=\[|""?)([^\]=\]""]+)(?:\]=\]|""?)[^}]*X\s*=\s*(\d+)[^}]*Y\s*=\s*(\d+)[^}]*TYPE\s*=\s*(\d+)[^}]*\}",
+        @"\{\s*name\s*=\s*(?:\[=*\[|""?)([^\]=\]""]+)(?:\]=*\]|""?)[^}]*X\s*=\s*(\d+)[^}]*Y\s*=\s*(\d+)[^}]*TYPE\s*=\s*(\d+)[^}]*\}",
         RegexOptions.Compiled | RegexOptions.Singleline);
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // GRF-BASED METHODS (PRIMARY - Use these when reading from GRF)
+    // MAIN SEARCH METHOD - PRIORITIZES FILESYSTEM
     // ═══════════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// Tries to find and extract Towninfo.lub content from a GRF archive.
-    /// Searches common paths where the file might be located.
+    /// Searches for Towninfo.lub in the following order:
+    /// 1. Filesystem (client folder) - plain text files
+    /// 2. GRF archive - only if filesystem doesn't have it
     /// </summary>
-    /// <param name="grfPath">Full path to the .grf file on disk</param>
-    /// <param name="content">Output: the text content of Towninfo.lub if found</param>
-    /// <param name="foundPath">Output: the internal path where the file was found</param>
-    /// <returns>True if Towninfo.lub was found and extracted</returns>
-    public static bool TryExtractTowninfoFromGrf(string grfPath, out string content, out string foundPath)
+    public static TowninfoSearchResult SearchForTowninfo(string clientFolder, string? grfPath = null)
+    {
+        var result = new TowninfoSearchResult();
+        
+        // STEP 1: Search FILESYSTEM first (plain text, higher priority)
+        if (!string.IsNullOrEmpty(clientFolder) && Directory.Exists(clientFolder))
+        {
+            foreach (var relativePath in FilesystemSearchPaths)
+            {
+                var fullPath = Path.Combine(clientFolder, relativePath);
+                if (File.Exists(fullPath))
+                {
+                    try
+                    {
+                        var content = File.ReadAllText(fullPath);
+                        
+                        if (IsValidTowninfoContent(content))
+                        {
+                            result.Found = true;
+                            result.FilePath = fullPath;
+                            result.Content = content;
+                            result.Source = "Filesystem";
+                            result.AvailableMaps = ParseMapsFromContent(content);
+                            return result;
+                        }
+                    }
+                    catch { }
+                }
+            }
+            
+            // Recursive search
+            var foundFile = SearchRecursive(clientFolder, "Towninfo.lub") 
+                         ?? SearchRecursive(clientFolder, "Towninfo.lua");
+            
+            if (foundFile != null)
+            {
+                try
+                {
+                    var content = File.ReadAllText(foundFile);
+                    if (IsValidTowninfoContent(content))
+                    {
+                        result.Found = true;
+                        result.FilePath = foundFile;
+                        result.Content = content;
+                        result.Source = "Filesystem";
+                        result.AvailableMaps = ParseMapsFromContent(content);
+                        return result;
+                    }
+                }
+                catch { }
+            }
+        }
+
+        // STEP 2: Fallback to GRF
+        if (!string.IsNullOrEmpty(grfPath) && File.Exists(grfPath))
+        {
+            if (TryExtractFromGrf(grfPath, out var content, out var internalPath))
+            {
+                result.Found = true;
+                result.FilePath = $"{grfPath}:{internalPath}";
+                result.Content = content;
+                result.Source = "GRF";
+                result.AvailableMaps = ParseMapsFromContent(content);
+                return result;
+            }
+        }
+
+        return result;
+    }
+
+    private static string? SearchRecursive(string directory, string fileName, int maxDepth = 5)
+    {
+        if (maxDepth <= 0) return null;
+        
+        try
+        {
+            var directMatch = Path.Combine(directory, fileName);
+            if (File.Exists(directMatch)) return directMatch;
+            
+            foreach (var subDir in Directory.GetDirectories(directory))
+            {
+                var dirName = Path.GetFileName(subDir).ToLowerInvariant();
+                if (dirName == "savedata" || dirName == "screenshot" || dirName == "replay") 
+                    continue;
+                
+                var found = SearchRecursive(subDir, fileName, maxDepth - 1);
+                if (found != null) return found;
+            }
+        }
+        catch { }
+        
+        return null;
+    }
+
+    /// <summary>
+    /// Checks if content looks like valid Towninfo.lub (not bytecode).
+    /// </summary>
+    private static bool IsValidTowninfoContent(string content)
+    {
+        if (string.IsNullOrWhiteSpace(content)) return false;
+        
+        // Check for Lua bytecode header (compiled files start with these bytes)
+        if (content.Length > 4)
+        {
+            // LuaQ is the header for Lua 5.1 bytecode
+            // \x1bLua is another common header
+            if (content.StartsWith("\x1bLua") || 
+                content.StartsWith("LuaQ") ||
+                (content.Length > 0 && content[0] == 0x1B))
+            {
+                return false;
+            }
+        }
+        
+        // Valid content should contain mapNPCInfoTable
+        return content.Contains("mapNPCInfoTable");
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // GRF EXTRACTION
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    private static bool TryExtractFromGrf(string grfPath, out string content, out string foundPath)
     {
         content = "";
         foundPath = "";
 
-        // Validate the GRF file exists
-        if (string.IsNullOrEmpty(grfPath) || !File.Exists(grfPath))
-        {
-            return false;
-        }
-
         try
         {
-            // Open the GRF archive
             using var grf = GrfArchive.Open(grfPath);
 
-            // Try each common path until we find one that exists
-            foreach (var tryPath in CommonTowninfoGrfPaths)
+            foreach (var tryPath in GrfSearchPaths)
             {
-                // Check if this path exists in the GRF's entry list
-                var entry = grf.Entries.FirstOrDefault(e => 
+                var entry = grf.Entries.FirstOrDefault(e =>
                     e.Path.Equals(tryPath, StringComparison.OrdinalIgnoreCase));
 
                 if (entry != null)
                 {
-                    // Found it! Extract the bytes
                     byte[] bytes = grf.Extract(entry.Path);
-
-                    // Compiled Lua chunk; cannot parse with regex text parser
-                    if (bytes.Length >= 4 && bytes[0] == 0x1B && bytes[1] == (byte)'L' && bytes[2] == (byte)'u' && bytes[3] == (byte)'a')
-                    {
-                        content = "";
-                        foundPath = entry.Path;
-                        return false;
-                    }
-
-                    // Convert to string (Lua files are usually UTF-8 or EUC-KR)
-                    // Try UTF-8 first, fallback to EUC-KR (codepage 949)
-                    content = TryDecodeContent(bytes);
+                    content = DecodeContent(bytes);
                     foundPath = entry.Path;
 
-                    // Verify it looks like valid Towninfo data
-                    if (content.Contains("mapNPCInfoTable"))
-                    {
+                    if (IsValidTowninfoContent(content))
                         return true;
-                    }
                 }
             }
 
-            // Also try a broader search for any file named Towninfo.lub
             var anyTowninfo = grf.Entries.FirstOrDefault(e =>
                 e.Path.EndsWith("Towninfo.lub", StringComparison.OrdinalIgnoreCase));
 
             if (anyTowninfo != null)
             {
                 byte[] bytes = grf.Extract(anyTowninfo.Path);
-
-                // Compiled Lua chunk; cannot parse with regex text parser
-                if (bytes.Length >= 4 && bytes[0] == 0x1B && bytes[1] == (byte)'L' && bytes[2] == (byte)'u' && bytes[3] == (byte)'a')
-                {
-                    content = "";
-                    foundPath = anyTowninfo.Path;
-                    return false;
-                }
-
-                content = TryDecodeContent(bytes);
+                content = DecodeContent(bytes);
                 foundPath = anyTowninfo.Path;
-                return content.Contains("mapNPCInfoTable");
+                return IsValidTowninfoContent(content);
             }
         }
-        catch (Exception ex)
-        {
-            System.Diagnostics.Debug.WriteLine($"[TowninfoImporter] GRF read error: {ex.Message}");
-        }
+        catch { }
 
         return false;
     }
 
-    /// <summary>
-    /// Gets list of available maps from Towninfo.lub inside a GRF archive.
-    /// </summary>
-    /// <param name="grfPath">Full path to the .grf file</param>
-    /// <returns>List of map names found (e.g., "prontera", "geffen", etc.)</returns>
-    public static List<string> GetAvailableMapsFromGrf(string grfPath)
+    private static string DecodeContent(byte[] bytes)
     {
-        var maps = new List<string>();
+        Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
 
-        if (!TryExtractTowninfoFromGrf(grfPath, out string content, out _))
-        {
-            return maps;
-        }
-
-        return ParseMapsFromContent(content);
-    }
-
-    /// <summary>
-    /// Imports town NPCs for a specific map from Towninfo.lub inside a GRF archive.
-    /// </summary>
-    /// <param name="grfPath">Full path to the .grf file</param>
-    /// <param name="mapName">Name of the map to import (e.g., "prontera")</param>
-    /// <returns>List of TownNpcInfo objects for that map</returns>
-    public static List<TownNpcInfo> ImportTownNpcsFromGrf(string grfPath, string mapName)
-    {
-        if (!TryExtractTowninfoFromGrf(grfPath, out string content, out _))
-        {
-            return new List<TownNpcInfo>();
-        }
-
-        return ParseNpcsFromContent(content, mapName);
-    }
-
-    /// <summary>
-    /// Imports NPCs from GRF and converts directly to NpcPlacable objects.
-    /// </summary>
-    public static List<NpcPlacable> ImportAsPlacablesFromGrf(string grfPath, string mapName)
-    {
-        return ConvertAllToPlacables(ImportTownNpcsFromGrf(grfPath, mapName));
-    }
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    // FILESYSTEM-BASED METHODS (Fallback - Use when file is extracted)
-    // ═══════════════════════════════════════════════════════════════════════════
-
-    /// <summary>
-    /// Gets list of available maps from a Towninfo.lub file on the filesystem.
-    /// </summary>
-    /// <param name="lubFilePath">Full path to Towninfo.lub file</param>
-    /// <returns>List of map names found</returns>
-    public static List<string> GetAvailableMaps(string lubFilePath)
-    {
-        var maps = new List<string>();
-        if (!File.Exists(lubFilePath)) return maps;
-        
         try
         {
-            string content = File.ReadAllText(lubFilePath);
-            return ParseMapsFromContent(content);
+            var utf8 = Encoding.UTF8.GetString(bytes);
+            if (!utf8.Contains('\uFFFD')) return utf8;
         }
-        catch 
-        { 
-            return maps; 
-        }
-    }
+        catch { }
 
-    /// <summary>
-    /// Imports town NPCs from a Towninfo.lub file on the filesystem.
-    /// </summary>
-    /// <param name="lubFilePath">Full path to Towninfo.lub file</param>
-    /// <param name="mapName">Name of the map to import</param>
-    /// <returns>List of TownNpcInfo objects for that map</returns>
-    public static List<TownNpcInfo> ImportTownNpcs(string lubFilePath, string mapName)
-    {
-        var results = new List<TownNpcInfo>();
-        if (!File.Exists(lubFilePath) || string.IsNullOrWhiteSpace(mapName)) return results;
-        
         try
         {
-            string content = File.ReadAllText(lubFilePath);
-            return ParseNpcsFromContent(content, mapName);
+            return Encoding.GetEncoding(949).GetString(bytes);
         }
-        catch 
-        { 
-            return results; 
-        }
-    }
+        catch { }
 
-    /// <summary>
-    /// Imports NPCs from filesystem and converts directly to NpcPlacable objects.
-    /// </summary>
-    public static List<NpcPlacable> ImportAsPlacables(string lubFilePath, string mapName)
-    {
-        return ConvertAllToPlacables(ImportTownNpcs(lubFilePath, mapName));
+        return Encoding.Latin1.GetString(bytes);
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // SHARED PARSING METHODS (Used by both GRF and Filesystem methods)
+    // PARSING METHODS
     // ═══════════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// Parses map names from Towninfo.lub content string.
+    /// Extracts all map names from Towninfo.lub content.
+    /// Tries primary regex first, falls back to alternative if no matches.
     /// </summary>
-    private static List<string> ParseMapsFromContent(string content)
+    public static List<string> ParseMapsFromContent(string content)
     {
         var maps = new List<string>();
         
+        // ─────────────────────────────────────────────────────────────────────
+        // Try primary regex (tab-indented format)
+        // ─────────────────────────────────────────────────────────────────────
         foreach (Match match in MapBlockRegex.Matches(content))
         {
             if (match.Groups.Count >= 2)
             {
-                string mapName = match.Groups[1].Value.Trim();
-                if (!string.IsNullOrWhiteSpace(mapName)) 
+                var mapName = match.Groups[1].Value.Trim();
+                // Skip the outer table name
+                if (!string.IsNullOrWhiteSpace(mapName) && 
+                    !mapName.Equals("mapNPCInfoTable", StringComparison.OrdinalIgnoreCase))
                 {
                     maps.Add(mapName);
                 }
             }
         }
         
-        return maps;
+        // ─────────────────────────────────────────────────────────────────────
+        // If primary regex found nothing, try fallback
+        // ─────────────────────────────────────────────────────────────────────
+        if (maps.Count == 0)
+        {
+            foreach (Match match in MapBlockRegexFallback.Matches(content))
+            {
+                if (match.Groups.Count >= 2)
+                {
+                    var mapName = match.Groups[1].Value.Trim();
+                    // Skip the outer table name and function names
+                    if (!string.IsNullOrWhiteSpace(mapName) && 
+                        !mapName.Equals("mapNPCInfoTable", StringComparison.OrdinalIgnoreCase) &&
+                        !mapName.Equals("main", StringComparison.OrdinalIgnoreCase) &&
+                        !mapName.Equals("function", StringComparison.OrdinalIgnoreCase) &&
+                        !mapName.Equals("if", StringComparison.OrdinalIgnoreCase) &&
+                        !mapName.Equals("for", StringComparison.OrdinalIgnoreCase))
+                    {
+                        maps.Add(mapName);
+                    }
+                }
+            }
+        }
+        
+        // ─────────────────────────────────────────────────────────────────────
+        // Last resort: simple line-by-line parsing
+        // ─────────────────────────────────────────────────────────────────────
+        if (maps.Count == 0)
+        {
+            // Look for patterns like "townname = {" on their own lines
+            var linePattern = new Regex(@"^\s+(\w+)\s*=\s*\{\s*$", RegexOptions.Multiline);
+            foreach (Match match in linePattern.Matches(content))
+            {
+                var mapName = match.Groups[1].Value.Trim();
+                if (!string.IsNullOrWhiteSpace(mapName) &&
+                    !mapName.Equals("mapNPCInfoTable", StringComparison.OrdinalIgnoreCase))
+                {
+                    maps.Add(mapName);
+                }
+            }
+        }
+        
+        return maps.Distinct().ToList();
     }
 
     /// <summary>
-    /// Parses NPC entries for a specific map from Towninfo.lub content string.
+    /// Extracts NPC entries for a specific map from Towninfo.lub content.
     /// </summary>
-    private static List<TownNpcInfo> ParseNpcsFromContent(string content, string mapName)
+    public static List<TownNpcInfo> ParseNpcsFromContent(string content, string mapName)
     {
         var results = new List<TownNpcInfo>();
 
+        // ─────────────────────────────────────────────────────────────────────
+        // Try primary regex first (tab-indented)
+        // ─────────────────────────────────────────────────────────────────────
         foreach (Match mapMatch in MapBlockRegex.Matches(content))
         {
-            string currentMap = mapMatch.Groups[1].Value.Trim();
-            
-            // Skip if not the map we're looking for (case-insensitive)
-            if (!currentMap.Equals(mapName, StringComparison.OrdinalIgnoreCase)) 
-            {
+            var currentMap = mapMatch.Groups[1].Value.Trim();
+            if (!currentMap.Equals(mapName, StringComparison.OrdinalIgnoreCase))
                 continue;
-            }
 
-            // Found our map - parse the NPC entries inside
-            string mapContent = mapMatch.Groups[2].Value;
-            
-            foreach (Match npcMatch in NpcEntryRegex.Matches(mapContent))
-            {
-                if (npcMatch.Groups.Count < 5) continue;
+            var mapContent = mapMatch.Groups[2].Value;
+            ExtractNpcsFromBlock(mapContent, mapName, results);
+            if (results.Count > 0) return results;
+        }
 
-                string name = npcMatch.Groups[1].Value.Trim();
-                
-                // Parse coordinates
-                if (!int.TryParse(npcMatch.Groups[2].Value, NumberStyles.Integer, 
-                                  CultureInfo.InvariantCulture, out int x)) continue;
-                if (!int.TryParse(npcMatch.Groups[3].Value, NumberStyles.Integer, 
-                                  CultureInfo.InvariantCulture, out int y)) continue;
-                if (!int.TryParse(npcMatch.Groups[4].Value, NumberStyles.Integer, 
-                                  CultureInfo.InvariantCulture, out int type)) type = 0;
+        // ─────────────────────────────────────────────────────────────────────
+        // Try fallback regex
+        // ─────────────────────────────────────────────────────────────────────
+        foreach (Match mapMatch in MapBlockRegexFallback.Matches(content))
+        {
+            var currentMap = mapMatch.Groups[1].Value.Trim();
+            if (!currentMap.Equals(mapName, StringComparison.OrdinalIgnoreCase))
+                continue;
 
-                results.Add(new TownNpcInfo 
-                { 
-                    Name = name, 
-                    X = x, 
-                    Y = y, 
-                    Type = type, 
-                    MapName = mapName 
-                });
-            }
-            
-            // Found and processed our map - done
-            break;
+            var mapContent = mapMatch.Groups[2].Value;
+            ExtractNpcsFromBlock(mapContent, mapName, results);
+            if (results.Count > 0) return results;
+        }
+
+        // ─────────────────────────────────────────────────────────────────────
+        // Last resort: find the map block manually
+        // ─────────────────────────────────────────────────────────────────────
+        var manualPattern = new Regex(
+            $@"(?:^|\n)\s*{Regex.Escape(mapName)}\s*=\s*\{{([\s\S]*?)\n\s*\}},?",
+            RegexOptions.IgnoreCase);
+        
+        var manualMatch = manualPattern.Match(content);
+        if (manualMatch.Success)
+        {
+            ExtractNpcsFromBlock(manualMatch.Groups[1].Value, mapName, results);
         }
 
         return results;
     }
 
     /// <summary>
-    /// Tries to decode byte content as UTF-8, then falls back to EUC-KR (codepage 949).
-    /// RO Lua files can be in either encoding depending on the client version.
+    /// Helper: extracts NPC entries from a town block's content.
     /// </summary>
-    private static string TryDecodeContent(byte[] bytes)
+    private static void ExtractNpcsFromBlock(string blockContent, string mapName, List<TownNpcInfo> results)
     {
-        // Register code pages provider for EUC-KR support
-        Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+        // Pattern for NPC entries: { name = [=[Name]=], X = 123, Y = 456, TYPE = 6 }
+        var npcPattern = new Regex(
+            @"\{\s*name\s*=\s*(?:\[=*\[|"")([^\]=\]""]+)(?:\]=*\]|"")[^}]*X\s*=\s*(\d+)[^}]*Y\s*=\s*(\d+)[^}]*TYPE\s*=\s*(\d+)",
+            RegexOptions.Singleline | RegexOptions.IgnoreCase);
 
-        // Try UTF-8 first (most common for modern/translated files)
-        try
+        foreach (Match npcMatch in npcPattern.Matches(blockContent))
         {
-            string utf8 = Encoding.UTF8.GetString(bytes);
-            
-            // Quick validation - if it decodes cleanly and has expected content
-            if (!utf8.Contains('\uFFFD') && utf8.Contains("mapNPCInfoTable"))
+            if (npcMatch.Groups.Count < 5) continue;
+
+            var name = npcMatch.Groups[1].Value.Trim();
+            if (!int.TryParse(npcMatch.Groups[2].Value, NumberStyles.Integer,
+                              CultureInfo.InvariantCulture, out int x)) continue;
+            if (!int.TryParse(npcMatch.Groups[3].Value, NumberStyles.Integer,
+                              CultureInfo.InvariantCulture, out int y)) continue;
+            if (!int.TryParse(npcMatch.Groups[4].Value, NumberStyles.Integer,
+                              CultureInfo.InvariantCulture, out int type)) type = 0;
+
+            results.Add(new TownNpcInfo
             {
-                return utf8;
-            }
+                Name = name,
+                X = x,
+                Y = y,
+                Type = type,
+                MapName = mapName
+            });
         }
-        catch { /* Fall through */ }
+    }
 
-        // Try EUC-KR (codepage 949) for Korean clients
+    // ═══════════════════════════════════════════════════════════════════════════
+    // LEGACY METHODS (backward compatibility)
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    public static List<string> GetAvailableMaps(string lubFilePath)
+    {
+        if (!File.Exists(lubFilePath)) return new();
         try
         {
-            var eucKr = Encoding.GetEncoding(949);
-            return eucKr.GetString(bytes);
+            var content = File.ReadAllText(lubFilePath);
+            return ParseMapsFromContent(content);
         }
-        catch { /* Fall through */ }
+        catch { return new(); }
+    }
 
-        // Last resort - ASCII/Latin1
-        return Encoding.Latin1.GetString(bytes);
+    public static List<TownNpcInfo> ImportTownNpcs(string lubFilePath, string mapName)
+    {
+        if (!File.Exists(lubFilePath)) return new();
+        try
+        {
+            var content = File.ReadAllText(lubFilePath);
+            return ParseNpcsFromContent(content, mapName);
+        }
+        catch { return new(); }
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
     // CONVERSION METHODS
     // ═══════════════════════════════════════════════════════════════════════════
 
-    /// <summary>
-    /// Converts a TownNpcInfo into an NpcPlacable for the editor.
-    /// </summary>
     public static NpcPlacable ConvertToPlacable(TownNpcInfo info)
     {
         var npcType = (TownNpcType)Math.Clamp(info.Type, 0, 7);
-        string sprite = TypeToSprite.GetValueOrDefault(npcType, "4_M_MERCHANT");
-        string label = TypeToLabel.GetValueOrDefault(npcType, "NPC");
-        
+        var sprite = TypeToSprite.GetValueOrDefault(npcType, "4_M_MERCHANT");
+        var label = TypeToLabel.GetValueOrDefault(npcType, "NPC");
+
         return new NpcPlacable
         {
             MapName = info.MapName,
@@ -470,55 +576,138 @@ public static class TowninfoImporter
         };
     }
 
-    /// <summary>
-    /// Batch converts multiple TownNpcInfo objects to NpcPlacables.
-    /// </summary>
     public static List<NpcPlacable> ConvertAllToPlacables(IEnumerable<TownNpcInfo> infos)
     {
-        var results = new List<NpcPlacable>();
-        foreach (var info in infos) results.Add(ConvertToPlacable(info));
-        return results;
+        return infos.Select(ConvertToPlacable).ToList();
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    // HELPER METHODS
-    // ═══════════════════════════════════════════════════════════════════════════
-
-    /// <summary>
-    /// Sanitizes NPC name into a valid rAthena script name.
-    /// </summary>
     private static string SanitizeScriptName(string name)
     {
         if (string.IsNullOrWhiteSpace(name)) return "TownNpc";
-        string s = name.Replace(" ", "_");
+        var s = name.Replace(" ", "_");
         s = Regex.Replace(s, @"[^a-zA-Z0-9_]", "");
         if (s.Length > 0 && char.IsDigit(s[0])) s = "_" + s;
         return string.IsNullOrWhiteSpace(s) ? "TownNpc" : s;
     }
 
-    /// <summary>Returns a placeholder script body for a town NPC by type (0–7).</summary>
-    public static string GetDefaultScriptBody(string npcName, int type)
-    {
-        var t = (TownNpcType)Math.Clamp(type, 0, 7);
-        return GenerateDefaultScript(npcName, t);
-    }
-
-    /// <summary>
-    /// Generates placeholder script body based on NPC type.
-    /// </summary>
     private static string GenerateDefaultScript(string npcName, TownNpcType type)
     {
         return type switch
         {
-            TownNpcType.ToolDealer => $"mes \"[{npcName}]\";\nmes \"Welcome! I sell useful items for adventurers.\";\nclose;",
-            TownNpcType.WeaponDealer => $"mes \"[{npcName}]\";\nmes \"Looking for weapons? You've come to the right place!\";\nclose;",
-            TownNpcType.ArmorDealer => $"mes \"[{npcName}]\";\nmes \"I have the finest armor in town.\";\nclose;",
-            TownNpcType.Smith => $"mes \"[{npcName}]\";\nmes \"Need something upgraded or refined?\";\nclose;",
-            TownNpcType.Guide => $"mes \"[{npcName}]\";\nmes \"Welcome to this town! How may I help you?\";\nclose;",
-            TownNpcType.Inn => $"mes \"[{npcName}]\";\nmes \"Would you like to rest here?\";\nclose;",
-            TownNpcType.KafraEmployee => $"mes \"[{npcName}]\";\nmes \"Welcome to Kafra Services!\";\nmes \"How may I assist you today?\";\nclose;",
-            TownNpcType.StylingShop => $"mes \"[{npcName}]\";\nmes \"Want to change your hairstyle?\";\nclose;",
+            TownNpcType.ToolDealer => $"mes \"[{npcName}]\";\nmes \"Welcome! I sell useful items.\";\nclose;",
+            TownNpcType.WeaponDealer => $"mes \"[{npcName}]\";\nmes \"Looking for weapons?\";\nclose;",
+            TownNpcType.ArmorDealer => $"mes \"[{npcName}]\";\nmes \"I have the finest armor.\";\nclose;",
+            TownNpcType.Smith => $"mes \"[{npcName}]\";\nmes \"Need something upgraded?\";\nclose;",
+            TownNpcType.Guide => $"mes \"[{npcName}]\";\nmes \"Welcome to this town!\";\nclose;",
+            TownNpcType.Inn => $"mes \"[{npcName}]\";\nmes \"Would you like to rest?\";\nclose;",
+            TownNpcType.KafraEmployee => $"mes \"[{npcName}]\";\nmes \"Welcome to Kafra Services!\";\nclose;",
+            TownNpcType.StylingShop => $"mes \"[{npcName}]\";\nmes \"Want a new hairstyle?\";\nclose;",
             _ => $"mes \"[{npcName}]\";\nmes \"Hello!\";\nclose;"
         };
+    }
+
+    /// <summary>
+    /// Public method to get default script body given NPC name and type.
+    /// Used by MainWindow when loading towns from Towninfo.
+    /// </summary>
+    public static string GetDefaultScriptBody(string npcName, int typeInt)
+    {
+        var type = (TownNpcType)Math.Clamp(typeInt, 0, 7);
+        return GenerateDefaultScript(npcName, type);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // METHODS USING NEW SOURCE ABSTRACTION
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Extract Towninfo content using GrfFileSource (unified reader).
+    /// Returns the decoded content if found and valid.
+    /// </summary>
+    public static bool TryExtractFromGrfSource(GrfFileSource source, out string content, out string foundPath)
+    {
+        content = "";
+        foundPath = "";
+
+        if (source == null) return false;
+
+        try
+        {
+            foreach (var tryPath in GrfSearchPaths)
+            {
+                if (!source.Exists(tryPath)) continue;
+
+                byte[] bytes = source.ReadAllBytes(tryPath);
+                content = DecodeContent(bytes);
+                foundPath = tryPath;
+
+                if (IsValidTowninfoContent(content))
+                    return true;
+            }
+
+            // Try finding any Towninfo file
+            var anyTowninfo = source.EnumeratePaths()
+                .FirstOrDefault(p => p.EndsWith("Towninfo.lub", StringComparison.OrdinalIgnoreCase) ||
+                                     p.EndsWith("Towninfo.lua", StringComparison.OrdinalIgnoreCase));
+
+            if (anyTowninfo != null)
+            {
+                byte[] bytes = source.ReadAllBytes(anyTowninfo);
+                content = DecodeContent(bytes);
+                foundPath = anyTowninfo;
+                return IsValidTowninfoContent(content);
+            }
+        }
+        catch { }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Search for Towninfo using the CompositeFileSource (unified VFS).
+    /// This is the preferred method for new code.
+    /// </summary>
+    public static TowninfoSearchResult SearchForTowninfoVfs(CompositeFileSource vfs)
+    {
+        var result = new TowninfoSearchResult();
+
+        if (vfs == null) return result;
+
+        // Check Lua files via the VFS (folder first, then GRF)
+        var candidates = new[]
+        {
+            "data/System/Towninfo.lua",
+            "data/System/Towninfo.lub",
+            "System/Towninfo.lua",
+            "System/Towninfo.lub",
+            "Towninfo.lua",
+            "Towninfo.lub",
+            "data/luafiles514/lua files/signboardlist/Towninfo.lua",
+            "data/luafiles514/lua files/signboardlist/Towninfo.lub",
+        };
+
+        foreach (var candidate in candidates)
+        {
+            if (!vfs.ExistsLua(candidate)) continue;
+
+            try
+            {
+                byte[] bytes = vfs.ReadLua(candidate);
+                string content = DecodeContent(bytes);
+
+                if (IsValidTowninfoContent(content))
+                {
+                    result.Found = true;
+                    result.FilePath = candidate;
+                    result.Content = content;
+                    result.Source = vfs.GetLuaSource(candidate) ?? "Unknown";
+                    result.AvailableMaps = ParseMapsFromContent(content);
+                    return result;
+                }
+            }
+            catch { }
+        }
+
+        return result;
     }
 }

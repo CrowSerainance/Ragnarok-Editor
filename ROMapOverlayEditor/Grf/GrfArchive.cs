@@ -10,6 +10,7 @@ namespace ROMapOverlayEditor.Grf
     public sealed class GrfArchive : IDisposable
     {
         public string Path { get; }
+        public uint Version { get; }
         public string VersionHex { get; }
         public uint FileTableOffset { get; }
         public List<GrfEntry> Entries { get; } = new();
@@ -17,10 +18,11 @@ namespace ROMapOverlayEditor.Grf
         private readonly FileStream _fs;
         private readonly object _lock = new();
 
-        private GrfArchive(string path, FileStream fs, string versionHex, uint fileTableOffset, List<GrfEntry> entries)
+        private GrfArchive(string path, FileStream fs, uint version, string versionHex, uint fileTableOffset, List<GrfEntry> entries)
         {
             Path = path;
             _fs = fs;
+            Version = version;
             VersionHex = versionHex;
             FileTableOffset = fileTableOffset;
             Entries = entries;
@@ -143,7 +145,7 @@ namespace ROMapOverlayEditor.Grf
 
                 var entries = ParseTable(tableData, decompressedSize);
 
-                return new GrfArchive(path, fs, $"0x{ver:X}", fileTableOffset, entries);
+                return new GrfArchive(path, fs, ver, $"0x{ver:X}", fileTableOffset, entries);
             }
             catch
             {
@@ -214,36 +216,86 @@ namespace ROMapOverlayEditor.Grf
             var e = Entries.FirstOrDefault(x => x.Path.Equals(internalPath, StringComparison.OrdinalIgnoreCase));
             if (e == null) throw new FileNotFoundException("Entry not found: " + internalPath);
 
-            lock(_lock)
+            lock (_lock)
             {
-                long absPos = 46 + e.Offset;
-                _fs.Position = absPos;
-
-                // Read aligned size from disk (safe padded block)
-                int len = (int)e.AlignedSize;
-                
-                // Safety clamp
-                if (len < 0) len = (int)e.CompressedSize;
-                if (len <= 0) return Array.Empty<byte>();
-
-                byte[] raw = new byte[len];
-                int read = _fs.Read(raw, 0, len);
-                if (read < len) 
+                // Attempt 1: Standard GRF offset (Header + EntryOffset)
+                try
                 {
-                    // Truncated? Resize to actual read if needed
-                    Array.Resize(ref raw, read);
+                    return ExtractAtOffset(e, 46 + e.Offset);
                 }
-                
-                // Compression check: Flag 8 OR different sizes
-                bool isCompressed = (e.Flags & 8) != 0 || (e.CompressedSize != e.UncompressedSize);
-
-                if (isCompressed)
+                catch
                 {
-                    try { return DecompressZlib(raw, (int)e.UncompressedSize); }
-                    catch { return raw; } // fallback to returning raw if decompression fails
+                    // Attempt 2: Absolute offset (raw EntryOffset) used by some tools/versions
+                    // Only try if it's distinct and looks like a valid header skip
+                    if (e.Offset > 46)
+                    {
+                        try
+                        {
+                            return ExtractAtOffset(e, e.Offset);
+                        }
+                        catch
+                        {
+                            // Ignore fallback failure, throw original
+                        }
+                    }
+                    throw;
                 }
-                return raw;
             }
+        }
+
+        private byte[] ExtractAtOffset(GrfEntry e, long absOffset)
+        {
+            _fs.Position = absOffset;
+
+            // Read aligned size from disk (safe padded block)
+            // If aligned size is weird, fallback to compressed size
+            int len = (e.AlignedSize > 0) ? (int)e.AlignedSize : (int)e.CompressedSize;
+            
+            // Safety measure: never read less than compressed size if possible
+            if (len < e.CompressedSize) len = (int)e.CompressedSize;
+            
+            if (len <= 0) return Array.Empty<byte>();
+
+            byte[] raw = new byte[len];
+            int read = _fs.Read(raw, 0, len);
+            if (read < len)
+            {
+                Array.Resize(ref raw, read);
+            }
+
+            // If we didn't get enough bytes for even the compressed data, fail
+            if (raw.Length < e.CompressedSize)
+                throw new EndOfStreamException($"Unexpected EOF reading {e.Path} at {absOffset}. Got {raw.Length}, expected {e.CompressedSize}");
+
+            // Compression check: Flag 8 (type file) OR sizes differ
+            bool isCompressed = (e.Flags & 0x08) != 0 || (e.CompressedSize < e.UncompressedSize);
+
+            if (isCompressed)
+            {
+                // Shrink raw to exact compressed size for Zlib? 
+                // Grf entries usually pack data and then align. Zlib stream stops at end of stream.
+                // However, passing extra bytes (padding) to ZLibStream might be fine or might error.
+                // Best to pass exact compressed slice.
+                var actualCompressedData = raw;
+                if (raw.Length > e.CompressedSize)
+                {
+                    actualCompressedData = new byte[e.CompressedSize];
+                    Array.Copy(raw, actualCompressedData, e.CompressedSize);
+                }
+
+                return DecompressZlib(actualCompressedData, (int)e.UncompressedSize);
+            }
+
+            // Not compressed, just return the data (trimmed to uncompressed size if needed)
+            if (raw.Length > e.UncompressedSize && e.UncompressedSize > 0)
+            {
+                // Start of raw
+                var actual = new byte[e.UncompressedSize];
+                Array.Copy(raw, actual, e.UncompressedSize);
+                return actual;
+            }
+
+            return raw;
         }
         
         public byte[] ExtractByAligned(GrfEntry e, uint alignedSize)

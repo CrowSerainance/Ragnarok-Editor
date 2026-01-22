@@ -1,3 +1,4 @@
+using System;
 using System.Collections.ObjectModel;
 using System.IO;
 using System.Linq;
@@ -5,7 +6,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using Microsoft.Win32;
-using ROMapOverlayEditor.Grf;
+using ROMapOverlayEditor.Sources;
 
 namespace ROMapOverlayEditor;
 
@@ -14,7 +15,8 @@ public partial class GrfBrowserWindow : Window
     public string? SelectedGrfPath { get; private set; }
     public string? SelectedInternalPath { get; private set; }
 
-    private GrfArchive? _grf;
+    private GrfFileSource? _source;
+    private bool _ownsSource; // Whether we should dispose the source when done
     private string[] _allPaths = Array.Empty<string>();
     private readonly ObservableCollection<GrfListEntry> _filtered = new();
 
@@ -22,33 +24,63 @@ public partial class GrfBrowserWindow : Window
     {
         InitializeComponent();
         EntriesList.ItemsSource = _filtered;
-        // Hide local Open button if we are using external logic, or reuse it?
-        // We will repurpose Open button to call back to logic, or just local logic.
-        // For simplicity, local open will just use GrfArchive.Open logic.
     }
 
-    // New method to receive the validated archive
-    public void LoadArchive(GrfArchive archive)
+    /// <summary>
+    /// Load a GrfFileSource that is owned by the caller.
+    /// The browser will NOT dispose it when closed.
+    /// </summary>
+    public void LoadSource(GrfFileSource source)
     {
-        _grf = archive; // do not dispose, ownership shared or logic handles it
-        // Ideally we shouldn't dispose it here if passed in, unless we took ownership
-        // But MainWindow passes it in.
-        
+        // Dispose previous source if we owned it
+        if (_ownsSource && _source != null)
+        {
+            _source.Dispose();
+        }
+
+        _source = source;
+        _ownsSource = false; // Caller owns it
         ReloadFromCurrent();
+    }
+
+    /// <summary>
+    /// Open a GRF file and take ownership of the source.
+    /// The browser will dispose it when closed or when another file is opened.
+    /// </summary>
+    public void LoadGrf(string path)
+    {
+        try
+        {
+            var newSource = new GrfFileSource(path);
+
+            // Dispose previous source if we owned it
+            if (_ownsSource && _source != null)
+            {
+                _source.Dispose();
+            }
+
+            _source = newSource;
+            _ownsSource = true; // We own it
+            ReloadFromCurrent();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Failed to open GRF:\n{ex.Message}", "Error");
+        }
     }
 
     private void ReloadFromCurrent()
     {
-        if (_grf == null) return;
+        if (_source == null) return;
+
         try
         {
-            _allPaths = _grf.Entries
-                .Select(e => e.Path)
+            _allPaths = _source.EnumeratePaths()
                 .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
                 .ToArray();
 
-            TxtPath.Text = _grf.Path;
-            TxtVersion.Text = $"Version {_grf.VersionHex} · {_allPaths.Length} files";
+            TxtPath.Text = _source.GrfPath;
+            TxtVersion.Text = $"Version 0x{_source.Version:X} - {_allPaths.Length} files";
             RefreshList();
             UpdateOpenAsMapState();
         }
@@ -67,27 +99,6 @@ public partial class GrfBrowserWindow : Window
         if (dlg.ShowDialog() != true) return;
 
         LoadGrf(dlg.FileName);
-    }
-
-    private void LoadGrf(string path)
-    {
-        try
-        {
-            // Use robust loader
-            var arc = GrfArchive.Open(path);
-            // Dispose old if any (assuming we own local opens)
-            // But if _grf was passed from outside? 
-            // Simple rule: if we overwrite _grf, we should dispose the old one IF we owned it.
-            // For now, let's just dispose it.
-            _grf?.Dispose();
-            
-            _grf = arc;
-            ReloadFromCurrent();
-        }
-        catch (Exception ex)
-        {
-            MessageBox.Show($"Failed to open GRF:\n{ex.Message}", "Error");
-        }
     }
 
     private void FilterCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -117,7 +128,8 @@ public partial class GrfBrowserWindow : Window
     private static bool IsMapBmp(string path)
     {
         if (!path.EndsWith(".bmp", StringComparison.OrdinalIgnoreCase)) return false;
-        return path.Contains("\\map\\", StringComparison.OrdinalIgnoreCase) || path.Contains("/map/", StringComparison.OrdinalIgnoreCase);
+        return path.Contains("/map/", StringComparison.OrdinalIgnoreCase) ||
+               path.Contains("\\map\\", StringComparison.OrdinalIgnoreCase);
     }
 
     private void EntriesList_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -129,32 +141,30 @@ public partial class GrfBrowserWindow : Window
     private void TryLoadPreview()
     {
         if (ImgPreview == null || TxtPreviewData == null || TxtContentPreview == null) return;
-        
+
         ImgPreview.Source = null;
         TxtContentPreview.Text = "";
-        
+
         ImgPreview.Visibility = Visibility.Collapsed;
         TxtContentPreview.Visibility = Visibility.Collapsed;
         TxtPreviewData.Visibility = Visibility.Visible;
         TxtPreviewData.Text = "No preview";
 
-        if (EntriesList.SelectedItem is not GrfListEntry entry || _grf == null) return;
+        if (EntriesList.SelectedItem is not GrfListEntry entry || _source == null) return;
 
         string ext = System.IO.Path.GetExtension(entry.Path).ToLowerInvariant();
-        bool isImage = ext == ".bmp" || ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".tga";
-        bool isText = ext == ".txt" || ext == ".xml" || ext == ".lua" || ext == ".conf" || 
-                      ext == ".ini" || ext == ".log" || ext == ".json";
+        bool isImage = ext is ".bmp" or ".png" or ".jpg" or ".jpeg" or ".tga";
+        bool isText = ext is ".txt" or ".xml" or ".lua" or ".lub" or ".conf" or ".ini" or ".log" or ".json";
 
-        if (!isImage && !isText) 
+        if (!isImage && !isText)
         {
-            // Try to show size/type info
-            TxtPreviewData.Text = $"Binary file\n{ext}\nSize: {_grf.Entries.FirstOrDefault(x => x.Path == entry.Path)?.UncompressedSize ?? 0} bytes";
+            TxtPreviewData.Text = $"Binary file\n{ext}";
             return;
         }
 
         try
         {
-            var data = _grf.Extract(entry.Path);
+            var data = _source.ReadAllBytes(entry.Path);
             if (data == null || data.Length == 0)
             {
                 TxtPreviewData.Text = "Empty file";
@@ -175,7 +185,7 @@ public partial class GrfBrowserWindow : Window
                 bmp.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad;
                 bmp.StreamSource = ms;
                 bmp.EndInit();
-                bmp.Freeze(); 
+                bmp.Freeze();
 
                 ImgPreview.Source = bmp;
                 ImgPreview.Visibility = Visibility.Visible;
@@ -183,24 +193,33 @@ public partial class GrfBrowserWindow : Window
             }
             else if (isText)
             {
-                // Detect encoding: UTF-8 BOM or fallback to 949
                 string text;
-                // Simple check for UTF8 BOM
+                // Check for UTF8 BOM
                 if (data.Length >= 3 && data[0] == 0xEF && data[1] == 0xBB && data[2] == 0xBF)
                 {
-                     text = System.Text.Encoding.UTF8.GetString(data);
+                    text = System.Text.Encoding.UTF8.GetString(data);
+                }
+                // Check for Lua bytecode
+                else if (data.Length >= 4 && data[0] == 0x1B && data[1] == (byte)'L' && data[2] == (byte)'u' && data[3] == (byte)'a')
+                {
+                    TxtPreviewData.Text = "Compiled Lua bytecode\n(cannot preview)";
+                    return;
                 }
                 else
                 {
-                     // Try 949 (Korean) as default for RO files
-                     try {
+                    // Try Korean EUC-KR encoding (common for RO files)
+                    try
+                    {
+                        System.Text.Encoding.RegisterProvider(System.Text.CodePagesEncodingProvider.Instance);
                         text = System.Text.Encoding.GetEncoding(949).GetString(data);
-                     } catch {
+                    }
+                    catch
+                    {
                         text = System.Text.Encoding.Default.GetString(data);
-                     }
+                    }
                 }
-                
-                // Truncate if too huge for preview
+
+                // Truncate if too large
                 if (text.Length > 10000) text = text.Substring(0, 10000) + "\n... (truncated)";
 
                 TxtContentPreview.Text = text;
@@ -236,8 +255,8 @@ public partial class GrfBrowserWindow : Window
 
     private void CommitOpenAsMap(string internalPath)
     {
-        if (_grf == null) return;
-        SelectedGrfPath = _grf.Path;
+        if (_source == null) return;
+        SelectedGrfPath = _source.GrfPath;
         SelectedInternalPath = internalPath;
         DialogResult = true;
         Close();
@@ -253,6 +272,18 @@ public partial class GrfBrowserWindow : Window
     {
         if (!string.IsNullOrEmpty(path) && File.Exists(path))
             LoadGrf(path);
+    }
+
+    protected override void OnClosed(EventArgs e)
+    {
+        base.OnClosed(e);
+
+        // Dispose source if we own it
+        if (_ownsSource && _source != null)
+        {
+            _source.Dispose();
+            _source = null;
+        }
     }
 }
 

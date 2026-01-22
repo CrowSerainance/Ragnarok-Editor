@@ -12,6 +12,8 @@ namespace ROMapOverlayEditor.GrfTown
         private readonly Func<string, byte[]> _readBytes;
         private readonly Func<IEnumerable<string>> _listPaths;
         private readonly string? _luaDataFolderPath;
+        private HashSet<string>? _allPathsLower;
+        private Dictionary<string, string>? _pathCaseMap; // lowercase -> original case
 
         /// <summary>Relative paths to try under the Lua folder root.</summary>
         public static readonly string[] FolderTowninfoCandidates = new[]
@@ -123,30 +125,131 @@ namespace ROMapOverlayEditor.GrfTown
             var t = towns.FirstOrDefault(x => string.Equals(x.Name, townName, StringComparison.OrdinalIgnoreCase));
             if (t == null) return TownLoadResult.Fail($"Town '{townName}' not found.");
 
-            // Map image path patterns (client dependent)
-            var imgCandidates = new[]
+            var mapLower = (t.Name ?? "").Trim().ToLowerInvariant();
+
+            // Try common minimap paths first (client dependent)
+            var baseCandidates = new[]
             {
-                $@"data\texture\effect\map\{t.Name}.bmp",
-                $@"data\texture\À¯ÀúÀÎÅÍÆäÀÌ½º\map\{t.Name}.bmp",
-                $@"data\texture\userinterface\map\{t.Name}.bmp",
-                $@"data\texture\map\{t.Name}.bmp",
-                $@"texture\À¯ÀúÀÎÅÍÆäÀÌ½º\map\{t.Name}.bmp",
-                $@"texture\userinterface\map\{t.Name}.bmp"
+                $@"data\texture\effect\map\{t.Name}",
+                $@"data\texture\À¯ÀúÀÎÅÍÆäÀÌ½º\map\{t.Name}",
+                $@"data\texture\userinterface\map\{t.Name}",
+                $@"data\texture\map\{t.Name}",
+                $@"texture\À¯ÀúÀÎÅÍÆäÀÌ½º\map\{t.Name}",
+                $@"texture\userinterface\map\{t.Name}",
+                $@"texture\map\{t.Name}",
             };
 
-            string? imgPath = imgCandidates.FirstOrDefault(p => _exists(p));
+            var exts = new[] { ".bmp", ".png", ".jpg", ".jpeg", ".tga" };
+
+            string? imgPath = null;
+
+            // 1) Exact candidate checks (try original case first, then case-insensitive)
+            foreach (var bc in baseCandidates)
+            {
+                foreach (var ext in exts)
+                {
+                    var candidate = bc + ext;
+                    // Try original case first (faster if it matches)
+                    if (_exists(candidate))
+                    {
+                        imgPath = candidate;
+                        break;
+                    }
+                    // Fallback to case-insensitive check
+                    if (ExistsCI(candidate))
+                    {
+                        // Get original case if available, otherwise use candidate as-is
+                        EnsurePathIndex();
+                        if (_pathCaseMap != null && _pathCaseMap.TryGetValue(Norm(candidate), out var orig))
+                            imgPath = orig;
+                        else
+                            imgPath = candidate;
+                        break;
+                    }
+                }
+                if (imgPath != null) break;
+            }
+
+            // 2) Fallback: search entire GRF path list for matching filename
+            if (imgPath == null)
+            {
+                var hitLower = FindMapImageFallback(mapLower);
+                if (hitLower != null)
+                {
+                    // Get original case from the path map
+                    EnsurePathIndex();
+                    if (_pathCaseMap != null && _pathCaseMap.TryGetValue(hitLower, out var originalCase))
+                        imgPath = originalCase;
+                    else
+                        imgPath = hitLower; // fallback to normalized if map lookup fails
+                }
+            }
+
             if (imgPath == null)
             {
                 // We still return town NPCs; image can be missing.
                 return TownLoadResult.Success(t);
             }
 
-            // Attach image path into SourcePath if you want; or let UI call readBytes(imgPath)
+            // Attach image path into SourcePath so UI will TryLoadGrfMapImage(...)
             t.SourcePath = towninfoSourcePath + " | " + imgPath;
             return TownLoadResult.Success(t);
         }
 
         public byte[] Read(string grfPath) => _readBytes(grfPath);
+
+        // Normalize slashes and lowercase for case-insensitive comparisons
+        private static string Norm(string p)
+            => (p ?? "").Replace('/', '\\').Trim().ToLowerInvariant();
+
+        private void EnsurePathIndex()
+        {
+            if (_allPathsLower != null) return;
+            _allPathsLower = new HashSet<string>();
+            _pathCaseMap = new Dictionary<string, string>();
+            
+            foreach (var orig in _listPaths())
+            {
+                if (string.IsNullOrWhiteSpace(orig)) continue;
+                var norm = Norm(orig);
+                _allPathsLower.Add(norm);
+                // Store first occurrence as canonical case (GRF paths are usually consistent)
+                if (!_pathCaseMap.ContainsKey(norm))
+                    _pathCaseMap[norm] = orig;
+            }
+        }
+
+        private bool ExistsCI(string p)
+        {
+            EnsurePathIndex();
+            return _allPathsLower!.Contains(Norm(p));
+        }
+
+        private string? FindMapImageFallback(string mapNameLower)
+        {
+            EnsurePathIndex();
+
+            // Prefer images under a "\map\" folder, but also accept anything that matches filename.
+            var exts = new[] { ".bmp", ".png", ".jpg", ".jpeg", ".tga" };
+
+            // Look for: ...\map\{map}.{ext}
+            foreach (var ext in exts)
+            {
+                var suffix = $@"\map\{mapNameLower}{ext}";
+                var hit = _allPathsLower!.FirstOrDefault(p => p.EndsWith(suffix));
+                if (hit != null) return hit;
+            }
+
+            // Fallback: any path ending in "\{map}.{ext}"
+            foreach (var ext in exts)
+            {
+                var suffix = $@"\{mapNameLower}{ext}";
+                var hit = _allPathsLower!.FirstOrDefault(p => p.EndsWith(suffix));
+                if (hit != null) return hit;
+            }
+
+            return null;
+        }
 
         private static string DecodeText(byte[] bytes)
         {

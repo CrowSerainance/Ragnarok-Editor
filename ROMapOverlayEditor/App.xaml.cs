@@ -8,7 +8,6 @@ public partial class App : Application
     {
         System.Text.Encoding.RegisterProvider(System.Text.CodePagesEncodingProvider.Instance);
 
-        // MessageBox.Show("App Starting..."); // Debug
         AppDomain.CurrentDomain.UnhandledException += (s, args) =>
         {
             System.IO.File.WriteAllText("crash_domain.log", args.ExceptionObject.ToString());
