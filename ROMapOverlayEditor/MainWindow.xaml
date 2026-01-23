@@ -16,6 +16,7 @@
                 <Button Content="Load Map Img" Click="LoadImage_Click" ToolTip="Load map image from file"/>
                 <Separator/>
                 <Button Content="Open GRF" Click="OpenGrf_Click" ToolTip="Pick a GRF file (BMPs + assets); Town list from GRF or Lua folder"/>
+                <Button Content="Mount Pack..." Click="MountPack_Click" ToolTip="Mount a ZIP/7Z/Folder as additional asset source"/>
                 <Button Content="Set Lua Folder…" Click="SetLuaFolder_Click" ToolTip="Folder containing Towninfo.lua/lub (if not in GRF)"/>
                 <Separator/>
 
@@ -32,6 +33,14 @@
                         IsEnabled="False"
                         Margin="8,0,0,0"
                         Click="CopyExport_Click"/>
+                <Button Content="Export Patch ZIP…" Click="ExportPatchZip_Click" Margin="4,0,0,0"
+                        ToolTip="Export staged GAT/edits as client-loadable ZIP"/>
+                <Button Content="3D GAT Editor" Click="OpenGat3DEditor_Click" Margin="4,0,0,0"
+                        ToolTip="Open walkability 3D editor for selected town (GAT paint)"/>
+                <Separator/>
+                <CheckBox x:Name="AdvancedModeToggle" Content="Advanced" Margin="4,0,0,0"
+                          Checked="AdvancedModeToggle_Changed" Unchecked="AdvancedModeToggle_Changed"
+                          ToolTip="Show/hide advanced tools (MOB/NPC/QUEST editors, Database, Project tabs)"/>
             </ToolBar>
         </ToolBarTray>
         
@@ -68,11 +77,11 @@
                                           DeleteRequested="Inspector_DeleteRequested"/>
                     </TabItem>
                     
-                    <TabItem Header="DATABASE">
+                    <TabItem x:Name="DatabaseTab" Header="DATABASE">
                         <uc:DatabaseView x:Name="DbView" SpawnRequested="DbView_SpawnRequested"/>
                     </TabItem>
                     
-                    <TabItem Header="PROJECT">
+                    <TabItem x:Name="ProjectTab" Header="PROJECT">
                         <uc:ProjectView x:Name="ProjectView"
                                         ValidateRequested="ProjectView_ValidateRequested"
                                         ExportNpcsRequested="ExportNpcs_Click"
@@ -137,14 +146,18 @@
                 </DockPanel>
             </TabItem>
 
-            <TabItem Header="MOB EDITOR">
+            <TabItem x:Name="MobEditorTab" Header="MOB EDITOR">
                 <Grid><TextBlock Text="Mob Editor – Coming soon" HorizontalAlignment="Center" VerticalAlignment="Center" FontSize="16" Foreground="#888"/></Grid>
             </TabItem>
-            <TabItem Header="NPC EDITOR">
+            <TabItem x:Name="NpcEditorTab" Header="NPC EDITOR">
                 <Grid><TextBlock Text="NPC Editor – Coming soon" HorizontalAlignment="Center" VerticalAlignment="Center" FontSize="16" Foreground="#888"/></Grid>
             </TabItem>
-            <TabItem Header="QUEST EDITOR">
+            <TabItem x:Name="QuestEditorTab" Header="QUEST EDITOR">
                 <Grid><TextBlock Text="Quest Editor – Coming soon" HorizontalAlignment="Center" VerticalAlignment="Center" FontSize="16" Foreground="#888"/></Grid>
+            </TabItem>
+            
+            <TabItem x:Name="ThreeDEditorTab" Header="3D WORLD">
+                 <uc:GatEditorView x:Name="GatView"/>
             </TabItem>
         </TabControl>
     </DockPanel>

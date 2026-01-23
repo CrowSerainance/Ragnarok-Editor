@@ -117,6 +117,29 @@ public sealed class ProjectData : INotifyPropertyChanged
     /// <summary>Last selected town name for restoring selection when re-opening.</summary>
     public string? LastSelectedTown { get; set; }
 
+    /// <summary>
+    /// Map width in game tiles. Used for coordinate conversion.
+    /// Set to 0 to auto-estimate from image dimensions.
+    /// Common values: 400 (towns), 512 (fields), 300 (dungeons)
+    /// </summary>
+    public int MapTileWidth
+    {
+        get => _mapTileWidth;
+        set { _mapTileWidth = value; OnPropertyChanged(); }
+    }
+    private int _mapTileWidth = 0;
+
+    /// <summary>
+    /// Map height in game tiles. Used for coordinate conversion.
+    /// Set to 0 to auto-estimate from image dimensions.
+    /// </summary>
+    public int MapTileHeight
+    {
+        get => _mapTileHeight;
+        set { _mapTileHeight = value; OnPropertyChanged(); }
+    }
+    private int _mapTileHeight = 0;
+
     // Pixels per tile; origin and Y-inversion in code
     private double _pixelsPerTile = 8.0;
     public double PixelsPerTile { get => _pixelsPerTile; set => SetField(ref _pixelsPerTile, value); }
@@ -136,6 +159,12 @@ public sealed class ProjectData : INotifyPropertyChanged
     // --- DB source paths (optional; for Mob Editor) ---
     public string? MobDbSourcePath { get; set; }
     public string? MobSkillDbSourcePath { get; set; }
+
+    /// <summary>
+    /// Path to extracted client data folder (contains .gat, .rsw files).
+    /// Example: F:\MMORPG\RAGNAROK ONLINE\client\data
+    /// </summary>
+    public string? ClientDataPath { get; set; }
 
     private void OnPropertyChanged([CallerMemberName] string? propertyName = null)
     {

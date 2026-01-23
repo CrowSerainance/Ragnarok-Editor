@@ -14,6 +14,11 @@ using ROMapOverlayEditor.UserControls;
 using ROMapOverlayEditor.GrfTown;
 using ROMapOverlayEditor.Sources;
 using ROMapOverlayEditor.Grf;
+using ROMapOverlayEditor.Vfs;
+using ROMapOverlayEditor.MapAssets;
+using ROMapOverlayEditor.Patching;
+using ROMapOverlayEditor.Gat;
+using ROMapOverlayEditor.Ui;
 using System.Linq; 
 
 namespace ROMapOverlayEditor;
@@ -41,6 +46,11 @@ public partial class MainWindow : Window
     private GrfFileSource? _grfSource;
     private FolderFileSource? _luaFolderSource;
     private CompositeFileSource? _vfs;
+    private readonly CompositeVfs _compositeVfs = new();
+    private readonly EditStaging _staging = new();
+    private readonly SimpleModeController _simpleMode = new();
+    private bool _advancedMode = false;
+    private MapTransform? _mapTransform;
 
     /// <summary>Original NPCs from Towninfo.lub per map, for diff/changelog.</summary>
     private readonly Dictionary<string, List<TownNpc>> _originalTownNpcs = new();
@@ -82,6 +92,20 @@ public partial class MainWindow : Window
             // Set DataContexts
             ProjectView.DataContext = _project;
             Inspector.DataContext = null;
+            
+            // Register advanced UI elements for simple mode
+            if (MobEditorTab != null) _simpleMode.RegisterAdvanced(MobEditorTab);
+            if (NpcEditorTab != null) _simpleMode.RegisterAdvanced(NpcEditorTab);
+            if (QuestEditorTab != null) _simpleMode.RegisterAdvanced(QuestEditorTab);
+            if (DatabaseTab != null) _simpleMode.RegisterAdvanced(DatabaseTab);
+            if (ProjectTab != null) _simpleMode.RegisterAdvanced(ProjectTab);
+            
+        if (ThreeDEditorTab != null) _simpleMode.RegisterAdvanced(ThreeDEditorTab);
+            
+            // Wire up Tab Selection
+            MainTabs.SelectionChanged += MainTabs_SelectionChanged;
+
+            _simpleMode.Apply(_advancedMode);
         };
         ObjectsList.ItemsSource = _items;
 
@@ -89,11 +113,36 @@ public partial class MainWindow : Window
         UpdateStatus("Ready");
         UpdateMode(EditorMode.Function);
         UpdateWindowTitle();
-        // UpdateUndoRedoButtons(); // Removed button refs for now or need to check if they exist? 
-        // I removed Undo/Redo buttons from UI? 
-        // Ah, I missed adding Undo/Redo buttons to the new Toolbar.
-        // I should probably add them back or rely on Shortcuts.
-        // Let's rely on shortcuts for now or add them back if I have space. The layout has 3 bands.
+    }
+
+    private void MainTabs_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (e.Source is TabControl && MainTabs.SelectedItem == ThreeDEditorTab)
+        {
+            GatView.Initialize(_compositeVfs, _staging, BrowseGrfInternalPath);
+            
+            var map = (TownCombo.SelectedItem as TownEntry)?.Name ?? _project.MapName;
+            if (!string.IsNullOrWhiteSpace(map))
+            {
+                GatView.LoadMap(map);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Opens the GRF browser to pick a file path (internal path).
+    /// </summary>
+    private string? BrowseGrfInternalPath()
+    {
+        if (_grfSource == null) return null;
+
+        var dlg = new GrfBrowserWindow(_grfSource);
+        dlg.Owner = this;
+        if (dlg.ShowDialog() == true)
+        {
+             return dlg.SelectedPath;
+        }
+        return null;
     }
 
     private void _project_PropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
@@ -106,6 +155,12 @@ public partial class MainWindow : Window
         else if (e.PropertyName == nameof(ProjectData.OriginBottomLeft))
         {
             RedrawGrid(); 
+            SetDirty();
+        }
+        else if (e.PropertyName == nameof(ProjectData.MapTileWidth) ||
+                 e.PropertyName == nameof(ProjectData.MapTileHeight))
+        {
+            RedrawOverlay();
             SetDirty();
         }
         else
@@ -125,8 +180,6 @@ public partial class MainWindow : Window
              var center = TileToPixelCenter(p.X, p.Y);
              // Center the scrollviewer (ZCanvas) on this point?
              // ZCanvas API doesn't expose "CenterOn". 
-             // We can just emulate it or leave as TODO.
-             // For now, let's just make sure it's visible.
              UpdateStatus($"Focusing on {p.Label}");
          }
     }
@@ -148,14 +201,6 @@ public partial class MainWindow : Window
     private void DbView_SpawnRequested(object sender, RoutedEventArgs e)
     {
          var view = sender as DatabaseView;
-         // How to get the MobEntry? It is passed via DataContext of the DetailsPanel inside DbView, 
-         // but the event args don't carry it. 
-         // I should look at DbView.DetailsPanel.DataContext? 
-         // Accessing private members of usercontrol is hard.
-         // Let's assume DbView exposes SelectedMob.
-         // I'll update DbView to expose SelectedMob or pass it in args.
-         // For now, let's just create a default Spawn.
-         
          UpdateMode(EditorMode.AddSpawn);
          UpdateStatus("Spawn Mode Active: Click to place spawn (Stub Mob ID)");
     }
@@ -432,6 +477,9 @@ public partial class MainWindow : Window
                 // Dispose old source if any
                 _grfSource?.Dispose();
                 _grfSource = newSource;
+                
+                // Clear dimension cache when opening new GRF
+                MapDimensionResolver.ClearCache();
             }
             catch (Exception ex)
             {
@@ -444,8 +492,14 @@ public partial class MainWindow : Window
             _project.GrfInternalPath = null;
             _project.BackgroundImagePath = null;
             _originalTownNpcs.Clear();
+            
+            // Auto-detect client data path
+            TryAutoDetectClientDataPath();
 
-            // Build composite VFS
+            // Setup VFS sources
+            UpdateStatus("Indexing GRF...");
+
+            // Rebuild both Legacy and New VFS (includes GRF, Lua, and Client Data)
             RebuildVfs();
             InitializeTownDropdownFromVfs();
 
@@ -472,6 +526,58 @@ public partial class MainWindow : Window
         }
     }
 
+    private void MountPack_Click(object sender, RoutedEventArgs e)
+    {
+        var dlg = new OpenFileDialog
+        {
+            Title = "Mount Asset Pack",
+            Filter = "Archives & Folders (*.zip;*.7z;*.grf)|*.zip;*.7z;*.grf|All files (*.*)|*.*",
+            CheckFileExists = true
+        };
+
+        if (dlg.ShowDialog() != true) return;
+        var path = dlg.FileName;
+        var ext = IOPath.GetExtension(path).ToLowerInvariant();
+
+        try
+        {
+            if (ext == ".zip" || ext == ".7z" || ext == ".rar")
+            {
+                var arc = new ArchiveSource(path, priority: 50, displayName: $"Pack: {IOPath.GetFileName(path)}");
+                _compositeVfs.Mount(arc);
+                UpdateStatus($"Mounted archive: {IOPath.GetFileName(path)}");
+            }
+            else if (ext == ".grf" || ext == ".gpf")
+            {
+                // Mount extra GRF (lower priority than main)
+                 var extraGrf = new GrfFileSource(path); 
+                 _compositeVfs.Mount(new GrfSourceAdapter(
+                    displayName: $"Extra GRF: {IOPath.GetFileName(path)}",
+                    priority: 60,
+                    listPaths: () => extraGrf.EnumeratePaths(),
+                    readBytes: (vp) => 
+                    {
+                        try { return (true, extraGrf.ReadAllBytes(vp), null); }
+                        catch (Exception ex) { return (false, null, ex.Message); }
+                    }
+                ));
+                 UpdateStatus($"Mounted extra GRF: {IOPath.GetFileName(path)}");
+            }
+            else
+            {
+                MessageBox.Show("Selected file type not supported for packing yet.", "Mount Pack", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+            
+            // Re-detect assets for current town if any
+            if (_project.MapName != null)
+                TryAutoLoadMapAssetsForTown(_project.MapName);
+        }
+        catch (Exception ex)
+        {
+             MessageBox.Show($"Failed to mount pack:\n{ex.Message}", "Mount Error", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
     private void SetLuaFolder_Click(object sender, RoutedEventArgs e)
     {
         if (!TryPickAndValidateLuaFolder(out var folder) || folder == null) return;
@@ -479,6 +585,9 @@ public partial class MainWindow : Window
         _luaFolderSource = new FolderFileSource(folder, "Lua Folder");
         RebuildVfs();
         SetDirty();
+        
+        // Auto-detect client data path
+        TryAutoDetectClientDataPath();
 
         if (_grfSource != null)
         {
@@ -607,7 +716,50 @@ public partial class MainWindow : Window
     /// <summary>Rebuild the composite VFS from current GRF and Lua folder sources.</summary>
     private void RebuildVfs()
     {
+        // 1. Legacy VFS (CompositeFileSource)
         _vfs = new CompositeFileSource(_grfSource, _luaFolderSource);
+
+        // 2. New VFS (CompositeVfs)
+        _compositeVfs.UnmountAll();
+
+        // Mount GRF
+        if (_grfSource != null && !string.IsNullOrEmpty(_project.GrfFilePath))
+        {
+            _compositeVfs.Mount(new GrfSourceAdapter(
+                displayName: $"Main GRF: {IOPath.GetFileName(_project.GrfFilePath)}",
+                priority: 100,
+                listPaths: () => _grfSource.EnumeratePaths(),
+                readBytes: (vp) =>
+                {
+                    try { return (true, _grfSource.ReadAllBytes(vp), null); }
+                    catch (Exception ex) { return (false, null, ex.Message); }
+                }
+            ));
+        }
+
+        // Mount Lua Data Folder
+        if (!string.IsNullOrEmpty(_project.LuaDataFolderPath) && Directory.Exists(_project.LuaDataFolderPath))
+        {
+            _compositeVfs.Mount(new FolderSource(_project.LuaDataFolderPath, 80, "Lua Folder"));
+        }
+
+        // Mount Client Data Path (Auto-detected or manually set)
+        if (!string.IsNullOrEmpty(_project.ClientDataPath) && Directory.Exists(_project.ClientDataPath))
+        {
+            // Mount the folder itself (e.g. access "prontera.gat" directly)
+            _compositeVfs.Mount(new FolderSource(_project.ClientDataPath, 90, "Client Data"));
+
+            // If the folder is named "data", mount its parent too (so "data/prontera.gat" works)
+            var name = IOPath.GetFileName(_project.ClientDataPath);
+            if (name.Equals("data", StringComparison.OrdinalIgnoreCase))
+            {
+                var parent = IOPath.GetDirectoryName(_project.ClientDataPath);
+                if (!string.IsNullOrEmpty(parent) && Directory.Exists(parent))
+                {
+                    _compositeVfs.Mount(new FolderSource(parent, 91, "Client Root"));
+                }
+            }
+        }
     }
 
     /// <summary>Initialize town dropdown using the VFS and TowninfoResolver.</summary>
@@ -699,6 +851,30 @@ public partial class MainWindow : Window
         UpdateStatus($"Copied export for: {town.Name}");
     }
 
+    private void ExportPatchZip_Click(object sender, RoutedEventArgs e)
+    {
+        var dlg = new SaveFileDialog
+        {
+            Filter = "ZIP Patch (*.zip)|*.zip",
+            FileName = "ro_patch.zip"
+        };
+        if (dlg.ShowDialog() != true) return;
+
+        var manifest =
+            $"ROMapOverlayEditor Patch\n" +
+            $"Files: {_staging.Files.Count}\n" +
+            $"Generated: {DateTime.Now}\n";
+
+        PatchWriter.WriteZip(dlg.FileName, _staging.Files, manifest);
+        UpdateStatus($"Patch exported: {IOPath.GetFileName(dlg.FileName)} ({_staging.Files.Count} files)");
+    }
+
+    private void OpenGat3DEditor_Click(object sender, RoutedEventArgs e)
+    {
+        if (ThreeDEditorTab != null) MainTabs.SelectedItem = ThreeDEditorTab;
+    }
+
+
     private static string ParseImagePathFromTownSource(string sourcePath)
     {
         // sourcePath may be "towninfo | imgpath"
@@ -754,6 +930,21 @@ public partial class MainWindow : Window
     {
         PushUndo();
         _project.MapName = town.Name;
+        // AUTO-FETCH MAP DIMENSIONS FROM GAT
+        var dimResult = MapDimensionResolver.GetDimensions(town.Name, _compositeVfs);
+        if (dimResult.Success)
+        {
+            _project.MapTileWidth = dimResult.Width;
+            _project.MapTileHeight = dimResult.Height;
+            UpdateStatus($"Loaded {town.Name}: {dimResult.Width}x{dimResult.Height} tiles");
+        }
+        else
+        {
+            // Reset to 0 to trigger estimation
+            _project.MapTileWidth = 0;
+            _project.MapTileHeight = 0;
+            UpdateStatus($"Loaded {town.Name} (dimensions unknown, using estimate)");
+        }
         
         // Remove old NPCs? User request implied "selecting town auto-loads... NPC list for that town".
         // This implies replacing current view with that town.
@@ -973,6 +1164,13 @@ public partial class MainWindow : Window
     private void GridToggle_Changed(object sender, RoutedEventArgs e) => RedrawGrid();
     private void LabelsToggle_Changed(object sender, RoutedEventArgs e) => RedrawOverlay();
 
+    private void AdvancedModeToggle_Changed(object sender, RoutedEventArgs e)
+    {
+        _advancedMode = AdvancedModeToggle?.IsChecked == true;
+        _simpleMode.Apply(_advancedMode);
+        UpdateStatus(_advancedMode ? "Advanced mode: ON" : "Advanced mode: OFF");
+    }
+
     private void MainWindow_PreviewKeyDown(object sender, KeyEventArgs e)
     {
         if (e.Key == Key.Escape)
@@ -1024,9 +1222,6 @@ public partial class MainWindow : Window
         if (dx != 0 || dy != 0)
         {
             // Note: with TwoWay binding, changing X/Y triggers PropertyChanged which can trigger RedrawOverlay if we subscribed to item changes
-            // But we currently only subscribe to _project.PropertyChanged (ProjectData), NOT items.
-            // Items are INotifyPropertyChanged now. We should ideally subscribe. 
-            // For now, explicit update:
             PushUndo();
             p.X += dx;
             p.Y += dy;
@@ -1083,31 +1278,110 @@ public partial class MainWindow : Window
         return (tx, ty, p);
     }
 
-    private (int tx, int ty) PixelToTile(Point p)
+    // ═══════════════════════════════════════════════════════════════════════════════
+    // MAP DIMENSION HANDLING
+    // ═══════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Get map dimensions, trying multiple sources in order:
+    /// 1. Project settings (if manually set)
+    /// 2. GAT file in GRF (authoritative source)
+    /// 3. Fallback estimation from image size
+    /// </summary>
+    private (double Width, double Height) GetMapDimensions()
     {
-        var ppt = _project.PixelsPerTile;
-        if (ppt <= 0) return (0, 0);
-        int tx = (int)Math.Floor(p.X / ppt);
-        int tyTop = (int)Math.Floor(p.Y / ppt);
-        if (_project.OriginBottomLeft && BgImage.Source is BitmapSource bmp)
+        // Priority 1: Manual project settings
+        if (_project.MapTileWidth > 0 && _project.MapTileHeight > 0)
+            return (_project.MapTileWidth, _project.MapTileHeight);
+
+        // Priority 2: Read from GAT file (using VFS with filesystem fallback)
+        var mapName = _project.MapName;
+        if (!string.IsNullOrWhiteSpace(mapName))
         {
-            int tilesHigh = (int)Math.Ceiling(bmp.PixelHeight / ppt);
-            int ty = (tilesHigh - 1) - tyTop;
-            return (tx, ty);
+            var result = MapDimensionResolver.GetDimensionsWithFallback(mapName, _compositeVfs, _project.ClientDataPath);
+            if (result.Success)
+            {
+                // Cache in project for future use
+                _project.MapTileWidth = result.Width;
+                _project.MapTileHeight = result.Height;
+                return (result.Width, result.Height);
+            }
         }
-        return (tx, tyTop);
+
+        // Priority 3: Estimate from image dimensions
+        if (BgImage?.Source is BitmapSource bmp)
+        {
+            // Assume 1:1 for unknown maps (not ideal but safe fallback)
+            return (bmp.PixelWidth, bmp.PixelHeight);
+        }
+
+        // Default fallback
+        return (400, 400);
     }
 
-    private Point TileToPixelCenter(int x, int y)
+    /// <summary>
+    /// Convert tile coordinates to pixel coordinates for display.
+    /// Handles Y-axis inversion (RO bottom-left → image top-left).
+    /// Uses MapTransform when available for correct placement.
+    /// </summary>
+    private Point TileToPixelCenter(int tileX, int tileY)
     {
-        var ppt = _project.PixelsPerTile;
-        if (_project.OriginBottomLeft && BgImage.Source is BitmapSource bmp)
+        if (_mapTransform != null && _mapTransform.IsSane())
         {
-            int tilesHigh = (int)Math.Ceiling(bmp.PixelHeight / ppt);
-            int tyTop = (tilesHigh - 1) - y;
-            return new Point(x * ppt + ppt / 2.0, tyTop * ppt + ppt / 2.0);
+            var (px, py) = _mapTransform.TileToPixelCenter(tileX, tileY);
+            return new Point(px, py);
         }
-        return new Point(x * ppt + ppt / 2.0, y * ppt + ppt / 2.0);
+
+        // Fallback to old method if transform not available
+        if (BgImage?.Source is not BitmapSource bmp)
+            return new Point(0, 0);
+
+        double imageWidth = bmp.PixelWidth;
+        double imageHeight = bmp.PixelHeight;
+
+        // Get authoritative map dimensions from GAT
+        var (mapTileWidth, mapTileHeight) = GetMapDimensions();
+
+        // Calculate scale factors
+        double scaleX = imageWidth / mapTileWidth;
+        double scaleY = imageHeight / mapTileHeight;
+
+        // Convert with Y-axis inversion
+        // RO: Y=0 at bottom, increases upward
+        // Image: Y=0 at top, increases downward
+        double pixelX = tileX * scaleX;
+        double pixelY = (mapTileHeight - tileY) * scaleY;
+
+        // Return center of tile
+        return new Point(pixelX + scaleX / 2.0, pixelY + scaleY / 2.0);
+    }
+
+    /// <summary>
+    /// Convert pixel coordinates (mouse click) to tile coordinates.
+    /// Inverse of TileToPixelCenter.
+    /// </summary>
+    private (int tileX, int tileY) PixelToTile(Point pixelPoint)
+    {
+        if (BgImage?.Source is not BitmapSource bmp)
+            return (0, 0);
+
+        double imageWidth = bmp.PixelWidth;
+        double imageHeight = bmp.PixelHeight;
+
+        var (mapTileWidth, mapTileHeight) = GetMapDimensions();
+
+        double scaleX = imageWidth / mapTileWidth;
+        double scaleY = imageHeight / mapTileHeight;
+
+        // Inverse conversion with Y-axis correction
+        int tileX = (int)Math.Floor(pixelPoint.X / scaleX);
+        int tileY = (int)Math.Floor(mapTileHeight - (pixelPoint.Y / scaleY));
+
+        // Clamp to valid range
+        tileX = Math.Clamp(tileX, 0, (int)mapTileWidth - 1);
+        tileY = Math.Clamp(tileY, 0, (int)mapTileHeight - 1);
+
+        return (tileX, tileY);
     }
 
     private void ZCanvas_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
@@ -1254,6 +1528,27 @@ public partial class MainWindow : Window
             Canvas.SetLeft(marker, p.X - marker.Width/2);
             Canvas.SetTop(marker, p.Y - marker.Height/2);
             OverlayLayer.Children.Add(marker);
+
+            // Labels
+            if (LabelsToggle.IsChecked == true || isSelected)
+            {
+                var label = new TextBlock
+                {
+                    Text = item.Label,
+                    FontSize = 10,
+                    Foreground = Brushes.White,
+                    Background = new SolidColorBrush(Color.FromArgb(100, 0, 0, 0)),
+                    Padding = new Thickness(2),
+                    IsHitTestVisible = false
+                };
+                
+                // Measure to center
+                label.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+                Canvas.SetLeft(label, p.X - label.DesiredSize.Width / 2);
+                Canvas.SetTop(label, p.Y - marker.Height / 2 - label.DesiredSize.Height - 2);
+                
+                OverlayLayer.Children.Add(label);
+            }
         }
     }
 
@@ -1274,11 +1569,6 @@ public partial class MainWindow : Window
         // Switch tab to Inspector if object selected?
         if (p != null && RightTabs != null)
         {
-            // Only switch if we are not already on Inspector?
-            // User might be filtering DB. Better not auto-switch aggressively.
-            // But Phase 1 item 1 says: "INSPECTOR (selected object details)".
-            // Let's safe switch if we are in Project tab (where the list is).
-            // Actually, if I click in list, I probably want to see details.
             RightTabs.SelectedIndex = 0; // Inspector
         }
     }
@@ -1536,140 +1826,122 @@ public partial class MainWindow : Window
     }
     private void TryAutoLoadMapAssetsForTown(string mapName)
     {
-        if (string.IsNullOrWhiteSpace(mapName) || _vfs == null) return;
+        if (string.IsNullOrWhiteSpace(mapName)) return;
 
-        // 1) Find Minimap (fuzzy search)
-        // We look for anything ending in "map/{mapName}.bmp" or "map\{mapName}.bmp"
-        // robust to folder structure variations.
+        // 1) Find Minimap using VFS and MapResolver
+        var bestBmp = MapResolver.FindMinimapPath(_compositeVfs, mapName);
         
-        var bmpCandidates = _vfs.EnumerateBmpFiles()
-            .Where(p => IsMapImageCandidate(p, mapName))
-            .OrderBy(p => p.Length) // shortest path usually "data/texture/map/x.bmp" vs "data/texture/long/weird/x.bmp"
-            .ToList();
-
-        string? bestBmp = bmpCandidates.FirstOrDefault(); // Start with first
-        
-        // Prefer standard RO paths if multiple
-        var preferred = bmpCandidates.FirstOrDefault(p => p.Contains("texture", StringComparison.OrdinalIgnoreCase) && p.Contains("map", StringComparison.OrdinalIgnoreCase));
-        if (preferred != null) bestBmp = preferred;
-
-        BitmapSource? minimap = null;
-        string? minimapPath = null;
-
-        if (bestBmp != null)
+        if (!string.IsNullOrEmpty(bestBmp))
         {
             try 
             {
-                var bytes = _vfs.ReadAllBytes(bestBmp);
-                minimap = LoadBitmapWithTransparency(new MemoryStream(bytes));
-                minimapPath = bestBmp;
+                if (_compositeVfs.TryReadAllBytes(bestBmp, out var bytes, out var err) && bytes != null)
+                {
+                    var minimap = LoadBitmapWithTransparency(new MemoryStream(bytes));
+                    
+                    if (BgImage != null) { BgImage.Source = minimap; BgImage.Width = minimap.PixelWidth; BgImage.Height = minimap.PixelHeight; }
+                    if (GridLayer != null) { GridLayer.Width = minimap.PixelWidth; GridLayer.Height = minimap.PixelHeight; }
+                    if (OverlayLayer != null) { OverlayLayer.Width = minimap.PixelWidth; OverlayLayer.Height = minimap.PixelHeight; }
+                    
+                    // Update project references
+                    _project.GrfInternalPath = bestBmp; // Stored as "relative" path in VFS
+                    _project.BackgroundImagePath = null;
+                    
+                    // Fit view
+                    Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, new Action(() =>
+                    {
+                        if (ZCanvas != null && minimap != null)
+                        {
+                            var viewport = new Size(ZCanvas.ActualWidth, ZCanvas.ActualHeight);
+                            var content = new Size(minimap.PixelWidth, minimap.PixelHeight);
+                            ZCanvas.FitToView(content, viewport);
+                        }
+                    }));
+                    
+                    UpdateStatus($"Loaded map image: {bestBmp}");
+                    
+                    // Build MapTransform if we have GAT dimensions (with filesystem fallback)
+                    var gatResult = MapDimensionResolver.GetDimensionsWithFallback(mapName, _compositeVfs, _project.ClientDataPath);
+                    if (gatResult.Success && minimap != null)
+                    {
+                        try
+                        {
+                            _mapTransform = MapTransformBuilder.Build(
+                                imgW: minimap.PixelWidth,
+                                imgH: minimap.PixelHeight,
+                                gatW: gatResult.Width,
+                                gatH: gatResult.Height
+                            );
+                            _project.PixelsPerTile = _mapTransform.PixelsPerTile;
+                            _project.MapTileWidth = gatResult.Width;
+                            _project.MapTileHeight = gatResult.Height;
+                            UpdateStatus($"MapTransform: {_mapTransform}");
+                        }
+                        catch (Exception ex)
+                        {
+                            UpdateStatus($"MapTransform build failed: {ex.Message}");
+                        }
+                    }
+                    
+                    RedrawOverlay();
+                }
             }
-            catch {}
+            catch (Exception ex)
+            {
+                UpdateStatus($"Failed to load map image: {ex.Message}");
+            }
         }
         else
         {
-             // Fallback to MapAssetLoader's heuristic if fuzzy search failed (e.g. TGA/PNG which are not enumerated by EnumerateBmpFiles maybe?)
-             // Actually CompositeFileSource EnumerateBmpFiles only lists BMP.
-             // If we want TGA/PNG support we should expand enumeration or fallback.
-             // For now, let's just stick to BMP as primary.
+             UpdateStatus($"Map image not found for '{mapName}'");
         }
-
-        // 2) Find GAT
-        // .gat files are usually in data/ or at root
-        var gatCandidates = new[] {
-            $"data\\{mapName}.gat",
-            $"data\\map\\{mapName}.gat",
-            $"maps\\{mapName}.gat",
-            $"{mapName}.gat"
-        };
-        
-        int gatW = 0, gatH = 0;
-        string? foundGat = null;
-        
-        foreach (var g in gatCandidates)
-        {
-            if (_vfs.Exists(g))
-            {
-                try {
-                    var bytes = _vfs.ReadAllBytes(g);
-                    if (ROMapOverlayEditor.MapAssets.MapAssetLoader.TryReadGatDimensions(bytes, out gatW, out gatH))
-                    {
-                        foundGat = g;
-                        break;
-                    }
-                } catch {} 
-            }
-        }
-
-        // 3) Apply findings
-        
-        // Apply minimap as background if found
-        if (minimap != null)
-        {
-            BgImage.Source = minimap;
-            
-            _project.GrfInternalPath = minimapPath;
-
-            // Ensure layers match the bitmap size
-            if (OverlayLayer != null)
-            {
-                OverlayLayer.Width = minimap.PixelWidth;
-                OverlayLayer.Height = minimap.PixelHeight;
-            }
-            if (GridLayer != null)
-            {
-                GridLayer.Width = minimap.PixelWidth;
-                GridLayer.Height = minimap.PixelHeight;
-            }
-        }
-
-        // If we have GAT dimensions, compute a correct PixelsPerTile
-        if (minimap != null && gatW > 0 && gatH > 0)
-        {
-            double pptX = (double)minimap.PixelWidth / gatW;
-            double pptY = (double)minimap.PixelHeight / gatH;
-
-            // Use average (or choose X); keeps square-ish mapping
-            var ppt = (pptX + pptY) * 0.5;
-
-            // Guard: some minimaps include margins; clamp to sane range
-            ppt = Math.Max(2.0, Math.Min(32.0, ppt));
-
-            _project.PixelsPerTile = ppt;
-        }
-
-        // Fit view to background if we loaded one
-        if (minimap != null)
-        {
-            Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, new Action(() =>
-            {
-                var content = new Size(minimap.PixelWidth, minimap.PixelHeight);
-                var viewport = new Size(ZCanvas.ActualWidth, ZCanvas.ActualHeight);
-                if (viewport.Width > 0 && viewport.Height > 0)
-                    ZCanvas.FitToView(content, viewport);
-            }));
-        }
-
-        // Finally redraw overlay on top of new background/scale
-        RedrawOverlay();
-
-        // Optional debug status so you KNOW what loaded
-        UpdateStatus($"Map assets: minimap={(minimapPath ?? "none")} | gat={(foundGat ?? "none")} | ppt={_project.PixelsPerTile:0.##}");
     }
 
-    private bool IsMapImageCandidate(string path, string mapName)
+    /// <summary>
+    /// Auto-detect client data folder path from GRF or Lua folder location.
+    /// </summary>
+    private void TryAutoDetectClientDataPath()
     {
-        // path is normalized (forward slashes) from GrfFileSource/CompositeFileSource
-        var name = System.IO.Path.GetFileNameWithoutExtension(path);
-        // extension check implicit by EnumerateBmpFiles but good to be safe
-        var ext = System.IO.Path.GetExtension(path);
-        
-        if (!string.Equals(name, mapName, StringComparison.OrdinalIgnoreCase)) return false;
-        
-        // Ensure it is in a "map" folder or simply is the file
-        // To avoid picking up "texture/effect/mapname.bmp" if that exists (unlikely but possible)
-        // Best approach: ensure "map" segment exists in path?
-        return path.Contains("/map/", StringComparison.OrdinalIgnoreCase) || 
-               path.Contains("texture/", StringComparison.OrdinalIgnoreCase); 
+        // If already set, don't override
+        if (!string.IsNullOrWhiteSpace(_project.ClientDataPath) && Directory.Exists(_project.ClientDataPath))
+            return;
+
+        // Strategy 1: If GRF is at F:\...\client\data.grf, data folder is F:\...\client\data
+        if (!string.IsNullOrEmpty(_project.GrfFilePath))
+        {
+            var grfDir = IOPath.GetDirectoryName(_project.GrfFilePath);
+            if (!string.IsNullOrEmpty(grfDir))
+            {
+                var dataPath = IOPath.Combine(grfDir, "data");
+                if (Directory.Exists(dataPath) && Directory.GetFiles(dataPath, "*.gat", SearchOption.TopDirectoryOnly).Length > 0)
+                {
+                    _project.ClientDataPath = dataPath;
+                    UpdateStatus($"Auto-detected client data: {dataPath}");
+                    return;
+                }
+            }
+        }
+
+        // Strategy 2: If Lua folder is set, walk up to find data folder
+        if (!string.IsNullOrEmpty(_project.LuaDataFolderPath))
+        {
+            var dir = _project.LuaDataFolderPath;
+            while (!string.IsNullOrEmpty(dir) && Directory.Exists(dir))
+            {
+                if (IOPath.GetFileName(dir).Equals("data", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (Directory.GetFiles(dir, "*.gat", SearchOption.TopDirectoryOnly).Length > 0)
+                    {
+                        _project.ClientDataPath = dir;
+                        UpdateStatus($"Auto-detected client data: {dir}");
+                        return;
+                    }
+                }
+                var parent = IOPath.GetDirectoryName(dir);
+                if (parent == dir) break; // reached root
+                dir = parent;
+            }
+        }
     }
+
 }

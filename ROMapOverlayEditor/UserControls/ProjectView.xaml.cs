@@ -38,6 +38,17 @@ namespace ROMapOverlayEditor.UserControls
         private void ExportAll_Click(object sender, RoutedEventArgs e) => ExportAllRequested?.Invoke(this, e);
         private void Validate_Click(object sender, RoutedEventArgs e) => ValidateRequested?.Invoke(this, e);
 
+        private void UseKnownMapSize_Click(object sender, RoutedEventArgs e)
+        {
+            var p = DataContext as ProjectData;
+            if (p == null) return;
+            
+            MessageBox.Show(
+                "Map dimensions are now auto-detected from GAT files in the GRF when you load a town.\n\n" +
+                "If detection fails, you can manually enter dimensions here or leave at 0,0 to estimate from image size.",
+                "Map Dimensions", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+
         public void SetValidationMessage(string msg)
         {
             ValidationOutput.Text = msg;

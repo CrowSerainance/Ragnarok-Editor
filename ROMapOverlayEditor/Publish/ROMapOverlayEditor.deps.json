@@ -1,0 +1,74 @@
+{
+  "runtimeTarget": {
+    "name": ".NETCoreApp,Version=v8.0/win-x64",
+    "signature": ""
+  },
+  "compilationOptions": {},
+  "targets": {
+    ".NETCoreApp,Version=v8.0": {},
+    ".NETCoreApp,Version=v8.0/win-x64": {
+      "ROMapOverlayEditor/1.0.0": {
+        "dependencies": {
+          "HelixToolkit.Wpf": "2.25.0",
+          "SharpCompress": "0.44.1",
+          "System.Text.Encoding.CodePages": "10.0.2"
+        },
+        "runtime": {
+          "ROMapOverlayEditor.dll": {}
+        }
+      },
+      "HelixToolkit.Wpf/2.25.0": {
+        "runtime": {
+          "lib/net462/HelixToolkit.Wpf.dll": {
+            "assemblyVersion": "2.25.0.0",
+            "fileVersion": "2.25.0.0"
+          }
+        }
+      },
+      "SharpCompress/0.44.1": {
+        "runtime": {
+          "lib/net8.0/SharpCompress.dll": {
+            "assemblyVersion": "0.44.1.0",
+            "fileVersion": "0.44.1.0"
+          }
+        }
+      },
+      "System.Text.Encoding.CodePages/10.0.2": {
+        "runtime": {
+          "runtimes/win/lib/net8.0/System.Text.Encoding.CodePages.dll": {
+            "assemblyVersion": "10.0.0.0",
+            "fileVersion": "10.0.225.61305"
+          }
+        }
+      }
+    }
+  },
+  "libraries": {
+    "ROMapOverlayEditor/1.0.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    },
+    "HelixToolkit.Wpf/2.25.0": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-eoMdrDgeSFo1JH15f2X/E5/nZUMAqvWzR8qcVzjLarCxR5qNleRqF+UHSzyCkvygeeDLCC/uharpD/gysFYuHw==",
+      "path": "helixtoolkit.wpf/2.25.0",
+      "hashPath": "helixtoolkit.wpf.2.25.0.nupkg.sha512"
+    },
+    "SharpCompress/0.44.1": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-QHhxJHoyIXKeu3vLJ0XY2rDJLd4fLvZ0xXPCMO854OOcSz62uHB5uPloBMtg236MFDMVUSUHuO1E8WY5HpLp6Q==",
+      "path": "sharpcompress/0.44.1",
+      "hashPath": "sharpcompress.0.44.1.nupkg.sha512"
+    },
+    "System.Text.Encoding.CodePages/10.0.2": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-hovZmFBPhs8l3ZtVXxKqAGs3CKbkuAA7aRUTlDUU0CBmoHj2DERdwmqb52DisjmlamH3yesJEc20dqLb5JMMug==",
+      "path": "system.text.encoding.codepages/10.0.2",
+      "hashPath": "system.text.encoding.codepages.10.0.2.nupkg.sha512"
+    }
+  }
+}

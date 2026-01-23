@@ -12,13 +12,58 @@ namespace ROMapOverlayEditor;
 
 public partial class GrfBrowserWindow : Window
 {
+    private GrfFileSource? _source;
     public string? SelectedGrfPath { get; private set; }
     public string? SelectedInternalPath { get; private set; }
+    public string? SelectedPath => SelectedInternalPath;
 
-    private GrfFileSource? _source;
-    private bool _ownsSource; // Whether we should dispose the source when done
+    private void CommitSelection(string internalPath)
+    {
+        if (_source == null) return;
+        SelectedGrfPath = _source.GrfPath;
+        SelectedInternalPath = internalPath;
+        DialogResult = true;
+        Close();
+    }
+
+    private void EntriesList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        UpdateOpenAsMapState();
+        TryLoadPreview();
+    }
+
+    private void UpdateOpenAsMapState()
+    {
+        var sel = EntriesList?.SelectedItem as GrfListEntry;
+        BtnOpenAsMap.IsEnabled = sel != null;
+    }
+
+    private void EntriesList_MouseDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        if (EntriesList.SelectedItem is GrfListEntry entry)
+        {
+            CommitOpenAsMap(entry.Path);
+        }
+    }
+
+    private void BtnOpenAsMap_Click(object sender, RoutedEventArgs e)
+    {
+        if (EntriesList.SelectedItem is not GrfListEntry entry) return;
+        CommitOpenAsMap(entry.Path);
+    }
+    
+    private bool _ownsSource;
     private string[] _allPaths = Array.Empty<string>();
     private readonly ObservableCollection<GrfListEntry> _filtered = new();
+
+    private void CommitOpenAsMap(string internalPath)
+    {
+        if (_source == null) return;
+        SelectedGrfPath = _source.GrfPath;
+        SelectedInternalPath = internalPath;
+        DialogResult = true;
+        Close();
+    }
 
     public GrfBrowserWindow()
     {
@@ -26,10 +71,11 @@ public partial class GrfBrowserWindow : Window
         EntriesList.ItemsSource = _filtered;
     }
 
-    /// <summary>
-    /// Load a GrfFileSource that is owned by the caller.
-    /// The browser will NOT dispose it when closed.
-    /// </summary>
+    public GrfBrowserWindow(GrfFileSource source) : this()
+    {
+        LoadSource(source);
+    }
+
     public void LoadSource(GrfFileSource source)
     {
         // Dispose previous source if we owned it
@@ -43,10 +89,6 @@ public partial class GrfBrowserWindow : Window
         ReloadFromCurrent();
     }
 
-    /// <summary>
-    /// Open a GRF file and take ownership of the source.
-    /// The browser will dispose it when closed or when another file is opened.
-    /// </summary>
     public void LoadGrf(string path)
     {
         try
@@ -130,12 +172,6 @@ public partial class GrfBrowserWindow : Window
         if (!path.EndsWith(".bmp", StringComparison.OrdinalIgnoreCase)) return false;
         return path.Contains("/map/", StringComparison.OrdinalIgnoreCase) ||
                path.Contains("\\map\\", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private void EntriesList_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        UpdateOpenAsMapState();
-        TryLoadPreview();
     }
 
     private void TryLoadPreview()
@@ -231,35 +267,6 @@ public partial class GrfBrowserWindow : Window
         {
             TxtPreviewData.Text = $"Preview failed:\n{ex.Message}";
         }
-    }
-
-    private void UpdateOpenAsMapState()
-    {
-        var sel = EntriesList?.SelectedItem as GrfListEntry;
-        BtnOpenAsMap.IsEnabled = sel != null && sel.IsMap;
-    }
-
-    private void EntriesList_MouseDoubleClick(object sender, MouseButtonEventArgs e)
-    {
-        if (EntriesList.SelectedItem is GrfListEntry { IsMap: true } entry)
-        {
-            CommitOpenAsMap(entry.Path);
-        }
-    }
-
-    private void BtnOpenAsMap_Click(object sender, RoutedEventArgs e)
-    {
-        if (EntriesList.SelectedItem is not GrfListEntry { IsMap: true } entry) return;
-        CommitOpenAsMap(entry.Path);
-    }
-
-    private void CommitOpenAsMap(string internalPath)
-    {
-        if (_source == null) return;
-        SelectedGrfPath = _source.GrfPath;
-        SelectedInternalPath = internalPath;
-        DialogResult = true;
-        Close();
     }
 
     private void BtnCancel_Click(object sender, RoutedEventArgs e)

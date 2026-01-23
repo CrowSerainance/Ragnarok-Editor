@@ -24,6 +24,20 @@
                     <TextBlock Text="Map Name (Target)"/>
                     <TextBox Text="{Binding MapName}" Margin="0,0,0,8"/>
                     
+                    <TextBlock Text="Map Tile Size (override)" />
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                        <TextBox Width="80" Margin="0,0,6,0"
+                                 Text="{Binding MapTileWidth, UpdateSourceTrigger=PropertyChanged}" />
+                        <TextBlock Text="x" VerticalAlignment="Center" Foreground="#888" />
+                        <TextBox Width="80" Margin="6,0,0,0"
+                                 Text="{Binding MapTileHeight, UpdateSourceTrigger=PropertyChanged}" />
+                        <Button Content="Use Known" Click="UseKnownMapSize_Click" 
+                                Margin="6,0,0,0" Padding="6,2" FontSize="10"
+                                ToolTip="Fill from known map dimensions lookup"/>
+                    </StackPanel>
+                    <TextBlock Text="Use 0,0 to auto-detect (known map list or image size)."
+                               FontSize="10" Foreground="#888" Margin="0,0,0,8"/>
+
                     <TextBlock Text="Pixels Per Tile"/>
                     <TextBox Text="{Binding PixelsPerTile}" Margin="0,0,0,8"/>
                     
