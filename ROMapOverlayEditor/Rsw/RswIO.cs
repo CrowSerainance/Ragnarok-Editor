@@ -16,6 +16,13 @@ namespace ROMapOverlayEditor.Rsw
 
         public static RswFile Read(byte[] bytes)
         {
+            // Validate header first using diagnostic reader
+            var (headerOk, headerMsg, headerInfo) = ROMapOverlayEditor.ThreeD.RswHeaderReader.TryRead(bytes);
+            if (!headerOk)
+            {
+                throw new InvalidDataException($"RSW header validation failed: {headerMsg}");
+            }
+
             using var ms = new MemoryStream(bytes, writable: false);
             using var br = new BinaryReader(ms);
 
@@ -85,13 +92,30 @@ namespace ROMapOverlayEditor.Rsw
                 br.ReadInt32();
             }
 
-            int objectCount = br.ReadInt32();
-            // Sanity check object count
-            if (objectCount < 0 || objectCount > 100000)
-                throw new InvalidDataException($"Abnormal object count: {objectCount} (Version 0x{version:X4}, Offset 0x{ms.Position:X})");
+            // Object count is at the current position after the full header parse.
+            // Use this exact offset — do NOT use RswHeaderReader's probed offset, which can
+            // land on the wrong place for some version layouts (e.g. "Unknown type 1701244").
+            long objectCountOffsetGuess = ms.Position;
+
+            // Use object list locator to find the correct list start (count at Guess, list at Guess+4 or resync)
+            var (locOk, locMsg, locInfo) = ROMapOverlayEditor.ThreeD.RswObjectListLocator.TryLocate(bytes, objectCountOffsetGuess);
+            if (!locOk)
+            {
+                throw new InvalidDataException(
+                    $"Failed to locate RSW object list:\n{locMsg}\n\n" +
+                    $"Parser reached offset 0x{ms.Position:X} before object count.\n" +
+                    $"This indicates a version/layout mismatch. The RSW structure may differ from expected.");
+            }
+
+            int objectCount = locInfo!.ObjectCount;
+            long objectListStart = locInfo.ListStartOffset;
+
+            // Move to the correct object list start position
+            ms.Position = objectListStart;
 
             var objects = new List<RswObject>(Math.Max(0, objectCount));
 
+            // Read objects starting at the correctly located offset
             for (int i = 0; i < objectCount; i++)
             {
                 // Safety: check EOF
@@ -99,6 +123,15 @@ namespace ROMapOverlayEditor.Rsw
 
                 long startPos = ms.Position;
                 int type = br.ReadInt32();
+
+                // Validate type before attempting to read
+                if (type < 1 || type > 4)
+                {
+                    throw new InvalidDataException(
+                        $"Unknown RSW object type {type} at index {i} (Offset 0x{startPos:X}, Version 0x{version:X4}).\n" +
+                        $"Expected types: 1=Model, 2=Light, 3=Sound, 4=Effect.\n" +
+                        $"Object list location note: {locInfo.Note}");
+                }
 
                 try
                 {
@@ -116,9 +149,6 @@ namespace ROMapOverlayEditor.Rsw
                         case 4:
                             objects.Add(ReadEffect(br));
                             break;
-                        default:
-                            // Try to recover? No, just fail contextually.
-                            throw new InvalidDataException($"Unknown RSW object type {type} at index {i} (Offset 0x{startPos:X}, Version 0x{version:X4}).");
                     }
                 }
                 catch (Exception ex)

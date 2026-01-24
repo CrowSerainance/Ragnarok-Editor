@@ -10,7 +10,7 @@ namespace ROMapOverlayEditor.Gat
         public const double TileSize = 1.0;
         public const double HeightScale = 0.1;
 
-        public static Model3DGroup Build(GatFile gf, Func<GatCellType, Color> colorByType)
+        public static Model3DGroup Build(GatFile gf, Func<GatCellType, Color> colorByType, bool includeGatOverlay = true)
         {
             var group = new Model3DGroup();
             var mb = new MeshBuilder(false, false);
@@ -34,6 +34,8 @@ namespace ROMapOverlayEditor.Gat
             var baseMat = MaterialHelper.CreateMaterial(Colors.LightGray);
             var baseModel = new GeometryModel3D(mesh, baseMat) { BackMaterial = baseMat };
             group.Children.Add(baseModel);
+
+            if (!includeGatOverlay) return group;
 
             foreach (GatCellType t in Enum.GetValues(typeof(GatCellType)))
             {

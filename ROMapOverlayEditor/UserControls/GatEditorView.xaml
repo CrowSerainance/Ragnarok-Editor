@@ -27,6 +27,8 @@
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
                     <RowDefinition Height="*"/>
                     <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
@@ -43,16 +45,51 @@
                              <ColumnDefinition Width="*"/>
                              <ColumnDefinition Width="Auto"/>
                          </Grid.ColumnDefinitions>
-                         <TextBox x:Name="MapNameInput" Height="25" VerticalContentAlignment="Center" Background="#333" Foreground="White" BorderBrush="#555"/>
+                         <TextBox x:Name="MapNameInput" Height="25" VerticalContentAlignment="Center" Background="#1E1E1E" Foreground="White" BorderBrush="#3A3A3A" Padding="6"/>
                          <Button x:Name="LoadMapBtn" Grid.Column="1" Content="Load" Width="50" Margin="5,0,0,0" Click="LoadMapBtn_Click"/>
                     </Grid>
-                    <TextBlock x:Name="StatusLabel" Text="Ready" Foreground="#888" TextWrapping="Wrap" FontSize="11"/>
+                    <TextBlock x:Name="StatusLabel" Text="Ready" Foreground="#888" TextWrapping="Wrap" FontSize="11" Margin="0,5,0,0"/>
+                    <ScrollViewer MaxHeight="150" Margin="0,10,0,0" VerticalScrollBarVisibility="Auto">
+                        <TextBlock x:Name="PreviewText" Foreground="#AAA" TextWrapping="Wrap" FontSize="10" FontFamily="Consolas"/>
+                    </ScrollViewer>
                 </StackPanel>
 
+                <!-- View Options: GAT overlay, Camera speed -->
+                <GroupBox Header="View Options" Grid.Row="2" Margin="0,8,0,8" Foreground="#AAA" BorderBrush="#3A3A3A">
+                    <StackPanel>
+                        <CheckBox x:Name="GatOverlayCheck" Content="GAT Overlay (walkable / not-walkable colors)" IsChecked="True" Foreground="White" Margin="0,0,0,6" Checked="GatOverlay_Changed" Unchecked="GatOverlay_Changed"/>
+                        <TextBlock Text="Camera Mouse Speed (0.01–3)" Foreground="#AAA" Margin="0,4,0,2"/>
+                        <Slider x:Name="CameraSpeedSlider" Minimum="0.01" Maximum="3" Value="1" TickFrequency="0.1" IsSnapToTickEnabled="False" ValueChanged="CameraSpeed_Changed"/>
+                        <Button Content="Reset View (Even Out)" Click="ResetView_Click" Margin="0,8,0,4" Background="#444" Foreground="White"/>
+                        <TextBlock Text="Rotate" Foreground="#666" Margin="0,4,0,2"/>
+                        <Slider x:Name="RotateSensSlider" Minimum="0.01" Maximum="5" Value="1" TickFrequency="0.1" IsSnapToTickEnabled="False" ValueChanged="SensSlider_Changed"/>
+                        <TextBlock Text="Pan" Foreground="#666" Margin="0,4,0,2"/>
+                        <Slider x:Name="PanSensSlider" Minimum="0.01" Maximum="5" Value="1" TickFrequency="0.1" IsSnapToTickEnabled="False" ValueChanged="SensSlider_Changed"/>
+                        <TextBlock Text="Zoom" Foreground="#666" Margin="0,4,0,2"/>
+                        <Slider x:Name="ZoomSensSlider" Minimum="0.01" Maximum="5" Value="1" TickFrequency="0.1" IsSnapToTickEnabled="False" ValueChanged="SensSlider_Changed"/>
+                    </StackPanel>
+                </GroupBox>
+
+                <!-- 3D Tool Mode: Right=Orbit, Middle=Pan, Wheel=Zoom; left=tools -->
+                <GroupBox Header="3D Tool Mode" Grid.Row="3" Margin="0,0,0,8" Foreground="#AAA" BorderBrush="#3A3A3A">
+                    <StackPanel>
+                        <TextBlock Text="Right=Orbit  Mid=Pan  Wheel=Zoom" Foreground="#666" FontSize="10" Margin="0,0,0,6"/>
+                        <RadioButton x:Name="ModeSelect" Content="Select (Q)" IsChecked="True" Foreground="White" Margin="0,2" Checked="Tool_Select_Checked"/>
+                        <RadioButton x:Name="ModePaint" Content="Paint GAT (R)" Foreground="White" Margin="0,2" Checked="Tool_Paint_Checked"/>
+                    </StackPanel>
+                </GroupBox>
+
                 <!-- Tools -->
-                <StackPanel Grid.Row="2">
+                <StackPanel Grid.Row="4" Margin="0,0,0,8">
                     <TextBlock Text="Paint GAT Cells" Foreground="#AAA" Margin="0,10,0,5"/>
-                    <ComboBox x:Name="TypeCombo" Height="25" Margin="0,0,0,5" Background="#333" Foreground="White"/>
+                    <ComboBox x:Name="TypeCombo" Height="25" Margin="0,0,0,5" Background="#1E1E1E" Foreground="White" BorderBrush="#3A3A3A" Padding="6">
+                        <ComboBox.Resources>
+                            <Style TargetType="ComboBoxItem">
+                                <Setter Property="Foreground" Value="White"/>
+                                <Setter Property="Background" Value="#1E1E1E"/>
+                            </Style>
+                        </ComboBox.Resources>
+                    </ComboBox>
                     
                     <TextBlock x:Name="RadiusLabel" Text="Radius: 1" Foreground="#AAA" Margin="0,5,0,5"/>
                     <Slider x:Name="RadiusSlider" Minimum="1" Maximum="10" Value="1" TickFrequency="1" IsSnapToTickEnabled="True"/>
@@ -61,10 +98,10 @@
                 </StackPanel>
 
                 <!-- Info -->
-                <TextBlock x:Name="PickInfo" Grid.Row="3" Foreground="Yellow" VerticalAlignment="Bottom" TextWrapping="Wrap" Margin="0,10"/>
+                <TextBlock x:Name="PickInfo" Grid.Row="5" Foreground="Yellow" VerticalAlignment="Bottom" TextWrapping="Wrap" Margin="0,10"/>
 
                 <!-- Export -->
-                <StackPanel Grid.Row="4" Margin="0,10,0,0">
+                <StackPanel Grid.Row="6" Margin="0,10,0,0">
                      <Button Content="Save to Staging" Height="30" Margin="0,0,0,5" Click="SaveToStaging_Click"/>
                      <Button Content="Export Patch ZIP..." Height="30" Click="ExportZip_Click"/>
                 </StackPanel>

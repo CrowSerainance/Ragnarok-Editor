@@ -5,7 +5,7 @@
         xmlns:uc="clr-namespace:ROMapOverlayEditor.UserControls"
         Title="RO Map Overlay Editor (MVP)" Width="1400" Height="850"
         WindowStartupLocation="CenterScreen" Focusable="True"
-        PreviewKeyDown="MainWindow_PreviewKeyDown" Closing="MainWindow_Closing">
+        PreviewKeyDown="MainWindow_PreviewKeyDown" PreviewKeyUp="MainWindow_PreviewKeyUp" Closing="MainWindow_Closing">
     <DockPanel>
         <!-- TOP TOOLBAR -->
         <ToolBarTray DockPanel.Dock="Top" Background="#F5F6F7" IsLocked="True">

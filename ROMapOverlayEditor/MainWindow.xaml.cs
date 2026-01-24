@@ -19,6 +19,7 @@ using ROMapOverlayEditor.MapAssets;
 using ROMapOverlayEditor.Patching;
 using ROMapOverlayEditor.Gat;
 using ROMapOverlayEditor.Ui;
+using ROMapOverlayEditor.Tools;
 using System.Linq; 
 
 namespace ROMapOverlayEditor;
@@ -106,6 +107,15 @@ public partial class MainWindow : Window
             MainTabs.SelectionChanged += MainTabs_SelectionChanged;
 
             _simpleMode.Apply(_advancedMode);
+            
+            // Default startup config
+            EditorState.Current.ActiveTool = EditorTool.Select;
+            EditorState.Current.SnapToGrid = true;
+            EditorState.Current.ShowGrid = true;
+            EditorState.Current.ShowLabels = true;
+            EditorState.Current.RotateSensitivity = 1.0;
+            EditorState.Current.PanSensitivity = 1.0;
+            EditorState.Current.ZoomSensitivity = 1.0;
         };
         ObjectsList.ItemsSource = _items;
 
@@ -113,6 +123,14 @@ public partial class MainWindow : Window
         UpdateStatus("Ready");
         UpdateMode(EditorMode.Function);
         UpdateWindowTitle();
+    }
+
+    private void MainWindow_PreviewKeyUp(object sender, KeyEventArgs e)
+    {
+        var st = EditorState.Current;
+        st.IsShiftDown = (Keyboard.Modifiers & ModifierKeys.Shift) != 0;
+        st.IsCtrlDown = (Keyboard.Modifiers & ModifierKeys.Control) != 0;
+        st.IsAltDown = (Keyboard.Modifiers & ModifierKeys.Alt) != 0;
     }
 
     private void MainTabs_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -411,6 +429,12 @@ public partial class MainWindow : Window
     {
         _mode = mode;
         UpdateStatus($"Mode: {_mode}");
+        
+        // Sync EditorState
+        EditorState.Current.ActiveTool = mode == EditorMode.Relocate ? EditorTool.MoveObject
+            : mode == EditorMode.AddNpc ? EditorTool.PlaceNpc
+            : mode == EditorMode.AddWarp ? EditorTool.PlaceWarp
+            : EditorTool.Select;
         
         // Sync Buttons
         if (ModeSelect != null) ModeSelect.IsChecked = (mode == EditorMode.Function || mode == EditorMode.Relocate);
@@ -1161,8 +1185,16 @@ public partial class MainWindow : Window
         UpdateStatus("View reset");
     }
 
-    private void GridToggle_Changed(object sender, RoutedEventArgs e) => RedrawGrid();
-    private void LabelsToggle_Changed(object sender, RoutedEventArgs e) => RedrawOverlay();
+    private void GridToggle_Changed(object sender, RoutedEventArgs e)
+    {
+        EditorState.Current.ShowGrid = GridToggle.IsChecked == true;
+        RedrawGrid();
+    }
+    private void LabelsToggle_Changed(object sender, RoutedEventArgs e)
+    {
+        EditorState.Current.ShowLabels = LabelsToggle.IsChecked == true;
+        RedrawOverlay();
+    }
 
     private void AdvancedModeToggle_Changed(object sender, RoutedEventArgs e)
     {
@@ -1173,6 +1205,12 @@ public partial class MainWindow : Window
 
     private void MainWindow_PreviewKeyDown(object sender, KeyEventArgs e)
     {
+        // Modifier state (always sync)
+        var st = EditorState.Current;
+        st.IsShiftDown = (Keyboard.Modifiers & ModifierKeys.Shift) != 0;
+        st.IsCtrlDown = (Keyboard.Modifiers & ModifierKeys.Control) != 0;
+        st.IsAltDown = (Keyboard.Modifiers & ModifierKeys.Alt) != 0;
+
         if (e.Key == Key.Escape)
         {
             if (_dragTarget != null && _isDragStarted && _snapshotForDragCancel != null)
@@ -1199,6 +1237,12 @@ public partial class MainWindow : Window
         if (e.Key == Key.F) { Inspector_FocusRequested(sender, e); e.Handled = true; return; }
 
         if (Keyboard.FocusedElement is TextBox) return;
+
+        // Tool hotkeys: Q=Select, W=Move, E=PlaceNpc, R=PaintGat
+        if (e.Key == Key.Q) { st.ActiveTool = EditorTool.Select; UpdateMode(EditorMode.Function); e.Handled = true; return; }
+        if (e.Key == Key.W) { st.ActiveTool = EditorTool.MoveObject; UpdateMode(EditorMode.Relocate); e.Handled = true; return; }
+        if (e.Key == Key.E) { st.ActiveTool = EditorTool.PlaceNpc; UpdateMode(EditorMode.AddNpc); e.Handled = true; return; }
+        if (e.Key == Key.R) { st.ActiveTool = EditorTool.PaintGat_Walkable; e.Handled = true; return; }
 
         if (e.Key == Key.Delete && ObjectsList.SelectedItem is Placable)
         {

@@ -34,7 +34,7 @@ ipch/
 .idea/
 *.sln.iml
 
-# AI / Agents
+# Editor / IDE metadata
 .agent/
 .claude/
 .cursor/

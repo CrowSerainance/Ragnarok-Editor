@@ -7,9 +7,11 @@ using System.Windows.Media;
 using System.Windows.Media.Media3D;
 using HelixToolkit.Wpf;
 using ROMapOverlayEditor.Gat;
+using ROMapOverlayEditor.Input;
 using ROMapOverlayEditor.MapAssets;
 using ROMapOverlayEditor.Patching;
 using ROMapOverlayEditor.Rsw;
+using ROMapOverlayEditor.Tools;
 using ROMapOverlayEditor.Vfs;
 
 namespace ROMapOverlayEditor.UserControls
@@ -23,18 +25,28 @@ namespace ROMapOverlayEditor.UserControls
         private GatFile _gat = new();
         private RswFile? _rsw;
         private string _gatVirtualPath = "";
+        private bool _viewGatOverlay = true;
+
+        // Camera: Right=Orbit, Middle=Pan, Wheel=Zoom
+        private readonly ROMapOverlayEditor.ThreeD.BrowEditCameraController _cam = new();
+        private readonly EditorInputRouter _inputRouter;
 
         public GatEditorView()
         {
             InitializeComponent();
+            _inputRouter = new EditorInputRouter(_cam, ApplyCameraToRenderer);
             
-            // Wire up MouseDown on the Viewport manually since it's inside the UserControl
             Viewport.MouseDown += Viewport_MouseDown;
+            Viewport.MouseUp += Viewport_MouseUp;
+            Viewport.MouseMove += Viewport_MouseMove;
+            Viewport.MouseWheel += Viewport_MouseWheel;
             
             TypeCombo.ItemsSource = Enum.GetValues(typeof(GatCellType)).Cast<GatCellType>();
             TypeCombo.SelectedItem = GatCellType.NotWalkable;
 
             RadiusSlider.ValueChanged += (_, _) => RadiusLabel.Text = $"Radius: {(int)RadiusSlider.Value}";
+            
+            PreviewText.Text = "Enter a map name and click Load to see resolved paths and header info.";
         }
 
         // Delegate to open GRF browser from MainWindow
@@ -71,25 +83,73 @@ namespace ROMapOverlayEditor.UserControls
         {
              if (_vfs == null) return;
              
-             // If input is just "prontera", assume "prontera.rsw" (or try resolve).
-             // If input is "data/prontera.rsw", use as is.
-             string loadPath = mapNameOrPath;
-             if (!loadPath.Contains(".") && !loadPath.Contains("/") && !loadPath.Contains("\\"))
-             {
-                 loadPath = RswResolver.ResolveRswPath(_vfs, mapNameOrPath) ?? mapNameOrPath;
-                 if (!loadPath.EndsWith(".rsw", StringComparison.OrdinalIgnoreCase))
-                 {
-                      loadPath = mapNameOrPath + ".rsw";
-                 }
-             }
-
              _mapName = System.IO.Path.GetFileNameWithoutExtension(mapNameOrPath);
              MapNameInput.Text = _mapName;
-             StatusLabel.Text = $"Loading {_mapName}...";
+             StatusLabel.Text = $"Resolving {_mapName}...";
+             PreviewText.Text = "";
 
              try
              {
-                 var result = ROMapOverlayEditor.ThreeD.ThreeDMapLoader.Load(_vfs, loadPath);
+                 // Use VfsPathResolver to find RSW/GND/GAT paths
+                 var (rswPath, gndPath, gatPath) = ROMapOverlayEditor.Sources.VfsPathResolver.ResolveMapTriplet(_vfs, mapNameOrPath);
+
+                 if (rswPath == null)
+                 {
+                     StatusLabel.Text = $"RSW not found for '{_mapName}'";
+                     PreviewText.Text = $"Failed to resolve map files.\n\nTried:\n- {mapNameOrPath}.rsw\n- data/{mapNameOrPath}.rsw\n\nTry:\n- Opening additional GRF files\n- Mounting pack files\n- Checking if map exists in your GRF";
+                     return;
+                 }
+
+                 // Show resolved paths in preview
+                 var preview = $"Resolved paths:\nRSW: {rswPath}\n";
+                 if (gndPath != null)
+                     preview += $"GND: {gndPath}\n";
+                 else
+                     preview += $"GND: (missing - required for 3D)\n";
+                 
+                 if (gatPath != null)
+                     preview += $"GAT: {gatPath}\n";
+                 else
+                     preview += $"GAT: (missing - recommended)\n";
+
+                 PreviewText.Text = preview;
+
+                 // Validate RSW header before full load
+                 byte[] rswBytes;
+                 try
+                 {
+                     rswBytes = _vfs.ReadAllBytes(rswPath);
+                 }
+                 catch (Exception ex)
+                 {
+                     StatusLabel.Text = $"Failed to read RSW: {ex.Message}";
+                     PreviewText.Text = preview + $"\nRead error: {ex.Message}";
+                     return;
+                 }
+
+                 var (headerOk, headerMsg, headerInfo) = ROMapOverlayEditor.ThreeD.RswHeaderReader.TryRead(rswBytes);
+                 if (!headerOk)
+                 {
+                     StatusLabel.Text = "RSW header validation failed";
+                     PreviewText.Text = preview + $"\n\nHeader Error:\n{headerMsg}";
+                     MessageBox.Show($"RSW header validation failed:\n\n{headerMsg}\n\nCannot proceed with 3D load.", "RSW Header Error", MessageBoxButton.OK, MessageBoxImage.Warning);
+                     return;
+                 }
+
+                 preview += $"\nRSW Header:\nSig: {headerInfo!.Signature}\nVer: {headerInfo.Major}.{headerInfo.Minor}\nObjects: {headerInfo.ObjectCount} @ 0x{headerInfo.ObjectCountOffset:X}";
+                 PreviewText.Text = preview;
+
+                 if (gndPath == null)
+                 {
+                     StatusLabel.Text = "GND file required but not found";
+                     PreviewText.Text = preview + "\n\nGND is required for 3D rendering. Cannot proceed.";
+                     MessageBox.Show($"GND file is required for 3D rendering but was not found.\n\nResolved RSW: {rswPath}\n\nPlease ensure the GND file exists in your GRF or mounted sources.", "Missing GND", MessageBoxButton.OK, MessageBoxImage.Warning);
+                     return;
+                 }
+
+                 StatusLabel.Text = $"Loading {_mapName}...";
+
+                 var result = ROMapOverlayEditor.ThreeD.ThreeDMapLoader.Load(_vfs, rswPath);
 
                  if (!result.Ok)
                  {
@@ -99,7 +159,21 @@ namespace ROMapOverlayEditor.UserControls
                  }
                  
                  var map = result.Map!;
-                 _rsw = RswIO.Read(map.RswBytes);
+                 
+                 // Try to load RSW, but don't fail completely if it fails
+                 try
+                 {
+                     _rsw = RswIO.Read(map.RswBytes);
+                     preview += $"\nRSW Objects: {_rsw.ObjectCount} loaded successfully";
+                 }
+                 catch (Exception rswEx)
+                 {
+                     _rsw = null;
+                     preview += $"\n\nRSW Objects: Failed to parse ({rswEx.Message})\nGAT editing still available.";
+                     StatusLabel.Text = $"RSW objects not parsed; GAT still editable";
+                 }
+                 
+                 PreviewText.Text = preview;
                  _gatVirtualPath = map.GatPath;
 
                  // Check staging for GAT
@@ -121,13 +195,22 @@ namespace ROMapOverlayEditor.UserControls
                  }
 
                  RebuildMesh();
+                 
+                 // Reset camera after loading
+                 if (Viewport.Camera != null)
+                 {
+                     _cam.ResetDefault();
+                     ApplyCameraToRenderer();
+                     Viewport.ZoomExtents();
+                 }
              }
              catch (Exception ex)
              {
                  StatusLabel.Text = $"Error: {ex.Message}";
+                 PreviewText.Text = (PreviewText.Text ?? "") + $"\n\nLoad Error: {ex.Message}";
                  MessageBox.Show($"Failed to load map '{_mapName}':\n{ex.Message}", "Load Error", MessageBoxButton.OK, MessageBoxImage.Error);
              }
-        }
+         }
 
         private void LoadMapBtn_Click(object sender, RoutedEventArgs e)
         {
@@ -167,7 +250,7 @@ namespace ROMapOverlayEditor.UserControls
             Viewport.Children.Clear();
             Viewport.Children.Add(new DefaultLights());
 
-            var model = GatMeshBuilder.Build(_gat, GatMeshBuilder.DefaultTypeColor);
+            var model = GatMeshBuilder.Build(_gat, GatMeshBuilder.DefaultTypeColor, _viewGatOverlay);
             var vis = new ModelVisual3D { Content = model };
             Viewport.Children.Add(vis);
 
@@ -233,10 +316,68 @@ namespace ROMapOverlayEditor.UserControls
             }
         }
 
+        private void ResetView_Click(object sender, RoutedEventArgs e)
+        {
+            _cam.ResetDefault();
+            ApplyCameraToRenderer();
+            Viewport.ZoomExtents();
+        }
+
+        private void GatOverlay_Changed(object sender, RoutedEventArgs e)
+        {
+            _viewGatOverlay = GatOverlayCheck?.IsChecked == true;
+            RebuildMesh();
+        }
+
+        private void CameraSpeed_Changed(object sender, RoutedPropertyChangedEventArgs<double> e)
+        {
+            if (CameraSpeedSlider == null || RotateSensSlider == null || PanSensSlider == null || ZoomSensSlider == null) return;
+            var v = CameraSpeedSlider.Value;
+            RotateSensSlider.Value = v;
+            PanSensSlider.Value = v;
+            ZoomSensSlider.Value = v;
+        }
+
+        private void SensSlider_Changed(object sender, RoutedPropertyChangedEventArgs<double> e)
+        {
+            if (RotateSensSlider == null || PanSensSlider == null || ZoomSensSlider == null) return;
+            var st = EditorState.Current;
+            st.RotateSensitivity = RotateSensSlider.Value;
+            st.PanSensitivity = PanSensSlider.Value;
+            st.ZoomSensitivity = ZoomSensSlider.Value;
+        }
+
+        private void Tool_Select_Checked(object sender, RoutedEventArgs e)
+        {
+            if (ModeSelect != null && ModeSelect.IsChecked == true)
+                EditorState.Current.ActiveTool = EditorTool.Select;
+        }
+
+        private void Tool_Paint_Checked(object sender, RoutedEventArgs e)
+        {
+            if (ModePaint != null && ModePaint.IsChecked == true)
+                EditorState.Current.ActiveTool = EditorTool.PaintGat_Walkable;
+        }
+
         private void Viewport_MouseDown(object sender, MouseButtonEventArgs e)
         {
+            _inputRouter.OnMouseDown(e.GetPosition(Viewport));
+            Viewport.CaptureMouse();
+        }
+
+        private void Viewport_MouseUp(object sender, MouseButtonEventArgs e)
+        {
+            _inputRouter.OnMouseUp();
+            Viewport.ReleaseMouseCapture();
+            
+            // Left click: tool action (right/middle/wheel reserved for camera)
             if (e.ChangedButton != MouseButton.Left) return;
             
+            var t = EditorState.Current.ActiveTool;
+            bool isSelect = (t == EditorTool.Select);
+            bool isPaint = (t == EditorTool.PaintGat_Walkable || t == EditorTool.PaintGat_NotWalkable || t == EditorTool.PaintGat_Water);
+            if (!isSelect && !isPaint) return;
+
             var pos = e.GetPosition(Viewport);
             var hits = Viewport3DHelper.FindHits(Viewport.Viewport, pos);
             if (hits == null || hits.Count == 0) return;
@@ -245,16 +386,46 @@ namespace ROMapOverlayEditor.UserControls
             int x = (int)Math.Floor(hp.X / GatMeshBuilder.TileSize);
             int y = (int)Math.Floor(hp.Z / GatMeshBuilder.TileSize);
 
-            if (_gat != null && _gat.InBounds(x, y))
+            if (_gat == null || !_gat.InBounds(x, y)) return;
+
+            if (isPaint)
             {
-                 var sel = (GatCellType)(TypeCombo.SelectedItem ?? GatCellType.NotWalkable);
-                 int r = (int)RadiusSlider.Value;
-                 GatPainter.PaintCircle(_gat, x, y, r, sel);
-                 
-                 // Partial rebuild or full rebuild
-                 RebuildMesh();
-                 
-                 PickInfo.Text = $"Cell: ({x},{y})  Set: {sel}";
+                var sel = (GatCellType)(TypeCombo.SelectedItem ?? GatCellType.NotWalkable);
+                int r = (int)RadiusSlider.Value;
+                GatPainter.PaintCircle(_gat, x, y, r, sel);
+                RebuildMesh();
+                PickInfo.Text = $"Cell: ({x},{y})  Set: {sel}";
+            }
+            else
+            {
+                PickInfo.Text = $"Selected Cell: ({x},{y})";
+            }
+        }
+
+        private void Viewport_MouseMove(object sender, MouseEventArgs e)
+        {
+            _inputRouter.OnMouseMove(e.GetPosition(Viewport), e);
+        }
+
+        private void Viewport_MouseWheel(object sender, MouseWheelEventArgs e)
+        {
+            _inputRouter.OnMouseWheel(e.Delta);
+        }
+
+        private void ApplyCameraToRenderer()
+        {
+            double yawRad = _cam.Yaw * Math.PI / 180.0;
+            double pitchRad = _cam.Pitch * Math.PI / 180.0;
+            double cosPitch = Math.Cos(pitchRad);
+            double x = _cam.TargetX + _cam.Distance * cosPitch * Math.Cos(yawRad);
+            double y = _cam.TargetY + _cam.Distance * Math.Sin(pitchRad);
+            double z = _cam.TargetZ + _cam.Distance * cosPitch * Math.Sin(yawRad);
+
+            if (Viewport.Camera is PerspectiveCamera cam)
+            {
+                cam.Position = new Point3D(x, y, z);
+                cam.LookDirection = new Vector3D(_cam.TargetX - x, _cam.TargetY - y, _cam.TargetZ - z);
+                cam.UpDirection = new Vector3D(0, 1, 0);
             }
         }
     }
