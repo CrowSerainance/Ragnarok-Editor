@@ -6,6 +6,17 @@
              xmlns:h="http://helix-toolkit.org/wpf"
              mc:Ignorable="d" 
              d:DesignHeight="600" d:DesignWidth="800">
+    <UserControl.Resources>
+        <Style TargetType="{x:Type ComboBox}">
+            <Setter Property="Foreground" Value="White"/>
+            <Setter Property="Background" Value="#222"/>
+        </Style>
+        <Style TargetType="{x:Type TextBox}">
+            <Setter Property="Foreground" Value="White"/>
+            <Setter Property="Background" Value="#222"/>
+            <Setter Property="CaretBrush" Value="White"/>
+        </Style>
+    </UserControl.Resources>
     <Grid Background="#2D2D30">
         <Grid.ColumnDefinitions>
             <ColumnDefinition Width="*" />
@@ -57,7 +68,8 @@
                 <!-- View Options: GAT overlay, Camera speed -->
                 <GroupBox Header="View Options" Grid.Row="2" Margin="0,8,0,8" Foreground="#AAA" BorderBrush="#3A3A3A">
                     <StackPanel>
-                        <CheckBox x:Name="GatOverlayCheck" Content="GAT Overlay (walkable / not-walkable colors)" IsChecked="True" Foreground="White" Margin="0,0,0,6" Checked="GatOverlay_Changed" Unchecked="GatOverlay_Changed"/>
+                        <CheckBox x:Name="ChkTerrainTextures" Content="Terrain (GND textures)" IsChecked="True" Margin="0,0,0,4" Checked="ViewOptionChanged" Unchecked="ViewOptionChanged"/>
+                        <CheckBox x:Name="ChkGatOverlay" Content="GAT Overlay (walkable / not-walkable)" IsChecked="True" Margin="0,0,0,8" Checked="ViewOptionChanged" Unchecked="ViewOptionChanged"/>
                         <TextBlock Text="Camera Mouse Speed (0.01–3)" Foreground="#AAA" Margin="0,4,0,2"/>
                         <Slider x:Name="CameraSpeedSlider" Minimum="0.01" Maximum="3" Value="1" TickFrequency="0.1" IsSnapToTickEnabled="False" ValueChanged="CameraSpeed_Changed"/>
                         <Button Content="Reset View (Even Out)" Click="ResetView_Click" Margin="0,8,0,4" Background="#444" Foreground="White"/>

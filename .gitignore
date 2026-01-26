@@ -50,6 +50,7 @@ msbuild.log
 msbuild.err
 msbuild.wrn
 *.log
+*.cache
 [Ee]rr.log
 [Ee]rror.log
 build_error.txt

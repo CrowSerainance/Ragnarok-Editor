@@ -22,9 +22,10 @@
 
         <!-- Filter + Search -->
         <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,6">
-            <ComboBox x:Name="FilterCombo" Width="140" SelectionChanged="FilterCombo_SelectionChanged" SelectedIndex="0">
+            <ComboBox x:Name="FilterCombo" Width="160" SelectionChanged="FilterCombo_SelectionChanged" SelectedIndex="0">
                 <ComboBoxItem Content="All files"/>
                 <ComboBoxItem Content="Map images only"/>
+                <ComboBoxItem Content="RSW maps only"/>
             </ComboBox>
             <TextBox x:Name="TxtSearch" MinWidth="200" Margin="12,0,0,0" Padding="6,4"
                      TextChanged="TxtSearch_TextChanged"/>
@@ -62,7 +63,7 @@
 
         <!-- Buttons -->
         <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,10,0,0">
-            <Button x:Name="BtnOpenAsMap" Content="Open as map" Click="BtnOpenAsMap_Click" IsDefault="True"
+            <Button x:Name="BtnOpenAsMap" Content="Open as map / View 3D" Click="BtnOpenAsMap_Click" IsDefault="True"
                     IsEnabled="False" Padding="14,6" Margin="0,0,8,0"/>
             <Button Content="Cancel" IsCancel="True" Click="BtnCancel_Click" Padding="14,6"/>
         </StackPanel>

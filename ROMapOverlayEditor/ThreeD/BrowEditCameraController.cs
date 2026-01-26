@@ -21,6 +21,16 @@ namespace ROMapOverlayEditor.ThreeD
             TargetX = TargetY = TargetZ = 0;
         }
 
+        public void ResetEvenOut(double suggestedDistance, double tx = 0, double ty = 0, double tz = 0)
+        {
+            Distance = suggestedDistance;
+            TargetX = tx;
+            TargetY = ty;
+            TargetZ = tz;
+            Yaw = 45;
+            Pitch = -45;
+        }
+
         public void Orbit(double dx, double dy, double sens)
         {
             Yaw += dx * 0.25 * sens;

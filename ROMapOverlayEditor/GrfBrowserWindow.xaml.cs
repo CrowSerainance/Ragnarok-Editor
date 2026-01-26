@@ -156,12 +156,15 @@ public partial class GrfBrowserWindow : Window
     private void RefreshList()
     {
         _filtered.Clear();
-        bool mapsOnly = FilterCombo?.SelectedIndex == 1;
+        int filterIndex = FilterCombo?.SelectedIndex ?? 0;
+        bool mapsOnly = filterIndex == 1;
+        bool rswOnly = filterIndex == 2;
         string search = (TxtSearch?.Text ?? "").Trim();
 
         foreach (var p in _allPaths)
         {
             if (mapsOnly && !IsMapBmp(p)) continue;
+            if (rswOnly && !IsRsw(p)) continue;
             if (search.Length > 0 && p.IndexOf(search, StringComparison.OrdinalIgnoreCase) < 0) continue;
             _filtered.Add(new GrfListEntry(p, IsMapBmp(p)));
         }
@@ -172,6 +175,11 @@ public partial class GrfBrowserWindow : Window
         if (!path.EndsWith(".bmp", StringComparison.OrdinalIgnoreCase)) return false;
         return path.Contains("/map/", StringComparison.OrdinalIgnoreCase) ||
                path.Contains("\\map\\", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsRsw(string path)
+    {
+        return path.EndsWith(".rsw", StringComparison.OrdinalIgnoreCase);
     }
 
     private void TryLoadPreview()

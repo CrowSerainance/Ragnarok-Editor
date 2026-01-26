@@ -51,8 +51,6 @@ namespace ROMapOverlayEditor.ThreeD
                 // - Try read objectCount at several plausible offsets depending on version,
                 //   with sanity checks.
 
-                // Candidate offsets relative to current position (after version)
-                // These are "safe probes" — you should align this to your actual parser later.
                 long basePos = ms.Position;
 
                 // Probe function
@@ -63,8 +61,24 @@ namespace ROMapOverlayEditor.ThreeD
                     return br.ReadInt32();
                 }
 
-                // Commonly, objectCount is after several fixed blocks.
-                // We'll probe a few likely points and accept the first sane count.
+                // RSW 2.1: Water(24)+Light(36)+MapBoundaries(16)=76 after version; count at 82, list at 86.
+                if (combined == 0x0201)
+                {
+                    int c = ProbeAt(82);
+                    if (c >= 0 && c <= MaxReasonableObjects)
+                    {
+                        return (true, "", new RswHeaderInfo
+                        {
+                            Signature = sig,
+                            Major = major,
+                            Minor = minor,
+                            ObjectCountOffset = 82,
+                            ObjectCount = c
+                        });
+                    }
+                }
+
+                // Commonly, objectCount is after several fixed blocks (long-header layout).
                 long[] probes =
                 {
                     basePos + 0x100, // common-ish if strings/blocks exist

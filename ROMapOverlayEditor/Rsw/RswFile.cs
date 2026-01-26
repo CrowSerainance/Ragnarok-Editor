@@ -4,88 +4,85 @@ namespace ROMapOverlayEditor.Rsw
 {
     public sealed class RswFile
     {
-        // Version stored as 0xMMmm (major/minor). Example: 0x0206
-        public ushort Version { get; init; }
-        public int? BuildNumber { get; init; } // present for newer versions
+        public string Signature { get; set; } = "";
+        public ushort Version { get; set; }
+        public byte BuildNumber { get; set; }
+        public int UnknownAfterBuild { get; set; }
+        public string IniFile { get; set; } = "";
+        public string GndFile { get; set; } = "";
+        public string GatFile { get; set; } = "";
+        public string SourceFile { get; set; } = "";
+        public WaterSettings? Water { get; set; }
+        public LightSettings Light { get; set; } = new LightSettings();
+        public List<RswObject> Objects { get; set; } = new();
 
-        public string IniFile1 { get; init; } = "";
-        public string GndFile { get; init; } = "";
-        public string GatFile { get; init; } = "";
-        public string IniFile2 { get; init; } = "";
-
-        public int ObjectCount { get; init; }
-        public List<RswObject> Objects { get; init; } = new();
-
-        public override string ToString()
-            => $"RSW v=0x{Version:X4} build={BuildNumber?.ToString() ?? "-"} gnd='{GndFile}' gat='{GatFile}' objects={ObjectCount}";
+        public int ObjectCount => Objects?.Count ?? 0;
     }
 
-    public abstract class RswObject
+    public sealed class WaterSettings
     {
-        public int Type { get; init; }
+        public float WaterLevel { get; set; }
+        public int WaterType { get; set; }
+        public float WaveHeight { get; set; }
+        public float WaveSpeed { get; set; }
+        public float WavePitch { get; set; }
+        public int AnimSpeed { get; set; }
+    }
+
+    public sealed class LightSettings
+    {
+        public int Longitude { get; set; }
+        public int Latitude { get; set; }
+        public Vec3 Diffuse { get; set; }
+        public Vec3 Ambient { get; set; }
+        public float Opacity { get; set; }
+    }
+
+    public class RswObject
+    {
+        public int ObjectType { get; set; }
+        public string Name { get; set; } = "";
+        public Vec3 Position { get; set; }
+        public Vec3 Rotation { get; set; }
+        public Vec3 Scale { get; set; }
     }
 
     public sealed class RswModel : RswObject
     {
-        public string Name { get; init; } = "";
-        public int AnimationType { get; init; }
-        public float AnimationSpeed { get; init; }
-        public int BlockType { get; init; }
-        public byte? Unknown206 { get; init; } // only in >=0x0206 build>161
-
-        public string Filename { get; init; } = "";   // .rsm
-        public string ObjectName { get; init; } = ""; // extra name
-
-        public Vec3 Position { get; init; }
-        public Vec3 Rotation { get; init; }
-        public Vec3 Scale { get; init; }
+        public int AnimType { get; set; }
+        public float AnimSpeed { get; set; }
+        public int BlockType { get; set; }
+        public string FileName { get; set; } = "";
     }
 
     public sealed class RswLight : RswObject
     {
-        public string Name { get; init; } = "";
-        public Vec3 Position { get; init; }
-        public byte[] Unknown10 { get; init; } = new byte[10];
-        public Vec3 Color { get; init; }
-        public float Range { get; init; }
+        public Vec3 Color { get; set; }
+        public float Range { get; set; }
     }
 
     public sealed class RswSound : RswObject
     {
-        public string Name { get; init; } = "";
-        public string Filename { get; init; } = ""; // .wav
-        public float Unknown1 { get; init; }
-        public float Unknown2 { get; init; }
-        public Vec3 Rotation { get; init; }
-        public Vec3 Scale { get; init; }
-        public byte[] Unknown8 { get; init; } = new byte[8];
-        public Vec3 Position { get; init; }
-        public float Volume { get; init; }
-        public float Width { get; init; }
-        public float Height { get; init; }
-        public float Range { get; init; }
+        public string FileName { get; set; } = "";
+        public float Volume { get; set; }
+        public int Width { get; set; }
+        public int Height { get; set; }
+        public float Range { get; set; }
     }
 
     public sealed class RswEffect : RswObject
     {
-        public string Name { get; init; } = "";
-        public Vec3 Position { get; init; }
-        public int Id { get; init; }
-        public float Loop { get; init; }
-        public float Unknown1 { get; init; }
-        public float Unknown2 { get; init; }
-        public float Unknown3 { get; init; }
-        public float Unknown4 { get; init; }
+        public int EffectId { get; set; }
+        public float Delay { get; set; }
+        public float Param { get; set; }
     }
 
-    public readonly struct Vec3
+    public sealed class RswUnknown : RswObject { }
+
+    public struct Vec3
     {
-        public readonly float X;
-        public readonly float Y;
-        public readonly float Z;
-
+        public float X, Y, Z;
         public Vec3(float x, float y, float z) { X = x; Y = y; Z = z; }
-
-        public override string ToString() => $"({X:0.###},{Y:0.###},{Z:0.###})";
+        public override string ToString() => $"{X},{Y},{Z}";
     }
 }

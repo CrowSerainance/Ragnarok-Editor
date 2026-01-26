@@ -5,200 +5,245 @@ using System.Text;
 
 namespace ROMapOverlayEditor.Rsw
 {
+    // BrowEdit3 format notes: version = byte minor | byte major; buildNumber if >= 0x0202;
+    // unknown int if >= 0x0205; water block removed if >= 0x0206.
     public static class RswIO
     {
         public static bool LooksLikeRsw(byte[] bytes)
         {
             if (bytes == null || bytes.Length < 8) return false;
-            // "GRSW"
             return bytes[0] == (byte)'G' && bytes[1] == (byte)'R' && bytes[2] == (byte)'S' && bytes[3] == (byte)'W';
         }
 
         public static RswFile Read(byte[] bytes)
         {
-            // Validate header first using diagnostic reader
-            var (headerOk, headerMsg, headerInfo) = ROMapOverlayEditor.ThreeD.RswHeaderReader.TryRead(bytes);
-            if (!headerOk)
-            {
-                throw new InvalidDataException($"RSW header validation failed: {headerMsg}");
-            }
-
+            if (bytes == null || bytes.Length < 16)
+                throw new InvalidDataException("RSW buffer too small.");
             using var ms = new MemoryStream(bytes, writable: false);
-            using var br = new BinaryReader(ms);
-
-            var header = br.ReadBytes(4);
-            if (header.Length != 4 || header[0] != 'G' || header[1] != 'R' || header[2] != 'S' || header[3] != 'W')
-                throw new InvalidDataException("Not an RSW (missing GRSW).");
-
-            byte b0 = br.ReadByte();
-            byte b1 = br.ReadByte();
-            ushort version = (ushort)((b0 << 8) | b1); // 0xMMmm
-
-            // Sanity check version
-            if (version > 0x0300) 
-                throw new InvalidDataException($"RSW version 0x{version:X4} is too new or invalid.");
-
-            int? buildNumber = null;
-            if (version >= 0x0205)
-                buildNumber = br.ReadInt32();
-
-            if (version >= 0x0202)
-                br.ReadByte();
-
-            string ini1 = ReadRoStr(br, 40);
-            string gnd = ReadRoStr(br, 40);
-
-            string gat;
-            if (version >= 0x0104)
-                gat = ReadRoStr(br, 40);
-            else
-                gat = gnd; // legacy mapping
-
-            string ini2 = ReadRoStr(br, 40);
-
-            // Detailed Water/Light/Ground block skipping
-            // NOTE: Older versions (<2.0) vary wildly. 
-            // 2.1 is common.
-
-            if (version >= 0x0103) br.ReadSingle(); // water height
-
-            if (version >= 0x0108) // water properties
-            {
-                br.ReadInt32(); // type
-                br.ReadSingle(); // amp
-                br.ReadSingle(); // phase
-                br.ReadSingle(); // curve
-            }
-
-            if (version >= 0x0109) br.ReadInt32(); // anim speed
-
-            if (version >= 0x0108) ReadRoStr(br, 32); // water texture
-
-            if (version >= 0x0105) // Light info
-            {
-                br.ReadInt32(); // long
-                br.ReadInt32(); // lat
-                ReadVec3(br);   // diffuse
-                ReadVec3(br);   // ambient
-                if (version >= 0x0107) // unknown float (shadow opacity?) - ONLY 1.7+
-                    br.ReadSingle();
-            }
-
-            if (version >= 0x0106) // Ground/BBox
-            {
-                br.ReadInt32();
-                br.ReadInt32();
-                br.ReadInt32();
-                br.ReadInt32();
-            }
-
-            // Object count is at the current position after the full header parse.
-            // Use this exact offset — do NOT use RswHeaderReader's probed offset, which can
-            // land on the wrong place for some version layouts (e.g. "Unknown type 1701244").
-            long objectCountOffsetGuess = ms.Position;
-
-            // Use object list locator to find the correct list start (count at Guess, list at Guess+4 or resync)
-            var (locOk, locMsg, locInfo) = ROMapOverlayEditor.ThreeD.RswObjectListLocator.TryLocate(bytes, objectCountOffsetGuess);
-            if (!locOk)
-            {
-                throw new InvalidDataException(
-                    $"Failed to locate RSW object list:\n{locMsg}\n\n" +
-                    $"Parser reached offset 0x{ms.Position:X} before object count.\n" +
-                    $"This indicates a version/layout mismatch. The RSW structure may differ from expected.");
-            }
-
-            int objectCount = locInfo!.ObjectCount;
-            long objectListStart = locInfo.ListStartOffset;
-
-            // Move to the correct object list start position
-            ms.Position = objectListStart;
-
-            var objects = new List<RswObject>(Math.Max(0, objectCount));
-
-            // Read objects starting at the correctly located offset
-            for (int i = 0; i < objectCount; i++)
-            {
-                // Safety: check EOF
-                if (ms.Position >= ms.Length - 4) break;
-
-                long startPos = ms.Position;
-                int type = br.ReadInt32();
-
-                // Validate type before attempting to read
-                if (type < 1 || type > 4)
-                {
-                    throw new InvalidDataException(
-                        $"Unknown RSW object type {type} at index {i} (Offset 0x{startPos:X}, Version 0x{version:X4}).\n" +
-                        $"Expected types: 1=Model, 2=Light, 3=Sound, 4=Effect.\n" +
-                        $"Object list location note: {locInfo.Note}");
-                }
-
-                try
-                {
-                    switch (type)
-                    {
-                        case 1:
-                            objects.Add(ReadModel(br, version, buildNumber));
-                            break;
-                        case 2:
-                            objects.Add(ReadLight(br, version));
-                            break;
-                        case 3:
-                            objects.Add(ReadSound(br));
-                            break;
-                        case 4:
-                            objects.Add(ReadEffect(br));
-                            break;
-                    }
-                }
-                catch (Exception ex)
-                {
-                     throw new InvalidDataException($"Failed to read object {i} (Type {type}): {ex.Message}", ex);
-                }
-            }
-
-            return new RswFile
-            {
-                Version = version,
-                BuildNumber = buildNumber,
-                IniFile1 = ini1,
-                GndFile = gnd,
-                GatFile = gat,
-                IniFile2 = ini2,
-                ObjectCount = objectCount,
-                Objects = objects
-            };
+            return Read(ms);
         }
 
-        private static RswModel ReadModel(BinaryReader br, ushort version, int? buildNumber)
+        public static RswFile Read(Stream stream)
         {
-            string name = (version >= 0x0103) ? ReadRoStr(br, 40) : "";
+            using var br = new BinaryReader(stream, Encoding.GetEncoding(1252), leaveOpen: true);
 
-            int animType = (version >= 0x0103) ? br.ReadInt32() : 0;
-            float animSpeed = (version >= 0x0103) ? br.ReadSingle() : 0;
-            int blockType = (version >= 0x0103) ? br.ReadInt32() : 0;
+            var sig = Encoding.ASCII.GetString(br.ReadBytes(4));
+            if (sig != "GRSW")
+                throw new InvalidDataException($"Not an RSW file (sig={sig})");
 
-            byte? u206 = null;
-            if (version >= 0x0206 && (buildNumber ?? 0) > 161)
-                u206 = br.ReadByte();
+            // IMPORTANT: minor first, then major
+            byte minor = br.ReadByte();
+            byte major = br.ReadByte();
+            ushort version = (ushort)((major << 8) | minor);
 
-            string filename = ReadRoStr(br, 40);
-            string objName = ReadRoStr(br, 80);
+            byte buildNumber = 0;
+            if (version >= 0x0202)
+                buildNumber = br.ReadByte();
 
-            var pos = ReadVec3(br);
-            var rot = ReadVec3(br);
-            var scale = ReadVec3(br);
+            int unknownAfterBuild = 0;
+            if (version >= 0x0205)
+                unknownAfterBuild = br.ReadInt32();
 
+            // v1.02: GAT string only from v1.04; water only from v1.03; light only from v1.05
+            string ini = ReadFixedString(br, 40);
+            string gnd = ReadFixedString(br, 40);
+            string gat;
+            string src;
+            if (version >= 0x0104)
+            {
+                gat = ReadFixedString(br, 40);
+                src = ReadFixedString(br, 40);
+            }
+            else
+            {
+                gat = gnd;
+                src = ReadFixedString(br, 40);
+            }
+
+            WaterSettings? water = null;
+            if (version >= 0x0103 && version < 0x0206)
+            {
+                float waterLevel = br.ReadSingle();
+                int waterType = 0;
+                float waveHeight = 0, waveSpeed = 0, wavePitch = 0;
+                int animSpeed = 100;
+                if (version >= 0x0108)
+                {
+                    waterType = br.ReadInt32();
+                    waveHeight = br.ReadSingle();
+                    waveSpeed = br.ReadSingle();
+                    wavePitch = br.ReadSingle();
+                }
+                if (version >= 0x0109)
+                    animSpeed = br.ReadInt32();
+                water = new WaterSettings
+                {
+                    WaterLevel = waterLevel,
+                    WaterType = waterType,
+                    WaveHeight = waveHeight,
+                    WaveSpeed = waveSpeed,
+                    WavePitch = wavePitch,
+                    AnimSpeed = animSpeed
+                };
+            }
+
+            var light = new LightSettings
+            {
+                Longitude = 45,
+                Latitude = 45,
+                Diffuse = new Vec3(1.0f, 1.0f, 1.0f),
+                Ambient = new Vec3(0.3f, 0.3f, 0.3f),
+                Opacity = 1.0f
+            };
+            if (version >= 0x0105)
+            {
+                light = new LightSettings
+                {
+                    Longitude = br.ReadInt32(),
+                    Latitude = br.ReadInt32(),
+                    Diffuse = new Vec3(br.ReadSingle(), br.ReadSingle(), br.ReadSingle()),
+                    Ambient = new Vec3(br.ReadSingle(), br.ReadSingle(), br.ReadSingle()),
+                    Opacity = br.ReadSingle()
+                };
+            }
+
+            long objCountPos = stream.Position;
+            int objectCount = br.ReadInt32();
+
+            if (!IsReasonableObjectCount(objectCount))
+            {
+                stream.Position = objCountPos;
+                objectCount = FindObjectCountByScanning(br, maxScanBytes: 256, out long foundAt);
+                if (objectCount < 0)
+                    throw new InvalidDataException($"RSW: Could not locate a valid objectCount near offset 0x{objCountPos:X} (ver=0x{version:X4})");
+                stream.Position = foundAt + 4;
+            }
+
+            var rsw = new RswFile
+            {
+                Signature = sig,
+                Version = version,
+                BuildNumber = buildNumber,
+                UnknownAfterBuild = unknownAfterBuild,
+                IniFile = ini,
+                GndFile = gnd,
+                GatFile = gat,
+                SourceFile = src,
+                Water = water,
+                Light = light,
+                Objects = new List<RswObject>()
+            };
+
+            for (int i = 0; i < objectCount; i++)
+            {
+                long posHere = stream.Position;
+                int type = br.ReadInt32();
+                if (type < 1 || type > 4)
+                    throw new InvalidDataException(
+                        $"Unknown RSW object type {type} at index {i} (Offset 0x{posHere:X}, Version 0x{version:X4}).");
+                switch (type)
+                {
+                    case 1:
+                        rsw.Objects.Add(ReadModel(br, version));
+                        break;
+                    case 2:
+                        rsw.Objects.Add(ReadLight(br, version));
+                        break;
+                    case 3:
+                        rsw.Objects.Add(ReadSound(br));
+                        break;
+                    case 4:
+                        rsw.Objects.Add(ReadEffect(br));
+                        break;
+                    default:
+                        rsw.Objects.Add(ReadUnknownObject(br, type));
+                        break;
+                }
+            }
+
+            return rsw;
+        }
+
+        private static bool IsReasonableObjectCount(int n) => n >= 0 && n <= 500000;
+
+        private static int FindObjectCountByScanning(BinaryReader br, int maxScanBytes, out long foundAt)
+        {
+            var s = br.BaseStream;
+            long start = s.Position;
+            foundAt = -1;
+            for (int offset = 0; offset <= maxScanBytes; offset += 4)
+            {
+                s.Position = start + offset;
+                int candidate = br.ReadInt32();
+                if (!IsReasonableObjectCount(candidate)) continue;
+                if (candidate == 0)
+                {
+                    foundAt = start + offset;
+                    return candidate;
+                }
+                long afterCount = s.Position;
+                int type = br.ReadInt32();
+                s.Position = afterCount;
+                if (type >= 0 && type <= 16)
+                {
+                    foundAt = start + offset;
+                    return candidate;
+                }
+            }
+            s.Position = start;
+            return -1;
+        }
+
+        private static string ReadFixedString(BinaryReader br, int len)
+        {
+            var b = br.ReadBytes(len);
+            int z = Array.IndexOf(b, (byte)0);
+            if (z < 0) z = b.Length;
+            return Encoding.GetEncoding(1252).GetString(b, 0, z).Trim();
+        }
+
+        private static string ReadCStr(BinaryReader br)
+        {
+            var bytes = new List<byte>(64);
+            while (true)
+            {
+                byte c = br.ReadByte();
+                if (c == 0) break;
+                bytes.Add(c);
+            }
+            return Encoding.GetEncoding(1252).GetString(bytes.ToArray());
+        }
+
+        private static RswModel ReadModel(BinaryReader br, ushort version)
+        {
+            string name = "";
+            int animType = 0;
+            float animSpeed = 0;
+            int blockType = 0;
+            string file;
+            if (version >= 0x0103)
+            {
+                name = ReadCStr(br);
+                animType = br.ReadInt32();
+                animSpeed = br.ReadSingle();
+                blockType = br.ReadInt32();
+                file = ReadCStr(br);
+            }
+            else
+            {
+                file = ReadFixedString(br, 80);
+            }
+            var pos = new Vec3(br.ReadSingle(), br.ReadSingle(), br.ReadSingle());
+            var rot = new Vec3(br.ReadSingle(), br.ReadSingle(), br.ReadSingle());
+            var scale = new Vec3(br.ReadSingle(), br.ReadSingle(), br.ReadSingle());
             return new RswModel
             {
-                Type = 1,
+                ObjectType = 1,
                 Name = name,
-                AnimationType = animType,
-                AnimationSpeed = animSpeed,
+                AnimType = animType,
+                AnimSpeed = animSpeed,
                 BlockType = blockType,
-                Unknown206 = u206,
-                Filename = filename,
-                ObjectName = objName,
+                FileName = file,
                 Position = pos,
                 Rotation = rot,
                 Scale = scale
@@ -207,99 +252,67 @@ namespace ROMapOverlayEditor.Rsw
 
         private static RswLight ReadLight(BinaryReader br, ushort version)
         {
-            string name = (version >= 0x0103) ? ReadRoStr(br, 40) : "";
-            var pos = ReadVec3(br);
-            var unk10 = br.ReadBytes(10);
-            var color = ReadVec3(br);
+            string name = (version >= 0x0103) ? ReadCStr(br) : "";
+            var pos = new Vec3(br.ReadSingle(), br.ReadSingle(), br.ReadSingle());
+            var color = new Vec3(br.ReadSingle(), br.ReadSingle(), br.ReadSingle());
             float range = br.ReadSingle();
-
-            return new RswLight
-            {
-                Type = 2,
-                Name = name,
-                Position = pos,
-                Unknown10 = unk10.Length == 10 ? unk10 : new byte[10],
-                Color = color,
-                Range = range
-            };
+            return new RswLight { ObjectType = 2, Name = name, Position = pos, Color = color, Range = range };
         }
 
         private static RswSound ReadSound(BinaryReader br)
         {
-            string name = ReadRoStr(br, 80);
-            string filename = ReadRoStr(br, 40);
-            float u1 = br.ReadSingle();
-            float u2 = br.ReadSingle();
-            var rot = ReadVec3(br);
-            var scale = ReadVec3(br);
-            var unk8 = br.ReadBytes(8);
-            var pos = ReadVec3(br);
+            string name = ReadCStr(br);
+            string file = ReadCStr(br);
+            var pos = new Vec3(br.ReadSingle(), br.ReadSingle(), br.ReadSingle());
             float vol = br.ReadSingle();
-            float w = br.ReadSingle();
-            float h = br.ReadSingle();
+            int width = br.ReadInt32();
+            int height = br.ReadInt32();
             float range = br.ReadSingle();
-
             return new RswSound
             {
-                Type = 3,
+                ObjectType = 3,
                 Name = name,
-                Filename = filename,
-                Unknown1 = u1,
-                Unknown2 = u2,
-                Rotation = rot,
-                Scale = scale,
-                Unknown8 = unk8.Length == 8 ? unk8 : new byte[8],
+                FileName = file,
                 Position = pos,
                 Volume = vol,
-                Width = w,
-                Height = h,
+                Width = width,
+                Height = height,
                 Range = range
             };
         }
 
         private static RswEffect ReadEffect(BinaryReader br)
         {
-            string name = ReadRoStr(br, 80);
-            var pos = ReadVec3(br);
+            string name = ReadCStr(br);
+            var pos = new Vec3(br.ReadSingle(), br.ReadSingle(), br.ReadSingle());
             int id = br.ReadInt32();
-            float loop = br.ReadSingle();
-            float u1 = br.ReadSingle();
-            float u2 = br.ReadSingle();
-            float u3 = br.ReadSingle();
-            float u4 = br.ReadSingle();
-
+            float delay = br.ReadSingle();
+            float param = br.ReadSingle();
             return new RswEffect
             {
-                Type = 4,
+                ObjectType = 4,
                 Name = name,
                 Position = pos,
-                Id = id,
-                Loop = loop,
-                Unknown1 = u1,
-                Unknown2 = u2,
-                Unknown3 = u3,
-                Unknown4 = u4
+                EffectId = id,
+                Delay = delay,
+                Param = param
             };
         }
 
-        private static Vec3 ReadVec3(BinaryReader br)
+        private static RswObject ReadUnknownObject(BinaryReader br, int type)
         {
-            float x = br.ReadSingle();
-            float y = br.ReadSingle();
-            float z = br.ReadSingle();
-            return new Vec3(x, y, z);
-        }
-
-        private static string ReadRoStr(BinaryReader br, int fixedBytes)
-        {
-            var data = br.ReadBytes(fixedBytes);
-            if (data.Length != fixedBytes)
-                throw new EndOfStreamException($"Unexpected EOF in RoStr({fixedBytes}).");
-
-            int len = Array.IndexOf<byte>(data, 0);
-            if (len < 0) len = data.Length;
-
-            return Encoding.ASCII.GetString(data, 0, len).Trim();
+            string name = ReadCStr(br);
+            var pos = new Vec3(br.ReadSingle(), br.ReadSingle(), br.ReadSingle());
+            var rot = new Vec3(br.ReadSingle(), br.ReadSingle(), br.ReadSingle());
+            var scale = new Vec3(br.ReadSingle(), br.ReadSingle(), br.ReadSingle());
+            return new RswUnknown
+            {
+                ObjectType = type,
+                Name = name,
+                Position = pos,
+                Rotation = rot,
+                Scale = scale
+            };
         }
     }
 }
