@@ -26,10 +26,10 @@ namespace ROMapOverlayEditor.Gnd
         public IReadOnlyList<GndTextureV2> Textures { get; init; } = Array.Empty<GndTextureV2>();
         public GndLightmapInfo Lightmaps { get; init; } = new();
         public IReadOnlyList<GndSurfaceTile> Surfaces { get; init; } = Array.Empty<GndSurfaceTile>();
-        public GndCubeV2[,] Cubes { get; init; } = new GndCubeV2[0, 0];
+        public GndCubeV2_Legacy[,] Cubes { get; init; } = new GndCubeV2_Legacy[0, 0];
         public GndWaterInfo? Water { get; init; }
 
-        public GndCubeV2? GetCube(int x, int y) => (x >= 0 && x < Width && y >= 0 && y < Height) ? Cubes[x, y] : null;
+        public GndCubeV2_Legacy? GetCube(int x, int y) => (x >= 0 && x < Width && y >= 0 && y < Height) ? Cubes[x, y] : null;
         public GndSurfaceTile? GetSurface(int index) => (index >= 0 && index < Surfaces.Count) ? Surfaces[index] : null;
 
         public override string ToString() => $"GND v{Version >> 8}.{Version & 0xFF} {Width}x{Height} textures={Textures.Count} surfaces={Surfaces.Count}";
@@ -68,12 +68,12 @@ namespace ROMapOverlayEditor.Gnd
     }
 
     [StructLayout(LayoutKind.Sequential)]
-    public readonly struct GndCubeV2
+    public readonly struct GndCubeV2_Legacy
     {
         public readonly float Height00, Height10, Height01, Height11;
         public readonly int TileUp, TileSide, TileFront;
 
-        public GndCubeV2(float h00, float h10, float h01, float h11, int tileUp, int tileSide, int tileFront)
+        public GndCubeV2_Legacy(float h00, float h10, float h01, float h11, int tileUp, int tileSide, int tileFront)
         {
             Height00 = h00; Height10 = h10; Height01 = h01; Height11 = h11;
             TileUp = tileUp; TileSide = tileSide; TileFront = tileFront;

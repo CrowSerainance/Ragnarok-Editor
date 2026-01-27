@@ -37,7 +37,7 @@ namespace ROMapOverlayEditor.Sources
             _normalizedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             _originalPaths = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
-            foreach (var entry in _archive.Entries)
+            foreach (var entry in _archive.EntriesList)
             {
                 var normalized = Normalize(entry.Path);
                 _normalizedPaths.Add(normalized);
@@ -64,13 +64,13 @@ namespace ROMapOverlayEditor.Sources
         public IEnumerable<string> EnumeratePaths() => _normalizedPaths;
 
         /// <summary>Get all entries with their metadata.</summary>
-        public IReadOnlyList<GrfEntry> Entries => _archive.Entries;
+        public IReadOnlyList<GrfEntry> Entries => _archive.EntriesList;
 
         /// <summary>Get map BMP paths (files under \map\ folder).</summary>
         public IReadOnlyList<string> GetMapBmpPaths()
         {
-            // Re-implement logic using _archive.Entries
-            var list = _archive.Entries
+            // Re-implement logic using _archive.EntriesList
+            var list = _archive.EntriesList
                 .Where(e => (e.Flags & 1) != 0) // File
                 .Where(e => e.Path.EndsWith(".bmp", StringComparison.OrdinalIgnoreCase) && 
                             (e.Path.Contains("\\map\\", StringComparison.OrdinalIgnoreCase) || e.Path.Contains("/map/", StringComparison.OrdinalIgnoreCase)))
@@ -79,7 +79,7 @@ namespace ROMapOverlayEditor.Sources
 
             if (list.Count > 0) return list;
 
-            return _archive.Entries
+            return _archive.EntriesList
                 .Where(e => (e.Flags & 1) != 0 && e.Path.EndsWith(".bmp", StringComparison.OrdinalIgnoreCase))
                 .Select(e => e.Path)
                 .ToList();

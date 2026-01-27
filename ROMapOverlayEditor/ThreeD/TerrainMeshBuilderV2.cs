@@ -111,7 +111,7 @@ namespace ROMapOverlayEditor.ThreeD
             return t;
         }
 
-        private static void EmitTopFace(ref BuildContext ctx, int x, int y, GndCubeV2 cube)
+        private static void EmitTopFace(ref BuildContext ctx, int x, int y, GndCubeV2_Legacy cube)
         {
             float yMult = ctx.Options.FlipYAxis ? -1f : 1f;
             float x0 = x * ctx.Gnd.TileScale, x1 = x0 + ctx.TileSize, z0 = y * ctx.Gnd.TileScale, z1 = z0 + ctx.TileSize;
@@ -164,8 +164,8 @@ namespace ROMapOverlayEditor.ThreeD
             ctx.IndexCount += 6;
         }
 
-        private static void EmitSideWall(ref BuildContext ctx, int x, int y, GndCubeV2 cube) { /* Stub: east wall */ }
-        private static void EmitFrontWall(ref BuildContext ctx, int x, int y, GndCubeV2 cube) { /* Stub: south wall */ }
+        private static void EmitSideWall(ref BuildContext ctx, int x, int y, GndCubeV2_Legacy cube) { /* Stub: east wall */ }
+        private static void EmitFrontWall(ref BuildContext ctx, int x, int y, GndCubeV2_Legacy cube) { /* Stub: south wall */ }
 
         private ref struct BuildContext
         {

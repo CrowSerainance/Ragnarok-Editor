@@ -108,7 +108,7 @@ namespace ROMapOverlayEditor.Gnd
             else
                 reader.Skip(surfaceCount * SURFACE_RECORD_SIZE);
 
-            var cubes = new GndCubeV2[width, height];
+            var cubes = new GndCubeV2_Legacy[width, height];
             bool intTileIds = version >= GndFileV2.VERSION_INT_TILE_IDS;
             for (int y = 0; y < height; y++)
                 for (int x = 0; x < width; x++)
@@ -117,7 +117,7 @@ namespace ROMapOverlayEditor.Gnd
                     int tileUp = intTileIds ? reader.ReadInt32() : reader.ReadUInt16();
                     int tileSide = intTileIds ? reader.ReadInt32() : reader.ReadUInt16();
                     int tileFront = intTileIds ? reader.ReadInt32() : reader.ReadUInt16();
-                    cubes[x, y] = new GndCubeV2(h00, h10, h01, h11, tileUp, tileSide, tileFront);
+                    cubes[x, y] = new GndCubeV2_Legacy(h00, h10, h01, h11, tileUp, tileSide, tileFront);
                 }
 
             GndWaterInfo? water = null;

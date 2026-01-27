@@ -32,8 +32,8 @@ namespace ROMapOverlayEditor.Rsw
                 throw new InvalidDataException($"Not an RSW file (sig={sig})");
 
             // IMPORTANT: minor first, then major
-            byte minor = br.ReadByte();
             byte major = br.ReadByte();
+            byte minor = br.ReadByte();
             ushort version = (ushort)((major << 8) | minor);
 
             byte buildNumber = 0;

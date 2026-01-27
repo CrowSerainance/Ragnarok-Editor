@@ -319,7 +319,7 @@ public static class TowninfoImporter
 
             foreach (var tryPath in GrfSearchPaths)
             {
-                var entry = grf.Entries.FirstOrDefault(e =>
+                var entry = grf.EntriesList.FirstOrDefault(e =>
                     e.Path.Equals(tryPath, StringComparison.OrdinalIgnoreCase));
 
                 if (entry != null)
@@ -333,7 +333,7 @@ public static class TowninfoImporter
                 }
             }
 
-            var anyTowninfo = grf.Entries.FirstOrDefault(e =>
+            var anyTowninfo = grf.EntriesList.FirstOrDefault(e =>
                 e.Path.EndsWith("Towninfo.lub", StringComparison.OrdinalIgnoreCase));
 
             if (anyTowninfo != null)

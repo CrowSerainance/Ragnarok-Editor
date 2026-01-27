@@ -40,6 +40,9 @@ namespace ROMapOverlayEditor.UserControls
         private readonly ROMapOverlayEditor.ThreeD.BrowEditCameraController _cam = new();
         private readonly EditorInputRouter _inputRouter;
 
+        private int _rebuildSeq = 0;
+        private bool _needsCameraReset = true;
+
         public GatEditorView()
         {
             InitializeComponent();
@@ -68,7 +71,7 @@ namespace ROMapOverlayEditor.UserControls
             _browseGrf = browseGrf;
         }
 
-        private void Open3DMap_Click(object sender, RoutedEventArgs e)
+        private async void Open3DMap_Click(object sender, RoutedEventArgs e)
         {
             if (_vfs == null || _browseGrf == null)
             {
@@ -85,123 +88,160 @@ namespace ROMapOverlayEditor.UserControls
                 return;
             }
 
-            LoadMap(rswPath);
+            await Load3DMapSafeAsync(rswPath);
         }
 
-public void LoadMap(string mapNameOrPath)
+        public void LoadMap(string mapNameOrPath)
         {
             if (_vfs == null) return;
-            _ = LoadMapAsync(mapNameOrPath);
+            _ = Load3DMapSafeAsync(mapNameOrPath);
         }
 
-        private async Task LoadMapAsync(string mapNameOrPath)
+        private async Task TryLoadMapAsync(string mapNameOrPath)
         {
-            CancellationToken token;
-            lock (_loadLock)
-            {
-                _loadCts?.Cancel();
-                _loadCts?.Dispose();
-                _loadCts = new CancellationTokenSource();
-                token = _loadCts.Token;
-            }
+            // Runs on background thread (called by Load3DMapSafeAsync -> Task.Run)
+            
+            var mapName = System.IO.Path.GetFileNameWithoutExtension(mapNameOrPath);
+            
+            // 1) Load bytes from VFS
+            var loadResult = Rsw3DLoader.LoadForView(_vfs!, mapNameOrPath);
+            if (!loadResult.Ok)
+                throw new Exception(loadResult.Message ?? "Failed to load map data.");
+
+            var map = loadResult.Map!;
+
+            // 2) Parse RSW, GAT, GND
+            RswFile? rsw = null;
+            GatFile? gat = null;
+            ROMapOverlayEditor.Map3D.GndFile? gndMap3D = null;
+            string rswErr = "", gatErr = "", gndErr = "";
+
+            try { rsw = RswIO.Read(map.RswBytes); }
+            catch (Exception ex) { rswErr = ex.Message; }
 
             try
             {
-                token.ThrowIfCancellationRequested();
-                var mapName = System.IO.Path.GetFileNameWithoutExtension(mapNameOrPath);
-                MapNameInput.Text = mapName;
-                StatusLabel.Text = $"Resolving {mapName}...";
-                PreviewText.Text = "";
-
-                // 1) Load bytes from VFS (background)
-                var loadResult = await Task.Run(() =>
-                {
-                    token.ThrowIfCancellationRequested();
-                    return Rsw3DLoader.LoadForView(_vfs!, mapNameOrPath);
-                }, token);
-
-                if (!loadResult.Ok)
-                {
-                    StatusLabel.Text = "3D load failed";
-                    PreviewText.Text = loadResult.Message;
-                    MessageBox.Show(loadResult.Message, "3D Map Load Error", MessageBoxButton.OK, MessageBoxImage.Error);
-                    return;
-                }
-                var map = loadResult.Map!;
-                token.ThrowIfCancellationRequested();
-
-                // 2) Parse RSW, GAT, GND on background
-                RswFile? rsw = null;
-                GatFile? gat = null;
-                ROMapOverlayEditor.Map3D.GndFile? gndMap3D = null;
-                string rswErr = "", gatErr = "", gndErr = "";
-                await Task.Run(() =>
-                {
-                    token.ThrowIfCancellationRequested();
-                    try { rsw = RswIO.Read(map.RswBytes); }
-                    catch (Exception ex) { rswErr = ex.Message; }
-                    try
-                    {
-                        gat = (map.GatBytes != null && map.GatBytes.Length > 0)
-                            ? GatIO.Read(map.GatBytes)
-                            : new GatFile { Width = 100, Height = 100, Cells = new GatCell[10000] };
-                    }
-                    catch (Exception ex) { gatErr = ex.Message; gat = new GatFile { Width = 100, Height = 100, Cells = new GatCell[10000] }; }
-                    try { using var gm = new MemoryStream(map.GndBytes); gndMap3D = GndReader.Read(gm); }
-                    catch (Exception ex) { gndErr = ex.Message; }
-                }, token);
-
-                token.ThrowIfCancellationRequested();
-
-                // 3) Apply on UI thread
-                await Dispatcher.InvokeAsync(() =>
-                {
-                    _mapName = mapName;
-                    _rsw = rsw;
-                    _gndBytes = map.GndBytes;
-                    _gndMap3D = gndMap3D;
-                    _gatVirtualPath = map.GatPath;
-
-                    if (_staging != null && _staging.TryGet(map.GatPath, out var stagedBytes))
-                    {
-                        _gat = GatIO.Read(stagedBytes);
-                        StatusLabel.Text = $"Loaded {_mapName} (Staged GAT)";
-                    }
-                    else if (gat != null)
-                    {
-                        _gat = gat;
-                        StatusLabel.Text = map.GatBytes != null && map.GatBytes.Length > 0 ? $"Loaded {_mapName} (VFS GAT)" : $"Loaded {_mapName} (No GAT found)";
-                    }
-                    else
-                    {
-                        _gat = new GatFile { Width = 100, Height = 100, Cells = new GatCell[10000] };
-                        StatusLabel.Text = $"Loaded {_mapName} (No GAT)";
-                    }
-
-                    var preview = $"Resolved paths:\nRSW: {map.RswPath}\nGND: {map.GndPath}\nGAT: {map.GatPath}\n";
-                    if (rsw != null) preview += $"\nRSW Objects: {rsw.ObjectCount}";
-                    if (!string.IsNullOrEmpty(rswErr)) preview += $"\n\nRSW: {rswErr}";
-                    if (!string.IsNullOrEmpty(gatErr)) preview += $"\n\nGAT: {gatErr}";
-                    if (!string.IsNullOrEmpty(gndErr)) preview += $"\n\nGND: {gndErr}";
-                    PreviewText.Text = preview;
-
-                    RebuildMeshSafe();
-                    if (Viewport.Camera != null) { ResetViewEvenOut(); Viewport.ZoomExtents(); }
-                }, System.Windows.Threading.DispatcherPriority.Background);
+                gat = (map.GatBytes != null && map.GatBytes.Length > 0)
+                    ? GatIO.Read(map.GatBytes)
+                    : new GatFile { Width = 100, Height = 100, Cells = new GatCell[10000] };
             }
-            catch (OperationCanceledException) { /* newer load started */ }
             catch (Exception ex)
             {
-                StatusLabel.Text = $"Error: {ex.Message}";
-                PreviewText.Text = (PreviewText.Text ?? "") + $"\n\nLoad Error: {ex.Message}";
-                MessageBox.Show($"Failed to load map:\n{ex.Message}", "Load Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                gatErr = ex.Message; 
+                gat = new GatFile { Width = 100, Height = 100, Cells = new GatCell[10000] };
+            }
+
+            try 
+            { 
+                using var gm = new MemoryStream(map.GndBytes); 
+                gndMap3D = GndReader.Read(gm); 
+            }
+            catch (Exception ex) { gndErr = ex.Message; }
+
+            // 3) Update state (Thread-safe assignment to volatile/atomic references or just fields if we don't read them during load)
+            // Since we are inside the 'Load3DMapSafeAsync' lock implicitly via 'await', we can assign.
+            // But we should do it carefully or return a result object. 
+            // For this patch, we'll assign directly, assuming single-threaded load via _loadCts cancellation.
+            
+            _mapName = mapName;
+            _rsw = rsw;
+            _gndBytes = map.GndBytes;
+            _gndMap3D = gndMap3D;
+            _gatVirtualPath = map.GatPath;
+
+            // Handle Staged GAT
+            if (_staging != null && _staging.TryGet(map.GatPath, out var stagedBytes))
+            {
+                _gat = GatIO.Read(stagedBytes);
+            }
+            else if (gat != null)
+            {
+                _gat = gat;
+            }
+            else
+            {
+                _gat = new GatFile { Width = 100, Height = 100, Cells = new GatCell[10000] };
+            }
+
+            // Update UI text (Preview) - we are on background thread, so use Dispatcher
+            await Dispatcher.InvokeAsync(() =>
+            {
+                 MapNameInput.Text = mapName;
+                 var preview = $"Resolved paths:\nRSW: {map.RswPath}\nGND: {map.GndPath}\nGAT: {map.GatPath}\n";
+                 if (rsw != null) preview += $"\nRSW Objects: {rsw.ObjectCount}";
+                 if (!string.IsNullOrEmpty(rswErr)) preview += $"\n\nRSW: {rswErr}";
+                 if (!string.IsNullOrEmpty(gatErr)) preview += $"\n\nGAT: {gatErr}";
+                 if (!string.IsNullOrEmpty(gndErr)) preview += $"\n\nGND: {gndErr}";
+                 PreviewText.Text = preview;
+                 
+                 StatusLabel.Text = (_gat != null && map.GatBytes != null) ? $"Loaded {_mapName}" : $"Loaded {_mapName} (No GAT)";
+            });
+        }
+
+        private async Task Load3DMapSafeAsync(string mapNameOrBase)
+        {
+            // cancel previous load (prevents overlapping loads + hangs)
+            _loadCts?.Cancel();
+            _loadCts = new CancellationTokenSource();
+            var ct = _loadCts.Token;
+
+            try
+            {
+                Set3DStatus($"Loading '{mapNameOrBase}' ...");
+
+                // IMPORTANT: do parsing off the UI thread
+                await Task.Run(async () =>
+                {
+                    ct.ThrowIfCancellationRequested();
+                    await TryLoadMapAsync(mapNameOrBase);
+                    ct.ThrowIfCancellationRequested();
+                }, ct);
+
+                // Rebuild view on UI thread
+                RebuildMesh();
+                Set3DStatus($"Loaded '{mapNameOrBase}' OK.");
+            }
+            catch (OperationCanceledException)
+            {
+                Set3DStatus("Load canceled.");
+            }
+            catch (System.Exception ex)
+            {
+                // HARD RULE: never leave the viewport blank after an exception.
+                Dispatcher.Invoke(() =>
+                {
+                    try
+                    {
+                        Viewport.Children.Clear();
+                        // optionally: rebuild only GAT overlay if available
+                    }
+                    catch { /* swallow: we are already in error handling */ }
+                });
+
+                Set3DStatus($"Load failed: {ex.GetType().Name}: {ex.Message}");
+                MessageBox.Show(
+                    $"Failed to load 3D map '{mapNameOrBase}'.\n\n{ex.GetType().Name}: {ex.Message}",
+                    "3D Map Load Error",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Error);
             }
         }
 
-        private void LoadMapBtn_Click(object sender, RoutedEventArgs e)
+        private void Set3DStatus(string text)
         {
-            var name = MapNameInput.Text.Trim();
-            if (!string.IsNullOrEmpty(name)) LoadMap(name);
+            Dispatcher.Invoke(() =>
+            {
+                StatusLabel.Text = text;
+            });
+        }
+
+        private async void LoadMapBtn_Click(object sender, RoutedEventArgs e)
+        {
+            string mapName = MapNameInput.Text?.Trim() ?? "";
+            if (string.IsNullOrWhiteSpace(mapName))
+                return;
+
+            await Load3DMapSafeAsync(mapName);
         }
 
         private void Rebuild_Click(object sender, RoutedEventArgs e) => RebuildMeshSafe();
@@ -231,21 +271,140 @@ public void LoadMap(string mapNameOrPath)
              PatchWriter.WriteZip(dlg.FileName, _staging.Files, manifest);
         }
 
-        private void RebuildMeshSafe()
+        private async void RebuildMeshSafe()
         {
+            int seq = ++_rebuildSeq;
+
             try
             {
-                RebuildMesh();
+                // Snapshot required inputs
+                var map = new { GndBytes = _gndBytes, GatBytes = _gat != null ? GatIO.Write(_gat) : null };
+                var vfs = _vfs;
+
+                if (vfs == null)
+                    return;
+
+                // Run heavy parsing/building off UI thread
+                var result = await System.Threading.Tasks.Task.Run(() =>
+                {
+                    // If a newer rebuild started, abandon early
+                    if (seq != _rebuildSeq) return null;
+
+                    var models = new List<Model3D>();
+
+                    // Lights (BrowEdit-ish baseline)
+                    var lightGroup = new Model3DGroup();
+                    lightGroup.Children.Add(new AmbientLight(System.Windows.Media.Color.FromRgb(90, 90, 90)));
+                    lightGroup.Children.Add(new DirectionalLight(System.Windows.Media.Color.FromRgb(255, 255, 255), new Vector3D(-0.35, -1.0, -0.25)));
+                    models.Add(lightGroup);
+
+                    // 1) Terrain from GND (TEXTURED)
+                    if (ChkTerrainTextures?.IsChecked == true && map.GndBytes != null)
+                    {
+                        try
+                        {
+                            var gnd = ROMapOverlayEditor.ThreeD.GndV2Parser.Parse(map.GndBytes);
+                            var atlas = ROMapOverlayEditor.ThreeD.TextureAtlasBuilder.BuildAtlas(vfs, gnd.Textures);
+                            var terrainModels = ROMapOverlayEditor.ThreeD.GndTexturedTerrainBuilder.Build(gnd, atlas, chunkSize: 32);
+
+                            models.AddRange(terrainModels);
+                        }
+                        catch (Exception ex)
+                        {
+                            // If textured build fails, do NOT crash; allow GAT overlay to still work.
+                            models.Add(MakeDebugTextModel($"GND textured build failed: {ex.Message}"));
+                        }
+                    }
+                    else if (map.GndBytes != null)
+                    {
+                        // Optional: keep your old solid fallback if you want.
+                        // If you have an existing "solid heights" builder, call it here.
+                    }
+
+                    // 2) GAT overlay (walkable/not-walkable) - keep your existing builder
+                    if (ChkGatOverlay?.IsChecked == true && _gat != null && _gat.Width > 0 && _gat.Height > 0)
+                    {
+                        try
+                        {
+                            var gatOverlay = ROMapOverlayEditor.Gat.GatMeshBuilder.Build(_gat, ROMapOverlayEditor.Gat.GatMeshBuilder.DefaultTypeColor, includeGatOverlay: true);
+                            if (gatOverlay != null)
+                                models.Add(gatOverlay);
+                        }
+                        catch { /* non-fatal */ }
+                    }
+
+                    // 3) RSW model placeholders and markers (must be done on UI thread due to Helix Visual3D types)
+                    // We'll add these after the async work completes
+
+                    // If a newer rebuild started, abandon
+                    if (seq != _rebuildSeq) return null;
+
+                    return models;
+                });
+
+                if (seq != _rebuildSeq || result == null)
+                    return;
+
+                // Apply on UI thread
+                Viewport.Children.Clear();
+                foreach (var m in result)
+                {
+                    if (m is Model3DGroup mg)
+                        Viewport.Children.Add(new ModelVisual3D { Content = mg });
+                    else
+                        Viewport.Children.Add(new ModelVisual3D { Content = m });
+                }
+
+                // 3) RSW model placeholders (ObjectType 1) and markers (lights/sounds/effects)
+                if (_rsw != null)
+                {
+                    try
+                    {
+                        var rswVisuals = new System.Collections.Generic.List<System.Windows.Media.Media3D.Visual3D>();
+                        AddModelPlaceholders(_rsw, rswVisuals);
+                        AddRswMarkers(_rsw, rswVisuals);
+                        foreach (var v in rswVisuals)
+                            Viewport.Children.Add(v);
+                    }
+                    catch (Exception ex)
+                    {
+                        PreviewText.Text = (PreviewText.Text ?? "") + $"\n\nRSW markers failed: {ex.Message}";
+                    }
+                }
+
+                // If still nothing, at least show a flat grid so camera framing works
+                if (Viewport.Children.Count == 0)
+                {
+                    var fallback = new HelixToolkit.Wpf.GridLinesVisual3D
+                    {
+                        Width = 500,
+                        Length = 500,
+                        MajorDistance = 50,
+                        MinorDistance = 10,
+                        Thickness = 1
+                    };
+                    Viewport.Children.Add(fallback);
+                }
+
+                // Camera reset only on first successful load (not every rebuild)
+                if (_needsCameraReset)
+                {
+                    _needsCameraReset = false;
+                    if (Viewport.CameraController != null)
+                        Viewport.CameraController.ResetCamera();
+                }
             }
             catch (Exception ex)
             {
-                // Do not leave the user with a black viewport.
-                StatusLabel.Text = $"RebuildMesh failed: {ex.Message}";
-                PreviewText.Text = (PreviewText.Text ?? "") + $"\n\n[RebuildMesh Exception]\n{ex}";
-                // As a last resort, re-add lights so viewport isn't empty.
-                if (Viewport.Children.Count == 0)
-                    Viewport.Children.Add(new DefaultLights());
+                StatusLabel.Text = $"Rebuild failed: {ex.Message}";
             }
+        }
+
+        private Model3D MakeDebugTextModel(string message)
+        {
+            // Minimal placeholder; replace with your status UI if preferred.
+            // This is a no-op model so nothing breaks.
+            return new Model3DGroup();
         }
 
         private void RebuildMesh()

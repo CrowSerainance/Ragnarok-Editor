@@ -4,7 +4,7 @@ using System.Linq;
 
 namespace ROMapOverlayEditor.Vfs
 {
-    public sealed class CompositeVfs
+    public sealed class CompositeVfs : IVfs
     {
         private readonly List<IAssetSource> _sources = new();
 
