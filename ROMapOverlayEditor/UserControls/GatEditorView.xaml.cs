@@ -1,3 +1,16 @@
+// ============================================================================
+// GatEditorView.xaml.cs - FIXED VERSION with Paint GAT Toggle
+// ============================================================================
+// TARGET: F:\2026 PROJECT\ROMapOverlayEditor\ROMapOverlayEditor\UserControls\GatEditorView.xaml.cs
+// ACTION: REPLACE ENTIRE FILE
+// ============================================================================
+// CHANGES:
+//   1. Paint GAT Cells is now a toggle button (PaintModeToggle)
+//   2. Paint controls enable/disable based on toggle state
+//   3. GAT overlay auto-enables when paint mode is active
+//   4. Removed old RadioButton tool mode selection
+// ============================================================================
+
 using System;
 using System.IO;
 using System.Linq;
@@ -5,6 +18,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;  // For ToggleButton
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Media3D;
@@ -22,6 +36,10 @@ namespace ROMapOverlayEditor.UserControls
 {
     public partial class GatEditorView : UserControl
     {
+        // ====================================================================
+        // FIELDS
+        // ====================================================================
+        
         private CompositeVfs? _vfs;
         private EditStaging? _staging;
         
@@ -42,25 +60,104 @@ namespace ROMapOverlayEditor.UserControls
 
         private int _rebuildSeq = 0;
         private bool _needsCameraReset = true;
+        
+        // NEW: Paint mode state (controlled by toggle button)
+        private bool _isPaintModeActive = false;
 
+        // ====================================================================
+        // CONSTRUCTOR
+        // ====================================================================
+        
         public GatEditorView()
         {
             InitializeComponent();
             _inputRouter = new EditorInputRouter(_cam, ApplyCameraToRenderer);
             
+            // Wire up viewport events
             Viewport.MouseDown += Viewport_MouseDown;
             Viewport.MouseUp += Viewport_MouseUp;
             Viewport.MouseMove += Viewport_MouseMove;
             Viewport.MouseWheel += Viewport_MouseWheel;
             
+            // Populate GAT cell type dropdown
             TypeCombo.ItemsSource = Enum.GetValues(typeof(GatCellType)).Cast<GatCellType>();
             TypeCombo.SelectedItem = GatCellType.NotWalkable;
 
-            RadiusSlider.ValueChanged += (_, _) => RadiusLabel.Text = $"Radius: {(int)RadiusSlider.Value}";
+            // Wire up radius slider label update
+            RadiusSlider.ValueChanged += (_, _) => RadiusLabel.Text = $"Brush Radius: {(int)RadiusSlider.Value}";
             
             PreviewText.Text = "Enter a map name and click Load to see resolved paths and header info.";
         }
 
+        // ====================================================================
+        // PAINT MODE TOGGLE HANDLERS (NEW)
+        // ====================================================================
+        
+        /// <summary>
+        /// Called when the Paint Mode toggle button is checked (enabled).
+        /// Enables paint controls and shows GAT overlay.
+        /// </summary>
+        private void PaintModeToggle_Checked(object sender, RoutedEventArgs e)
+        {
+            _isPaintModeActive = true;
+            
+            // Enable paint controls panel
+            if (PaintControlsPanel != null)
+            {
+                PaintControlsPanel.IsEnabled = true;
+                PaintControlsPanel.Opacity = 1.0;
+            }
+            
+            // Update toggle button text
+            if (PaintModeToggle != null)
+            {
+                PaintModeToggle.Content = "🎨 Paint Mode ACTIVE";
+            }
+            
+            // Auto-enable GAT overlay when painting (so user can see what they're painting)
+            if (ChkGatOverlay != null && ChkGatOverlay.IsChecked != true)
+            {
+                ChkGatOverlay.IsChecked = true;
+                // This will trigger ViewOptionChanged which rebuilds the mesh
+            }
+            
+            // Update editor state for compatibility with existing code
+            EditorState.Current.ActiveTool = EditorTool.PaintGat_Walkable;
+            
+            PickInfo.Text = "Paint mode enabled. Left-click on terrain to paint cells.";
+        }
+        
+        /// <summary>
+        /// Called when the Paint Mode toggle button is unchecked (disabled).
+        /// Disables paint controls.
+        /// </summary>
+        private void PaintModeToggle_Unchecked(object sender, RoutedEventArgs e)
+        {
+            _isPaintModeActive = false;
+            
+            // Disable paint controls panel
+            if (PaintControlsPanel != null)
+            {
+                PaintControlsPanel.IsEnabled = false;
+                PaintControlsPanel.Opacity = 0.5;
+            }
+            
+            // Update toggle button text
+            if (PaintModeToggle != null)
+            {
+                PaintModeToggle.Content = "🎨 Enable Paint Mode";
+            }
+            
+            // Update editor state
+            EditorState.Current.ActiveTool = EditorTool.Select;
+            
+            PickInfo.Text = "Paint mode disabled. Click to select cells.";
+        }
+
+        // ====================================================================
+        // INITIALIZATION
+        // ====================================================================
+        
         // Delegate to open GRF browser from MainWindow
         private Func<string?>? _browseGrf;
 
@@ -71,6 +168,10 @@ namespace ROMapOverlayEditor.UserControls
             _browseGrf = browseGrf;
         }
 
+        // ====================================================================
+        // MAP LOADING
+        // ====================================================================
+        
         private async void Open3DMap_Click(object sender, RoutedEventArgs e)
         {
             if (_vfs == null || _browseGrf == null)
@@ -99,8 +200,6 @@ namespace ROMapOverlayEditor.UserControls
 
         private async Task TryLoadMapAsync(string mapNameOrPath)
         {
-            // Runs on background thread (called by Load3DMapSafeAsync -> Task.Run)
-            
             var mapName = System.IO.Path.GetFileNameWithoutExtension(mapNameOrPath);
             
             // 1) Load bytes from VFS
@@ -138,11 +237,7 @@ namespace ROMapOverlayEditor.UserControls
             }
             catch (Exception ex) { gndErr = ex.Message; }
 
-            // 3) Update state (Thread-safe assignment to volatile/atomic references or just fields if we don't read them during load)
-            // Since we are inside the 'Load3DMapSafeAsync' lock implicitly via 'await', we can assign.
-            // But we should do it carefully or return a result object. 
-            // For this patch, we'll assign directly, assuming single-threaded load via _loadCts cancellation.
-            
+            // 3) Update state
             _mapName = mapName;
             _rsw = rsw;
             _gndBytes = map.GndBytes;
@@ -163,7 +258,7 @@ namespace ROMapOverlayEditor.UserControls
                 _gat = new GatFile { Width = 100, Height = 100, Cells = new GatCell[10000] };
             }
 
-            // Update UI text (Preview) - we are on background thread, so use Dispatcher
+            // Update UI text (Preview)
             await Dispatcher.InvokeAsync(() =>
             {
                  MapNameInput.Text = mapName;
@@ -171,7 +266,7 @@ namespace ROMapOverlayEditor.UserControls
                  if (rsw != null) preview += $"\nRSW Objects: {rsw.ObjectCount}";
                  if (!string.IsNullOrEmpty(rswErr)) preview += $"\n\nRSW: {rswErr}";
                  if (!string.IsNullOrEmpty(gatErr)) preview += $"\n\nGAT: {gatErr}";
-                 if (!string.IsNullOrEmpty(gndErr)) preview += $"\n\nGND: {gndErr}";
+                 if (!string.IsNullOrEmpty(gndErr)) preview += $"\n\nGND parse failed: {gndErr}";
                  PreviewText.Text = preview;
                  
                  StatusLabel.Text = (_gat != null && map.GatBytes != null) ? $"Loaded {_mapName}" : $"Loaded {_mapName} (No GAT)";
@@ -180,7 +275,6 @@ namespace ROMapOverlayEditor.UserControls
 
         private async Task Load3DMapSafeAsync(string mapNameOrBase)
         {
-            // cancel previous load (prevents overlapping loads + hangs)
             _loadCts?.Cancel();
             _loadCts = new CancellationTokenSource();
             var ct = _loadCts.Token;
@@ -189,7 +283,6 @@ namespace ROMapOverlayEditor.UserControls
             {
                 Set3DStatus($"Loading '{mapNameOrBase}' ...");
 
-                // IMPORTANT: do parsing off the UI thread
                 await Task.Run(async () =>
                 {
                     ct.ThrowIfCancellationRequested();
@@ -197,7 +290,7 @@ namespace ROMapOverlayEditor.UserControls
                     ct.ThrowIfCancellationRequested();
                 }, ct);
 
-                // Rebuild view on UI thread
+                _needsCameraReset = true;
                 RebuildMesh();
                 Set3DStatus($"Loaded '{mapNameOrBase}' OK.");
             }
@@ -207,15 +300,10 @@ namespace ROMapOverlayEditor.UserControls
             }
             catch (System.Exception ex)
             {
-                // HARD RULE: never leave the viewport blank after an exception.
                 Dispatcher.Invoke(() =>
                 {
-                    try
-                    {
-                        Viewport.Children.Clear();
-                        // optionally: rebuild only GAT overlay if available
-                    }
-                    catch { /* swallow: we are already in error handling */ }
+                    try { Viewport.Children.Clear(); }
+                    catch { }
                 });
 
                 Set3DStatus($"Load failed: {ex.GetType().Name}: {ex.Message}");
@@ -229,47 +317,21 @@ namespace ROMapOverlayEditor.UserControls
 
         private void Set3DStatus(string text)
         {
-            Dispatcher.Invoke(() =>
-            {
-                StatusLabel.Text = text;
-            });
+            Dispatcher.Invoke(() => { StatusLabel.Text = text; });
         }
 
         private async void LoadMapBtn_Click(object sender, RoutedEventArgs e)
         {
             string mapName = MapNameInput.Text?.Trim() ?? "";
-            if (string.IsNullOrWhiteSpace(mapName))
-                return;
-
+            if (string.IsNullOrWhiteSpace(mapName)) return;
             await Load3DMapSafeAsync(mapName);
         }
 
+        // ====================================================================
+        // MESH BUILDING
+        // ====================================================================
+        
         private void Rebuild_Click(object sender, RoutedEventArgs e) => RebuildMeshSafe();
-
-        private void SaveToStaging_Click(object sender, RoutedEventArgs e)
-        {
-            if (_staging == null) return;
-            var bytes = GatIO.Write(_gat);
-            _staging.Put(_gatVirtualPath, bytes);
-            StatusLabel.Text = "Saved to Staging.";
-        }
-
-        private void ExportZip_Click(object sender, RoutedEventArgs e)
-        {
-             if (_staging == null) return;
-             // Ensure current state is staged
-             SaveToStaging_Click(sender, e);
-
-             var dlg = new Microsoft.Win32.SaveFileDialog
-             {
-                 Filter = "ZIP Patch (*.zip)|*.zip",
-                 FileName = $"{_mapName}_patch.zip"
-             };
-             if (dlg.ShowDialog() != true) return;
-
-             var manifest = $"ROMapOverlayEditor Patch\nMap: {_mapName}\nGenerated: {DateTime.Now}\n";
-             PatchWriter.WriteZip(dlg.FileName, _staging.Files, manifest);
-        }
 
         private async void RebuildMeshSafe()
         {
@@ -277,22 +339,18 @@ namespace ROMapOverlayEditor.UserControls
 
             try
             {
-                // Snapshot required inputs
                 var map = new { GndBytes = _gndBytes, GatBytes = _gat != null ? GatIO.Write(_gat) : null };
                 var vfs = _vfs;
 
-                if (vfs == null)
-                    return;
+                if (vfs == null) return;
 
-                // Run heavy parsing/building off UI thread
                 var result = await System.Threading.Tasks.Task.Run(() =>
                 {
-                    // If a newer rebuild started, abandon early
                     if (seq != _rebuildSeq) return null;
 
                     var models = new List<Model3D>();
 
-                    // Lights (BrowEdit-ish baseline)
+                    // Lights
                     var lightGroup = new Model3DGroup();
                     lightGroup.Children.Add(new AmbientLight(System.Windows.Media.Color.FromRgb(90, 90, 90)));
                     lightGroup.Children.Add(new DirectionalLight(System.Windows.Media.Color.FromRgb(255, 255, 255), new Vector3D(-0.35, -1.0, -0.25)));
@@ -306,22 +364,15 @@ namespace ROMapOverlayEditor.UserControls
                             var gnd = ROMapOverlayEditor.ThreeD.GndV2Parser.Parse(map.GndBytes);
                             var atlas = ROMapOverlayEditor.ThreeD.TextureAtlasBuilder.BuildAtlas(vfs, gnd.Textures);
                             var terrainModels = ROMapOverlayEditor.ThreeD.GndTexturedTerrainBuilder.Build(gnd, atlas, chunkSize: 32);
-
                             models.AddRange(terrainModels);
                         }
                         catch (Exception ex)
                         {
-                            // If textured build fails, do NOT crash; allow GAT overlay to still work.
                             models.Add(MakeDebugTextModel($"GND textured build failed: {ex.Message}"));
                         }
                     }
-                    else if (map.GndBytes != null)
-                    {
-                        // Optional: keep your old solid fallback if you want.
-                        // If you have an existing "solid heights" builder, call it here.
-                    }
 
-                    // 2) GAT overlay (walkable/not-walkable) - keep your existing builder
+                    // 2) GAT overlay
                     if (ChkGatOverlay?.IsChecked == true && _gat != null && _gat.Width > 0 && _gat.Height > 0)
                     {
                         try
@@ -330,22 +381,15 @@ namespace ROMapOverlayEditor.UserControls
                             if (gatOverlay != null)
                                 models.Add(gatOverlay);
                         }
-                        catch { /* non-fatal */ }
+                        catch { }
                     }
 
-                    // 3) RSW model placeholders and markers (must be done on UI thread due to Helix Visual3D types)
-                    // We'll add these after the async work completes
-
-                    // If a newer rebuild started, abandon
                     if (seq != _rebuildSeq) return null;
-
                     return models;
                 });
 
-                if (seq != _rebuildSeq || result == null)
-                    return;
+                if (seq != _rebuildSeq || result == null) return;
 
-                // Apply on UI thread
                 Viewport.Children.Clear();
                 foreach (var m in result)
                 {
@@ -355,7 +399,7 @@ namespace ROMapOverlayEditor.UserControls
                         Viewport.Children.Add(new ModelVisual3D { Content = m });
                 }
 
-                // 3) RSW model placeholders (ObjectType 1) and markers (lights/sounds/effects)
+                // RSW markers
                 if (_rsw != null)
                 {
                     try
@@ -372,21 +416,17 @@ namespace ROMapOverlayEditor.UserControls
                     }
                 }
 
-                // If still nothing, at least show a flat grid so camera framing works
+                // Fallback grid
                 if (Viewport.Children.Count == 0)
                 {
                     var fallback = new HelixToolkit.Wpf.GridLinesVisual3D
                     {
-                        Width = 500,
-                        Length = 500,
-                        MajorDistance = 50,
-                        MinorDistance = 10,
-                        Thickness = 1
+                        Width = 500, Length = 500, MajorDistance = 50, MinorDistance = 10, Thickness = 1
                     };
                     Viewport.Children.Add(fallback);
                 }
 
-                // Camera reset only on first successful load (not every rebuild)
+                // Camera reset only on first load
                 if (_needsCameraReset)
                 {
                     _needsCameraReset = false;
@@ -402,21 +442,16 @@ namespace ROMapOverlayEditor.UserControls
 
         private Model3D MakeDebugTextModel(string message)
         {
-            // Minimal placeholder; replace with your status UI if preferred.
-            // This is a no-op model so nothing breaks.
             return new Model3DGroup();
         }
 
         private void RebuildMesh()
         {
-            // Build models FIRST, then swap into viewport. This prevents “clear -> nothing -> black”.
             var newChildren = new System.Collections.Generic.List<System.Windows.Media.Media3D.Visual3D>();
-
             newChildren.Add(new DefaultLights());
-
             bool addedSomething = false;
 
-            // 1) Terrain (GND textures or solid fallback) if enabled
+            // 1) Terrain
             if (ChkTerrainTextures?.IsChecked == true && (_gndMap3D != null || _gndBytes != null))
             {
                 bool terrainDone = false;
@@ -431,7 +466,7 @@ namespace ROMapOverlayEditor.UserControls
                         addedSomething = true;
                         terrainDone = true;
                     }
-                    catch { /* fall through to GndParser path */ }
+                    catch { }
                 }
 
                 if (!terrainDone && _gndBytes != null && _gndBytes.Length > 0)
@@ -448,16 +483,11 @@ namespace ROMapOverlayEditor.UserControls
                 }
             }
 
-            // 2) GAT overlay mesh (collision) — keep as optional overlay
-            // NOTE: Your existing GatMeshBuilder currently generates a “terrain-like” mesh from GAT heights.
-            // That’s okay as an overlay visualization, but not the main terrain.
-            // We’ll still render it if ShowGatOverlay is on.
+            // 2) GAT overlay
             if (ChkGatOverlay?.IsChecked == true)
             {
-                // Ensure GAT dimensions are sane; fallback if not.
                 if (_gat == null || _gat.Width <= 0 || _gat.Height <= 0 || _gat.Cells == null || _gat.Cells.Length == 0)
                 {
-                    // fallback grid
                     _gat = new GatFile { Width = 100, Height = 100, Cells = new GatCell[100 * 100] };
                 }
 
@@ -466,7 +496,7 @@ namespace ROMapOverlayEditor.UserControls
                 addedSomething = true;
             }
 
-            // 3) RSW model placeholders (ObjectType 1) and markers (lights/sounds/effects)
+            // 3) RSW markers
             if (_rsw != null)
             {
                 try
@@ -480,62 +510,36 @@ namespace ROMapOverlayEditor.UserControls
                 }
             }
 
-            // If still nothing, at least show a flat grid so camera framing works
+            // Fallback
             if (!addedSomething)
             {
                 var fallback = new HelixToolkit.Wpf.GridLinesVisual3D
                 {
-                    Width = 500,
-                    Length = 500,
-                    MajorDistance = 50,
-                    MinorDistance = 10,
-                    Thickness = 1
+                    Width = 500, Length = 500, MajorDistance = 50, MinorDistance = 10, Thickness = 1
                 };
                 newChildren.Add(fallback);
             }
 
-            // Swap children atomically
             Viewport.Children.Clear();
             foreach (var v in newChildren)
                 Viewport.Children.Add(v);
 
-            // Camera: always reset to a sane “BrowEdit-like” isometric-ish view and frame extents
-            // But only if we want to reset view on rebuild? 
-            // The patch says: "Camera: always reset to a sane ... view"
-            // Be careful not to reset user's view while painting.
-            // However, the patch explicitly includes this line. I will leave it, 
-            // but maybe check if it's the initial load? 
-            // The prompt says "REPLACE ENTIRE METHOD with ...". I will follow strictly.
-            // Wait, if I am painting, I call RebuildMesh. If it resets camera every paint, that's annoying.
-            // But the patch says "REPLACE ENTIRE METHOD".
-            // I'll stick to the patch. If it's annoying, user will complain.
-            // Actually, `RebuildMesh` is called on Paint?
-            // Yes, `Viewport_MouseUp` calls `RebuildMesh`. 
-            // This is bad if painting resets camera.
-            // But I am an agent following "APPLY THESE FILES...".
-            // I'll remove the camera reset from RebuildMesh if I can justify it, or just wrap it.
-            // The patch instructions say: "Resetting camera to a sane default that always frames the terrain".
-            // Maybe this is intended for LoadMap.
-            // I'll comment it out inside `RebuildMesh` and ensure `LoadMap` calls it, or keep it if I must.
-            // Actually, the provided patch code HAS it. 
-            // "_cam.ResetDefault(); ApplyCameraToRenderer(); Viewport.ZoomExtents();"
-            // I will comment it out with a note to myself, OR assume the user wants it fixed.
-            // "Fixes blank/black 3D view ... Resetting camera to a sane default".
-            // I will include it but maybe I should check if it's a "Reload"?
-            // I'll use the provided code.
-            
-            // Wait, `RebuildMeshSafe` calls `RebuildMesh`.
-            // The patch code implementation of `RebuildMesh` ends with `_cam.ResetDefault()...`.
-            
-            // I'll blindly apply it.
-             _cam.ResetDefault();
-             ApplyCameraToRenderer();
-             Viewport.ZoomExtents();
+            // Only reset camera on initial load
+            if (_needsCameraReset)
+            {
+                _needsCameraReset = false;
+                _cam.ResetDefault();
+                ApplyCameraToRenderer();
+                Viewport.ZoomExtents();
+            }
         }
 
+        // ====================================================================
+        // RSW MARKERS
+        // ====================================================================
+        
         private void AddModelPlaceholders(RswFile rsw, System.Collections.Generic.List<System.Windows.Media.Media3D.Visual3D> target)
         {
-            // Gold boxes for model objects (ObjectType 1); proves RSW object list is correct.
             double scale = 1.0 / 10.0;
             foreach (var o in rsw.Objects)
             {
@@ -555,11 +559,11 @@ namespace ROMapOverlayEditor.UserControls
 
         private void AddRswMarkers(RswFile rsw, System.Collections.Generic.List<System.Windows.Media.Media3D.Visual3D> target)
         {
-            double scale = 0.5; // World (2) -> GAT (1) approx
+            double scale = 0.5;
 
             foreach (var obj in rsw.Objects)
             {
-                if (obj.ObjectType == 1) continue; // models handled by AddModelPlaceholders
+                if (obj.ObjectType == 1) continue;
 
                 var mesh = new MeshBuilder();
                 Color c = Colors.White;
@@ -588,7 +592,6 @@ namespace ROMapOverlayEditor.UserControls
                     var geom = new GeometryModel3D { Geometry = mesh.ToMesh(), Material = new DiffuseMaterial(new SolidColorBrush(c)) };
                     target.Add(new ModelVisual3D { Content = geom });
                     
-                    // Label
                     if (!string.IsNullOrWhiteSpace(label))
                     {
                         var text = new BillboardTextVisual3D
@@ -599,51 +602,44 @@ namespace ROMapOverlayEditor.UserControls
                             Background = Brushes.Transparent,
                             FontSize = 10 
                         };
-                         target.Add(text);
+                        target.Add(text);
                     }
                 }
             }
         }
 
-        /// <summary>Set an isometric-style camera above the map (BrowEdit-like).</summary>
-        private void ResetViewEvenOut()
+        // ====================================================================
+        // STAGING & EXPORT
+        // ====================================================================
+        
+        private void SaveToStaging_Click(object sender, RoutedEventArgs e)
         {
-            double w = 100, h = 100;
-            if (_gndMap3D != null)
-            {
-                w = _gndMap3D.Width * _gndMap3D.TileScale;
-                h = _gndMap3D.Height * _gndMap3D.TileScale;
-            }
-            else if (_gat != null && _gat.Width > 0 && _gat.Height > 0)
-            {
-                w = _gat.Width;
-                h = _gat.Height;
-            }
-            ResetViewEvenOut(w, h);
+            if (_staging == null) return;
+            var bytes = GatIO.Write(_gat);
+            _staging.Put(_gatVirtualPath, bytes);
+            StatusLabel.Text = "Saved to Staging.";
         }
 
-        /// <summary>Set an isometric-style camera above the map (BrowEdit-like).</summary>
-        private void ResetViewEvenOut(double mapWidth, double mapHeight)
+        private void ExportZip_Click(object sender, RoutedEventArgs e)
         {
-            double cx = mapWidth * 0.5;
-            double cz = mapHeight * 0.5;
-            double height = Math.Max(mapWidth, mapHeight) * 0.75;
-            double dist = Math.Max(mapWidth, mapHeight) * 0.85;
+            if (_staging == null) return;
+            SaveToStaging_Click(sender, e);
 
-            var cam = new PerspectiveCamera
+            var dlg = new Microsoft.Win32.SaveFileDialog
             {
-                FieldOfView = 45,
-                Position = new Point3D(cx + dist, height, cz + dist),
-                LookDirection = new Vector3D(-dist, -height, -dist),
-                UpDirection = new Vector3D(0, 1, 0)
+                Filter = "ZIP Patch (*.zip)|*.zip",
+                FileName = $"{_mapName}_patch.zip"
             };
+            if (dlg.ShowDialog() != true) return;
 
-            Viewport.Camera = cam;
-
-            if (Viewport.CameraController != null)
-                Viewport.CameraController.InfiniteSpin = false;
+            var manifest = $"ROMapOverlayEditor Patch\nMap: {_mapName}\nGenerated: {DateTime.Now}\n";
+            PatchWriter.WriteZip(dlg.FileName, _staging.Files, manifest);
         }
 
+        // ====================================================================
+        // CAMERA & VIEW
+        // ====================================================================
+        
         private void ResetView_Click(object sender, RoutedEventArgs e)
         {
             if (_gndMap3D != null)
@@ -692,18 +688,10 @@ namespace ROMapOverlayEditor.UserControls
             st.ZoomSensitivity = ZoomSensSlider.Value;
         }
 
-        private void Tool_Select_Checked(object sender, RoutedEventArgs e)
-        {
-            if (ModeSelect != null && ModeSelect.IsChecked == true)
-                EditorState.Current.ActiveTool = EditorTool.Select;
-        }
-
-        private void Tool_Paint_Checked(object sender, RoutedEventArgs e)
-        {
-            if (ModePaint != null && ModePaint.IsChecked == true)
-                EditorState.Current.ActiveTool = EditorTool.PaintGat_Walkable;
-        }
-
+        // ====================================================================
+        // MOUSE INPUT (Viewport interaction)
+        // ====================================================================
+        
         private void Viewport_MouseDown(object sender, MouseButtonEventArgs e)
         {
             _inputRouter.OnMouseDown(e.GetPosition(Viewport));
@@ -715,14 +703,10 @@ namespace ROMapOverlayEditor.UserControls
             _inputRouter.OnMouseUp();
             Viewport.ReleaseMouseCapture();
             
-            // Left click: tool action (right/middle/wheel reserved for camera)
+            // Only process left-clicks (right/middle/wheel are for camera)
             if (e.ChangedButton != MouseButton.Left) return;
             
-            var t = EditorState.Current.ActiveTool;
-            bool isSelect = (t == EditorTool.Select);
-            bool isPaint = (t == EditorTool.PaintGat_Walkable || t == EditorTool.PaintGat_NotWalkable || t == EditorTool.PaintGat_Water);
-            if (!isSelect && !isPaint) return;
-
+            // Raycast to find clicked cell
             var pos = e.GetPosition(Viewport);
             var hits = Viewport3DHelper.FindHits(Viewport.Viewport, pos);
             if (hits == null || hits.Count == 0) return;
@@ -733,17 +717,20 @@ namespace ROMapOverlayEditor.UserControls
 
             if (_gat == null || !_gat.InBounds(x, y)) return;
 
-            if (isPaint)
+            // PAINT MODE: paint the cell if toggle is active
+            if (_isPaintModeActive)
             {
                 var sel = (GatCellType)(TypeCombo.SelectedItem ?? GatCellType.NotWalkable);
                 int r = (int)RadiusSlider.Value;
                 GatPainter.PaintCircle(_gat, x, y, r, sel);
                 RebuildMeshSafe();
-                PickInfo.Text = $"Cell: ({x},{y})  Set: {sel}";
+                PickInfo.Text = $"Painted cell ({x},{y}) = {sel}";
             }
             else
             {
-                PickInfo.Text = $"Selected Cell: ({x},{y})";
+                // SELECT MODE: just show cell info
+                var cell = _gat.Cells[y * _gat.Width + x];
+                PickInfo.Text = $"Selected: ({x},{y}) Type={cell.Type}";
             }
         }
 
