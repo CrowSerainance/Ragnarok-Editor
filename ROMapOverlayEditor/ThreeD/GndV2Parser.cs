@@ -66,22 +66,19 @@ namespace ROMapOverlayEditor.ThreeD
                     t.TextureIndex = br.ReadUInt16();
                     t.LightmapIndex = br.ReadUInt16();
 
-                    // file order: v1,v2,v4,v3
-                    float v1x = br.ReadSingle(); float v1y = br.ReadSingle();
-                    float v2x = br.ReadSingle(); float v2y = br.ReadSingle();
-                    float v4x = br.ReadSingle(); float v4y = br.ReadSingle();
-                    float v3x = br.ReadSingle(); float v3y = br.ReadSingle();
+                    // BrowEdit Gnd.cpp: UV stored as U1,U2,U3,U4 then V1,V2,V3,V4
+                    float u1 = br.ReadSingle(), u2 = br.ReadSingle(), u3 = br.ReadSingle(), u4 = br.ReadSingle();
+                    float v1 = br.ReadSingle(), v2 = br.ReadSingle(), v3 = br.ReadSingle(), v4 = br.ReadSingle();
+                    t.V1 = new System.Windows.Vector(u1, v1);
+                    t.V2 = new System.Windows.Vector(u2, v2);
+                    t.V3 = new System.Windows.Vector(u3, v3);
+                    t.V4 = new System.Windows.Vector(u4, v4);
 
-                    t.V1 = new System.Windows.Vector(v1x, v1y);
-                    t.V2 = new System.Windows.Vector(v2x, v2y);
-                    t.V3 = new System.Windows.Vector(v3x, v3y);
-                    t.V4 = new System.Windows.Vector(v4x, v4y);
-
-                    // color RGBA (BrowEdit stores as bytes, divides by 256 for float)
-                    t.Color[0] = br.ReadByte();
-                    t.Color[1] = br.ReadByte();
-                    t.Color[2] = br.ReadByte();
-                    t.Color[3] = br.ReadByte();
+                    // BrowEdit: COLOR IS STORED AS BGRA (Blue first!)
+                    t.Color[0] = br.ReadByte(); // B
+                    t.Color[1] = br.ReadByte(); // G
+                    t.Color[2] = br.ReadByte(); // R
+                    t.Color[3] = br.ReadByte(); // A
 
                     gnd.Tiles.Add(t);
                 }

@@ -98,3 +98,7 @@ Desktop.ini
 [Cc]overage/
 *.coverage
 *.coveragexml
+
+
+# Publish
+ROMapOverlayEditor/Publish/

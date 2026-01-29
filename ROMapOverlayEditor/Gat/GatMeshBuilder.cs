@@ -37,6 +37,7 @@ namespace ROMapOverlayEditor.Gat
 
             if (!includeGatOverlay) return group;
 
+            // RED/GREEN OVERLAY: Walkable = green, NotWalkable = red (see DefaultTypeColor).
             foreach (GatCellType t in Enum.GetValues(typeof(GatCellType)))
             {
                 var mbt = new MeshBuilder(false, false);
@@ -68,10 +69,11 @@ namespace ROMapOverlayEditor.Gat
             return group;
         }
 
+        // RED = NotWalkable, GREEN = Walkable (BrowEdit-style GAT overlay).
         public static Color DefaultTypeColor(GatCellType t) => t switch
         {
-            GatCellType.Walkable => Colors.LimeGreen,
-            GatCellType.NotWalkable => Colors.Red,
+            GatCellType.Walkable => Colors.LimeGreen,      // GREEN
+            GatCellType.NotWalkable => Colors.Red,         // RED
             GatCellType.Water => Colors.DodgerBlue,
             GatCellType.Cliff => Colors.Orange,
             _ => Colors.Gray

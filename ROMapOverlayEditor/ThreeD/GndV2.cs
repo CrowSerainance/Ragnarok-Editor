@@ -28,7 +28,8 @@ namespace ROMapOverlayEditor.ThreeD
         public Vector V2; // corner2 uv
         public Vector V3; // corner3 uv
         public Vector V4; // corner4 uv
-        public byte[] Color = new byte[4]; // RGBA
+        /// <summary>Per-tile color in BGRA order (BrowEdit: Blue first!). Color[0]=B, Color[1]=G, Color[2]=R, Color[3]=A.</summary>
+        public byte[] Color = new byte[4];
     }
 
     public sealed class GndCube
