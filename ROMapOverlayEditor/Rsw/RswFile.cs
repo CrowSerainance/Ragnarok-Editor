@@ -73,8 +73,11 @@ namespace ROMapOverlayEditor.Rsw
     public sealed class RswEffect : RswObject
     {
         public int EffectId { get; set; }
-        public float Delay { get; set; }
-        public float Param { get; set; }
+        public float Loop { get; set; }
+        public float Param1 { get; set; }
+        public float Param2 { get; set; }
+        public float Param3 { get; set; }
+        public float Param4 { get; set; }
     }
 
     public sealed class RswUnknown : RswObject { }

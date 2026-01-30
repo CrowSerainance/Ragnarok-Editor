@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using ROMapOverlayEditor.Map3D;
 using ROMapOverlayEditor.Vfs;
 
 namespace ROMapOverlayEditor.Gnd
@@ -9,14 +11,15 @@ namespace ROMapOverlayEditor.Gnd
     public sealed class VfsTextureResolver
     {
         private readonly CompositeVfs _vfs;
-        private readonly Dictionary<string, BitmapImage?> _cache = new(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, BitmapSource?> _cache = new(StringComparer.OrdinalIgnoreCase);
 
         public VfsTextureResolver(CompositeVfs vfs)
         {
             _vfs = vfs;
         }
 
-        public BitmapImage? TryLoadTexture(string textureFile)
+        /// <summary>Loads a texture (TGA, PNG, JPG, BMP). Returns BitmapSource for WPF 3D materials.</summary>
+        public BitmapSource? TryLoadTexture(string textureFile)
         {
             if (string.IsNullOrWhiteSpace(textureFile))
                 return null;
@@ -26,12 +29,13 @@ namespace ROMapOverlayEditor.Gnd
             if (_cache.TryGetValue(textureFile, out var cached))
                 return cached;
 
-            // BrowEdit loads: data/texture/{file}
-            // Try several common roots
+            // BrowEdit loads: data/texture/{file}. Try several common roots.
             string[] candidates =
             {
                 "data/texture/" + textureFile,
                 "data/texture/" + Path.GetFileName(textureFile),
+                "data/texture/" + textureFile + ".tga",
+                "data/texture/" + Path.GetFileName(textureFile) + ".tga",
                 "texture/" + textureFile,
                 textureFile,
             };
@@ -43,9 +47,13 @@ namespace ROMapOverlayEditor.Gnd
                 try
                 {
                     var bytes = _vfs.ReadAllBytes(p);
-                    var img = LoadBitmap(bytes);
-                    _cache[textureFile] = img;
-                    return img;
+                    var img = TextureLoader.BytesToBitmapSource(bytes, p);
+                    if (img != null)
+                    {
+                        if (img.CanFreeze) img.Freeze();
+                        _cache[textureFile] = img;
+                        return img;
+                    }
                 }
                 catch
                 {
@@ -55,18 +63,6 @@ namespace ROMapOverlayEditor.Gnd
 
             _cache[textureFile] = null;
             return null;
-        }
-
-        private static BitmapImage LoadBitmap(byte[] bytes)
-        {
-            using var ms = new MemoryStream(bytes);
-            var bmp = new BitmapImage();
-            bmp.BeginInit();
-            bmp.CacheOption = BitmapCacheOption.OnLoad;
-            bmp.StreamSource = ms;
-            bmp.EndInit();
-            bmp.Freeze();
-            return bmp;
         }
     }
 }

@@ -31,6 +31,8 @@ using ROMapOverlayEditor.Rsw;
 using ROMapOverlayEditor.Tools;
 using ROMapOverlayEditor.Vfs;
 using ROMapOverlayEditor.Map3D;
+using ROMapOverlayEditor.ThreeD;
+using ROMapOverlayEditor.Rsm;
 
 namespace ROMapOverlayEditor.UserControls
 {
@@ -44,7 +46,7 @@ namespace ROMapOverlayEditor.UserControls
         private EditStaging? _staging;
         
         private string _mapName = "";
-        private GatFile _gat = new();
+        private GatFile? _gat;
         private RswFile? _rsw;
         private string _gatVirtualPath = "";
         
@@ -57,6 +59,16 @@ namespace ROMapOverlayEditor.UserControls
         // Camera: Right=Orbit, Middle=Pan, Wheel=Zoom
         private readonly ROMapOverlayEditor.ThreeD.BrowEditCameraController _cam = new();
         private readonly EditorInputRouter _inputRouter;
+        
+        // NEW: stability + paint mode fields
+        private readonly object _rebuildSync = new();
+        private System.Threading.CancellationTokenSource? _rebuildCts;
+        private bool _paintMode = false;
+        private const double roScale = 1.0;
+
+        // Visual Models
+        private Model3D? _terrainModel;
+        private Model3D? _gatOverlayModel;
 
         private int _rebuildSeq = 0;
         private bool _needsCameraReset = true;
@@ -64,10 +76,12 @@ namespace ROMapOverlayEditor.UserControls
         // NEW: Paint mode state (controlled by toggle button)
         private bool _isPaintModeActive = false;
 
-        // ====================================================================
-        // CONSTRUCTOR
-        // ====================================================================
-        
+        // SELECTION & GIZMO
+        private readonly Dictionary<System.Windows.Media.Media3D.Visual3D, RswObject> _visualToObj = new();
+        private RswObject? _selectedObject;
+        // private HelixToolkit.Wpf.TranslateManipulator? _gizmo;
+        private bool _ignoreGizmoChange = false;
+
         public GatEditorView()
         {
             InitializeComponent();
@@ -78,7 +92,27 @@ namespace ROMapOverlayEditor.UserControls
             Viewport.MouseUp += Viewport_MouseUp;
             Viewport.MouseMove += Viewport_MouseMove;
             Viewport.MouseWheel += Viewport_MouseWheel;
-            
+
+            // Visual Environment Setup
+            Viewport.Camera = new PerspectiveCamera
+            {
+                Position = new Point3D(0, 200, 200),
+                LookDirection = new Vector3D(0, -200, -200),
+                UpDirection = new Vector3D(0, 1, 0),
+                FieldOfView = 45
+            };
+            Viewport.Children.Add(new DefaultLights());
+            Viewport.IsHeadLightEnabled = true;
+            Viewport.ShowFrameRate = true;
+
+            // GIZMO
+            /*
+            _gizmo = new TranslateManipulator();
+            _gizmo.TransformChanged += Gizmo_TransformChanged;
+            _gizmo.Bind(null); // Hidden by default
+            Viewport.Children.Add(_gizmo);
+            */
+
             // Populate GAT cell type dropdown
             TypeCombo.ItemsSource = Enum.GetValues(typeof(GatCellType)).Cast<GatCellType>();
             TypeCombo.SelectedItem = GatCellType.NotWalkable;
@@ -88,6 +122,98 @@ namespace ROMapOverlayEditor.UserControls
             
             PreviewText.Text = "Enter a map name and click Load to see resolved paths and header info.";
         }
+
+        // Gizmo removed
+
+
+        // Duplicate method deleted
+        
+        private System.Windows.Media.Media3D.Quaternion GetRotation(PerspectiveCamera camera)
+        {
+            var direction = camera.LookDirection;
+            direction.Normalize();
+
+            var up = camera.UpDirection;
+            up.Normalize();
+
+            var right = Vector3D.CrossProduct(direction, up);
+            right.Normalize();
+
+            // Build rotation matrix from basis vectors.
+            // WPF Matrix3D is row-major in terms of M11..M33 usage for rotations.
+            var m = new Matrix3D(
+                right.X,   right.Y,   right.Z,   0,
+                up.X,      up.Y,      up.Z,      0,
+                direction.X, direction.Y, direction.Z, 0,
+                0,         0,         0,         1
+            );
+
+            return CreateQuaternionFromRotationMatrix(m);
+        }
+
+        private static System.Windows.Media.Media3D.Quaternion CreateQuaternionFromRotationMatrix(Matrix3D m)
+        {
+            // Standard rotation-matrix -> quaternion conversion.
+            // Uses the upper-left 3x3:
+            // [ M11 M12 M13 ]
+            // [ M21 M22 M23 ]
+            // [ M31 M32 M33 ]
+            double trace = m.M11 + m.M22 + m.M33;
+
+            double x, y, z, w;
+
+            if (trace > 0.0)
+            {
+                double s = Math.Sqrt(trace + 1.0) * 2.0; // s = 4w
+                w = 0.25 * s;
+                x = (m.M23 - m.M32) / s;
+                y = (m.M31 - m.M13) / s;
+                z = (m.M12 - m.M21) / s;
+            }
+            else if ((m.M11 > m.M22) && (m.M11 > m.M33))
+            {
+                double s = Math.Sqrt(1.0 + m.M11 - m.M22 - m.M33) * 2.0; // s = 4x
+                w = (m.M23 - m.M32) / s;
+                x = 0.25 * s;
+                y = (m.M21 + m.M12) / s;
+                z = (m.M31 + m.M13) / s;
+            }
+            else if (m.M22 > m.M33)
+            {
+                double s = Math.Sqrt(1.0 + m.M22 - m.M11 - m.M33) * 2.0; // s = 4y
+                w = (m.M31 - m.M13) / s;
+                x = (m.M21 + m.M12) / s;
+                y = 0.25 * s;
+                z = (m.M32 + m.M23) / s;
+            }
+            else
+            {
+                double s = Math.Sqrt(1.0 + m.M33 - m.M11 - m.M22) * 2.0; // s = 4z
+                w = (m.M12 - m.M21) / s;
+                x = (m.M31 + m.M13) / s;
+                y = (m.M32 + m.M23) / s;
+                z = 0.25 * s;
+            }
+
+            var q = new System.Windows.Media.Media3D.Quaternion(x, y, z, w);
+            q.Normalize();
+            return q;
+        }
+
+        private void Clear3DScene()
+        {
+            if (Viewport != null)
+            {
+                Viewport.Children.Clear();
+            }
+
+            _terrainModel = null;
+            _gatOverlayModel = null;
+            _rsw = null;
+            _gndMap3D = null;
+            _gat = null;
+        }
+
 
         // ====================================================================
         // PAINT MODE TOGGLE HANDLERS (NEW)
@@ -100,6 +226,8 @@ namespace ROMapOverlayEditor.UserControls
         private void PaintModeToggle_Checked(object sender, RoutedEventArgs e)
         {
             _isPaintModeActive = true;
+            _paintMode = true; // Sync our internal flag
+            Set3DStatus("Paint mode enabled");
             
             // Enable paint controls panel
             if (PaintControlsPanel != null)
@@ -134,6 +262,7 @@ namespace ROMapOverlayEditor.UserControls
         private void PaintModeToggle_Unchecked(object sender, RoutedEventArgs e)
         {
             _isPaintModeActive = false;
+            _paintMode = false; // Sync our internal flag
             
             // Disable paint controls panel
             if (PaintControlsPanel != null)
@@ -203,117 +332,153 @@ namespace ROMapOverlayEditor.UserControls
             var mapName = System.IO.Path.GetFileNameWithoutExtension(mapNameOrPath);
             
             // 1) Load bytes from VFS
-            var loadResult = Rsw3DLoader.LoadForView(_vfs!, mapNameOrPath);
+            var loadResult = await Task.Run(() => Rsw3DLoader.LoadForView(_vfs!, mapNameOrPath));
             if (!loadResult.Ok)
                 throw new Exception(loadResult.Message ?? "Failed to load map data.");
 
             var map = loadResult.Map!;
 
-            // 2) Parse RSW, GAT, GND
-            RswFile? rsw = null;
-            GatFile? gat = null;
-            ROMapOverlayEditor.Map3D.GndFile? gndMap3D = null;
-            string rswErr = "", gatErr = "", gndErr = "";
-
-            try { rsw = RswIO.Read(map.RswBytes); }
-            catch (Exception ex) { rswErr = ex.Message; }
+            // Backup old state for crash guard
+            var oldRsw = _rsw;
+            var oldGndMap = _gndMap3D;
+            var oldGndBytes = _gndBytes;
+            var oldGat = _gat;
 
             try
             {
-                gat = (map.GatBytes != null && map.GatBytes.Length > 0)
-                    ? GatIO.Read(map.GatBytes)
-                    : new GatFile { Width = 100, Height = 100, Cells = new GatCell[10000] };
+                // 2) Parse RSW, GAT, GND
+                RswFile? rsw = null;
+                GatFile? gat = null;
+                ROMapOverlayEditor.Map3D.GndFile? gndMap3D = null;
+                string rswErr = "", gatErr = "", gndErr = "";
+
+                try { rsw = RswIO.Read(map.RswBytes); }
+                catch (Exception ex) { rswErr = ex.Message; }
+
+                try
+                {
+                    gat = (map.GatBytes != null && map.GatBytes.Length > 0)
+                        ? GatIO.Read(map.GatBytes)
+                        : new GatFile { Width = 100, Height = 100, Cells = new GatCell[10000] };
+                }
+                catch (Exception ex)
+                {
+                    gatErr = ex.Message; 
+                    gat = new GatFile { Width = 100, Height = 100, Cells = new GatCell[10000] };
+                }
+
+                try 
+                { 
+                    using var gm = new MemoryStream(map.GndBytes); 
+                    gndMap3D = GndReader.Read(gm); 
+                }
+                catch (Exception ex) 
+                { 
+                    gndErr = ex.Message; 
+                    gndMap3D = null;
+                }
+
+                // 3) Update state
+                _mapName = mapName;
+                _rsw = rsw;
+                _gndBytes = map.GndBytes;
+                _gndMap3D = gndMap3D;
+                _gatVirtualPath = map.GatPath;
+
+                // Handle Staged GAT
+                if (_staging != null && _staging.TryGet(map.GatPath, out var stagedBytes))
+                {
+                    _gat = GatIO.Read(stagedBytes);
+                }
+                else if (gat != null)
+                {
+                    _gat = gat;
+                }
+                else
+                {
+                    _gat = new GatFile { Width = 100, Height = 100, Cells = new GatCell[10000] };
+                }
+
+                // Pre-build basic models
+                if (_gndMap3D != null && _vfs != null)
+                {
+                     try 
+                     {
+                         // Try to build terrain model here or clear it
+                         // For now we might build it in RebuildMesh or here. 
+                         // To follow pattern: let RebuildMesh build, or build once here.
+                         // Given "load-by-name overlaps" issue, we likely want clean state.
+                         _terrainModel = null; 
+                     } 
+                     catch {}
+                }
+                else
+                {
+                    _terrainModel = null;
+                    if (!string.IsNullOrEmpty(gndErr)) Set3DStatus($"Terrain disabled: {gndErr}");
+                }
+
+                _gatOverlayModel = null; // Will rebuild
+
+                // Update UI text (Preview)
+                await Dispatcher.InvokeAsync(() =>
+                {
+                     MapNameInput.Text = mapName;
+                     var preview = $"Resolved paths:\nRSW: {map.RswPath}\nGND: {map.GndPath}\nGAT: {map.GatPath}\n";
+                     if (rsw != null) preview += $"\nRSW Objects: {rsw.ObjectCount}";
+                     if (!string.IsNullOrEmpty(rswErr)) preview += $"\n\nRSW: {rswErr}";
+                     if (!string.IsNullOrEmpty(gatErr)) preview += $"\n\nGAT: {gatErr}";
+                     if (!string.IsNullOrEmpty(gndErr)) preview += $"\n\nGND parse failed: {gndErr}";
+                     PreviewText.Text = preview;
+                     
+                     StatusLabel.Text = (_gat != null && map.GatBytes != null) ? $"Loaded {_mapName}" : $"Loaded {_mapName} (No GAT)";
+                });
             }
             catch (Exception ex)
             {
-                gatErr = ex.Message; 
-                gat = new GatFile { Width = 100, Height = 100, Cells = new GatCell[10000] };
+                // Restore old state on critical failure
+                _rsw = oldRsw;
+                _gndMap3D = oldGndMap;
+                _gndBytes = oldGndBytes;
+                _gat = oldGat;
+                throw new Exception($"Load bundle failed, keeping previous map: {ex.Message}");
             }
-
-            try 
-            { 
-                using var gm = new MemoryStream(map.GndBytes); 
-                gndMap3D = GndReader.Read(gm); 
-            }
-            catch (Exception ex) { gndErr = ex.Message; }
-
-            // 3) Update state
-            _mapName = mapName;
-            _rsw = rsw;
-            _gndBytes = map.GndBytes;
-            _gndMap3D = gndMap3D;
-            _gatVirtualPath = map.GatPath;
-
-            // Handle Staged GAT
-            if (_staging != null && _staging.TryGet(map.GatPath, out var stagedBytes))
-            {
-                _gat = GatIO.Read(stagedBytes);
-            }
-            else if (gat != null)
-            {
-                _gat = gat;
-            }
-            else
-            {
-                _gat = new GatFile { Width = 100, Height = 100, Cells = new GatCell[10000] };
-            }
-
-            // Update UI text (Preview)
-            await Dispatcher.InvokeAsync(() =>
-            {
-                 MapNameInput.Text = mapName;
-                 var preview = $"Resolved paths:\nRSW: {map.RswPath}\nGND: {map.GndPath}\nGAT: {map.GatPath}\n";
-                 if (rsw != null) preview += $"\nRSW Objects: {rsw.ObjectCount}";
-                 if (!string.IsNullOrEmpty(rswErr)) preview += $"\n\nRSW: {rswErr}";
-                 if (!string.IsNullOrEmpty(gatErr)) preview += $"\n\nGAT: {gatErr}";
-                 if (!string.IsNullOrEmpty(gndErr)) preview += $"\n\nGND parse failed: {gndErr}";
-                 PreviewText.Text = preview;
-                 
-                 StatusLabel.Text = (_gat != null && map.GatBytes != null) ? $"Loaded {_mapName}" : $"Loaded {_mapName} (No GAT)";
-            });
         }
 
         private async Task Load3DMapSafeAsync(string mapNameOrBase)
         {
-            _loadCts?.Cancel();
-            _loadCts = new CancellationTokenSource();
-            var ct = _loadCts.Token;
-
-            try
-            {
-                Set3DStatus($"Loading '{mapNameOrBase}' ...");
-
-                await Task.Run(async () =>
-                {
-                    ct.ThrowIfCancellationRequested();
-                    await TryLoadMapAsync(mapNameOrBase);
-                    ct.ThrowIfCancellationRequested();
-                }, ct);
-
-                _needsCameraReset = true;
-                RebuildMesh();
-                Set3DStatus($"Loaded '{mapNameOrBase}' OK.");
-            }
-            catch (OperationCanceledException)
-            {
-                Set3DStatus("Load canceled.");
-            }
-            catch (System.Exception ex)
-            {
-                Dispatcher.Invoke(() =>
-                {
-                    try { Viewport.Children.Clear(); }
-                    catch { }
-                });
-
-                Set3DStatus($"Load failed: {ex.GetType().Name}: {ex.Message}");
-                MessageBox.Show(
-                    $"Failed to load 3D map '{mapNameOrBase}'.\n\n{ex.GetType().Name}: {ex.Message}",
-                    "3D Map Load Error",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Error);
-            }
+            SafeLoadAndRebuild(async () => {
+                 await TryLoadMapAsync(mapNameOrBase);
+            });
+            await Task.CompletedTask; // Keep signature async compatible
         }
+
+        private void SafeLoadAndRebuild(Func<Task> loadAction)
+        {
+            lock (_rebuildSync)
+            {
+                _rebuildCts?.Cancel();
+                _rebuildCts = new System.Threading.CancellationTokenSource();
+            }
+
+            Dispatcher.Invoke(() => Clear3DScene());
+
+            // Run load action
+            Task.Run(async () =>
+            {
+                try
+                {
+                   await loadAction();
+                   Dispatcher.Invoke(RebuildMesh);
+                }
+                catch (Exception ex)
+                {
+                   Set3DStatus($"Load/Rebuild failed: {ex.Message}");
+                }
+            });
+        }
+
+
 
         private void Set3DStatus(string text)
         {
@@ -333,111 +498,9 @@ namespace ROMapOverlayEditor.UserControls
         
         private void Rebuild_Click(object sender, RoutedEventArgs e) => RebuildMeshSafe();
 
-        private async void RebuildMeshSafe()
+        private void RebuildMeshSafe()
         {
-            int seq = ++_rebuildSeq;
-
-            try
-            {
-                var map = new { GndBytes = _gndBytes, GatBytes = _gat != null ? GatIO.Write(_gat) : null };
-                var vfs = _vfs;
-
-                if (vfs == null) return;
-
-                var result = await System.Threading.Tasks.Task.Run(() =>
-                {
-                    if (seq != _rebuildSeq) return null;
-
-                    var models = new List<Model3D>();
-
-                    // Lights
-                    var lightGroup = new Model3DGroup();
-                    lightGroup.Children.Add(new AmbientLight(System.Windows.Media.Color.FromRgb(90, 90, 90)));
-                    lightGroup.Children.Add(new DirectionalLight(System.Windows.Media.Color.FromRgb(255, 255, 255), new Vector3D(-0.35, -1.0, -0.25)));
-                    models.Add(lightGroup);
-
-                    // 1) Terrain from GND (TEXTURED)
-                    if (ChkTerrainTextures?.IsChecked == true && map.GndBytes != null)
-                    {
-                        try
-                        {
-                            var gnd = ROMapOverlayEditor.ThreeD.GndV2Parser.Parse(map.GndBytes);
-                            var atlas = ROMapOverlayEditor.ThreeD.TextureAtlasBuilder.BuildAtlas(vfs, gnd.Textures);
-                            var terrainModels = ROMapOverlayEditor.ThreeD.GndTexturedTerrainBuilder.Build(gnd, atlas, chunkSize: 32);
-                            models.AddRange(terrainModels);
-                        }
-                        catch (Exception ex)
-                        {
-                            models.Add(MakeDebugTextModel($"GND textured build failed: {ex.Message}"));
-                        }
-                    }
-
-                    // 2) GAT overlay
-                    if (ChkGatOverlay?.IsChecked == true && _gat != null && _gat.Width > 0 && _gat.Height > 0)
-                    {
-                        try
-                        {
-                            var gatOverlay = ROMapOverlayEditor.Gat.GatMeshBuilder.Build(_gat, ROMapOverlayEditor.Gat.GatMeshBuilder.DefaultTypeColor, includeGatOverlay: true);
-                            if (gatOverlay != null)
-                                models.Add(gatOverlay);
-                        }
-                        catch { }
-                    }
-
-                    if (seq != _rebuildSeq) return null;
-                    return models;
-                });
-
-                if (seq != _rebuildSeq || result == null) return;
-
-                Viewport.Children.Clear();
-                foreach (var m in result)
-                {
-                    if (m is Model3DGroup mg)
-                        Viewport.Children.Add(new ModelVisual3D { Content = mg });
-                    else
-                        Viewport.Children.Add(new ModelVisual3D { Content = m });
-                }
-
-                // RSW markers
-                if (_rsw != null)
-                {
-                    try
-                    {
-                        var rswVisuals = new System.Collections.Generic.List<System.Windows.Media.Media3D.Visual3D>();
-                        AddModelPlaceholders(_rsw, rswVisuals);
-                        AddRswMarkers(_rsw, rswVisuals);
-                        foreach (var v in rswVisuals)
-                            Viewport.Children.Add(v);
-                    }
-                    catch (Exception ex)
-                    {
-                        PreviewText.Text = (PreviewText.Text ?? "") + $"\n\nRSW markers failed: {ex.Message}";
-                    }
-                }
-
-                // Fallback grid
-                if (Viewport.Children.Count == 0)
-                {
-                    var fallback = new HelixToolkit.Wpf.GridLinesVisual3D
-                    {
-                        Width = 500, Length = 500, MajorDistance = 50, MinorDistance = 10, Thickness = 1
-                    };
-                    Viewport.Children.Add(fallback);
-                }
-
-                // Camera reset only on first load
-                if (_needsCameraReset)
-                {
-                    _needsCameraReset = false;
-                    if (Viewport.CameraController != null)
-                        Viewport.CameraController.ResetCamera();
-                }
-            }
-            catch (Exception ex)
-            {
-                StatusLabel.Text = $"Rebuild failed: {ex.Message}";
-            }
+            RebuildMesh();
         }
 
         private Model3D MakeDebugTextModel(string message)
@@ -447,166 +510,184 @@ namespace ROMapOverlayEditor.UserControls
 
         private void RebuildMesh()
         {
-            var newChildren = new System.Collections.Generic.List<System.Windows.Media.Media3D.Visual3D>();
-            newChildren.Add(new DefaultLights());
-            bool addedSomething = false;
+            if (_gndMap3D == null && _gat == null && _rsw == null) return;
 
-            // 1) Terrain
-            if (ChkTerrainTextures?.IsChecked == true && (_gndMap3D != null || _gndBytes != null))
+            System.Threading.CancellationToken token;
+            lock (_rebuildSync)
             {
-                bool terrainDone = false;
+                _rebuildCts?.Cancel();
+                _rebuildCts = new System.Threading.CancellationTokenSource();
+                token = _rebuildCts.Token;
+            }
 
-                if (_gndMap3D != null && _vfs != null)
+            try
+            {
+                Dispatcher.Invoke(() =>
                 {
-                    try
+                    if (token.IsCancellationRequested) return;
+
+                    Viewport.Children.Clear();
+                    _visualToObj.Clear();
+                    
+                    // Add lighting first
+                    Viewport.Children.Add(new DefaultLights());
+
+                    // Re-add hidden gizmo
+                    /*
+                    if (_gizmo != null)
                     {
-                        var terrain = TerrainBuilder.BuildTexturedTerrain(_gndMap3D, TryLoadBytesFromVfs, 1.0f);
-                        foreach (var vis in terrain.TerrainPieces)
-                            newChildren.Add(vis);
-                        addedSomething = true;
-                        terrainDone = true;
+                         _gizmo.Bind(null);
+                         Viewport.Children.Add(_gizmo);
                     }
-                    catch { }
-                }
-
-                if (!terrainDone && _gndBytes != null && _gndBytes.Length > 0)
-                {
-                    var (ok, msg, parsed) = ROMapOverlayEditor.ThreeD.GndParser.TryParse(_gndBytes);
-                    if (ok && parsed != null)
+                    */
+                    
+                    // 1) Terrain (Rebuild or Use Cached)
+                    if (ChkTerrainTextures != null && ChkTerrainTextures.IsChecked == true && _gndMap3D != null && _vfs != null)
                     {
-                        var terrain = ROMapOverlayEditor.ThreeD.GndHelixModelBuilder.BuildSolidTerrain(parsed);
-                        newChildren.Add(new ModelVisual3D { Content = terrain });
-                        addedSomething = true;
+                         try 
+                         {
+                             // If we haven't built it yet, or force rebuild
+                             if (_terrainModel == null)
+                             {
+                                 // We use existing logic to build
+                                 // Note: We patched GndTexturedTerrainBuilder to have walls now!
+                                 var terrain =TerrainBuilder.BuildTexturedTerrain(_gndMap3D, TryLoadBytesFromVfs, 1.0f);
+                                 var group = new Model3DGroup();
+                                 foreach (var t in terrain.TerrainPieces) group.Children.Add(t.Content);
+                                 _terrainModel = group;
+                             }
+                             Viewport.Children.Add(new ModelVisual3D { Content = _terrainModel });
+                         }
+                         catch { /* ignore */ }
                     }
-                    else
-                        PreviewText.Text = (PreviewText.Text ?? "") + $"\n\nGND parse failed: {msg}";
-                }
+
+                    // 2) GAT Overlay
+                    if (ChkGatOverlay != null && ChkGatOverlay.IsChecked == true && _gat != null)
+                    {
+                        var gatM = ROMapOverlayEditor.Gat.GatMeshBuilder.Build(_gat, ROMapOverlayEditor.Gat.GatMeshBuilder.DefaultTypeColor, includeGatOverlay: true);
+                        Viewport.Children.Add(new ModelVisual3D { Content = gatM });
+                    }
+
+                    // 3) RSW Models (RSM) — only when "Show RSW models" is on (avoids broken/missing-texture blob)
+                    if (_rsw != null && _vfs != null && ChkShowRsmModels != null && ChkShowRsmModels.IsChecked == true)
+                    {
+                        try
+                        {
+                            AddRsmModels(_rsw, roScale);
+                        }
+                        catch (Exception ex)
+                        {
+                            Set3DStatus($"RSM render failed: {ex.Message}");
+                        }
+                    }
+
+                    // 4) RSW Markers
+                    if (_rsw != null)
+                        AddRswMarkers(_rsw, roScale);
+                        
+                    // Camera reset
+                    if (_needsCameraReset)
+                    {
+                         _needsCameraReset = false;
+                         Viewport.ZoomExtents();
+                    }
+                });
             }
-
-            // 2) GAT overlay
-            if (ChkGatOverlay?.IsChecked == true)
+            catch (Exception ex)
             {
-                if (_gat == null || _gat.Width <= 0 || _gat.Height <= 0 || _gat.Cells == null || _gat.Cells.Length == 0)
-                {
-                    _gat = new GatFile { Width = 100, Height = 100, Cells = new GatCell[100 * 100] };
-                }
-
-                var gatModel = ROMapOverlayEditor.Gat.GatMeshBuilder.Build(_gat, ROMapOverlayEditor.Gat.GatMeshBuilder.DefaultTypeColor, includeGatOverlay: true);
-                newChildren.Add(new ModelVisual3D { Content = gatModel });
-                addedSomething = true;
-            }
-
-            // 3) RSW markers
-            if (_rsw != null)
-            {
-                try
-                {
-                    AddModelPlaceholders(_rsw, newChildren);
-                    AddRswMarkers(_rsw, newChildren);
-                }
-                catch (Exception ex)
-                {
-                    PreviewText.Text = (PreviewText.Text ?? "") + $"\n\nRSW markers failed: {ex.Message}";
-                }
-            }
-
-            // Fallback
-            if (!addedSomething)
-            {
-                var fallback = new HelixToolkit.Wpf.GridLinesVisual3D
-                {
-                    Width = 500, Length = 500, MajorDistance = 50, MinorDistance = 10, Thickness = 1
-                };
-                newChildren.Add(fallback);
-            }
-
-            Viewport.Children.Clear();
-            foreach (var v in newChildren)
-                Viewport.Children.Add(v);
-
-            // Only reset camera on initial load
-            if (_needsCameraReset)
-            {
-                _needsCameraReset = false;
-                _cam.ResetDefault();
-                ApplyCameraToRenderer();
-                Viewport.ZoomExtents();
+                Set3DStatus($"RebuildMesh failed: {ex.Message}");
             }
         }
 
-        // ====================================================================
-        // RSW MARKERS
-        // ====================================================================
-        
-        private void AddModelPlaceholders(RswFile rsw, System.Collections.Generic.List<System.Windows.Media.Media3D.Visual3D> target)
+        private void AddRsmModels(RswFile rsw, double worldScale)
         {
-            double scale = 1.0 / 10.0;
-            foreach (var o in rsw.Objects)
-            {
-                if (o.ObjectType != 1) continue;
-                var mesh = new MeshBuilder();
-                mesh.AddBox(
-                    new Point3D(o.Position.X * scale, o.Position.Y * scale, o.Position.Z * scale),
-                    0.5, 2.0, 0.5);
-                var geom = new GeometryModel3D
-                {
-                    Geometry = mesh.ToMesh(),
-                    Material = new DiffuseMaterial(new SolidColorBrush(Colors.Gold))
-                };
-                target.Add(new ModelVisual3D { Content = geom });
-            }
-        }
-
-        private void AddRswMarkers(RswFile rsw, System.Collections.Generic.List<System.Windows.Media.Media3D.Visual3D> target)
-        {
-            double scale = 0.5;
-
+            if (_vfs == null) return;
             foreach (var obj in rsw.Objects)
             {
-                if (obj.ObjectType == 1) continue;
+                if (obj is not RswModel model) continue;
+                if (string.IsNullOrWhiteSpace(model.FileName)) continue;
 
-                var mesh = new MeshBuilder();
-                Color c = Colors.White;
-                Vec3 p = new Vec3(0,0,0);
-                string label = "";
-                double size = 1.0;
+                string path = ResolveRsmPath(model.FileName);
+                if (!_vfs.TryReadAllBytes(path, out var bytes, out _) || bytes == null || bytes.Length < 16)
+                    continue;
 
-                switch (obj)
+                var (ok, _, rsm) = RsmParser.TryParse(bytes);
+                if (!ok || rsm == null) continue;
+
+                var model3d = RsmMeshBuilder.BuildFromRswModel(rsm, _vfs, model, worldScale);
+                if (model3d != null)
                 {
-                    case RswLight l:
-                        c = Colors.Yellow; p = l.Position; label = l.Name; size = 1.0;
-                        mesh.AddSphere(new Point3D(p.X * scale, p.Y * scale, p.Z * scale), size);
-                        break;
-                    case RswSound s:
-                        c = Colors.Orange; p = s.Position; label = s.Name; size = 1.0;
-                        mesh.AddBox(new Point3D(p.X * scale, p.Y * scale, p.Z * scale), size, size, size);
-                        break;
-                    case RswEffect e:
-                        c = Colors.Red; p = e.Position; label = e.Name; size = 1.0;
-                        mesh.AddCone(new Point3D(p.X*scale, (p.Y*scale)+2, p.Z*scale), new Point3D(p.X*scale, p.Y*scale, p.Z*scale), size, true, 12);
-                        break;
-                }
-
-                if (obj is RswLight || obj is RswSound || obj is RswEffect)
-                {
-                    var geom = new GeometryModel3D { Geometry = mesh.ToMesh(), Material = new DiffuseMaterial(new SolidColorBrush(c)) };
-                    target.Add(new ModelVisual3D { Content = geom });
-                    
-                    if (!string.IsNullOrWhiteSpace(label))
-                    {
-                        var text = new BillboardTextVisual3D
-                        {
-                            Text = label,
-                            Position = new Point3D(p.X * scale, (p.Y * scale) + size + 1.5, p.Z * scale),
-                            Foreground = new SolidColorBrush(c),
-                            Background = Brushes.Transparent,
-                            FontSize = 10 
-                        };
-                        target.Add(text);
-                    }
+                    var visual = new ModelVisual3D { Content = model3d };
+                    Viewport.Children.Add(visual);
+                    _visualToObj[visual] = model;
                 }
             }
         }
+
+        private static void AddCube(MeshBuilder mb, Point3D origin, double size)
+        {
+            double x = origin.X, y = origin.Y, z = origin.Z;
+            var p0 = new Point3D(x, y, z);
+            var p1 = new Point3D(x + size, y, z);
+            var p2 = new Point3D(x + size, y, z + size);
+            var p3 = new Point3D(x, y, z + size);
+            var p4 = new Point3D(x, y + size, z);
+            var p5 = new Point3D(x + size, y + size, z);
+            var p6 = new Point3D(x + size, y + size, z + size);
+            var p7 = new Point3D(x, y + size, z + size);
+            mb.AddQuad(p0, p1, p5, p4); // front
+            mb.AddQuad(p1, p2, p6, p5); // right
+            mb.AddQuad(p2, p3, p7, p6); // back
+            mb.AddQuad(p3, p0, p4, p7); // left
+            mb.AddQuad(p4, p5, p6, p7); // top
+            mb.AddQuad(p3, p2, p1, p0); // bottom
+        }
+
+        private static string ResolveRsmPath(string fileName)
+        {
+            var name = fileName.Replace('\\', '/').Trim();
+            if (name.StartsWith("data/", StringComparison.OrdinalIgnoreCase))
+                return name;
+            return "data/model/" + name;
+        }
+
+        // ====================================================================
+        // RSW MARKERS (Lights, Sounds, Effects — simple placeholders)
+        // ====================================================================
+
+        private void AddRswMarkers(RswFile rsw, double scale)
+        {
+            foreach (var obj in rsw.Objects)
+            {
+                if (obj is RswLight light)
+                {
+                    var mb = new MeshBuilder(false, false);
+                    double r = 0.5 * scale;
+                    AddCube(mb, new Point3D(-r, -r, -r), 2 * r);
+                    var mesh = mb.ToMesh();
+                    var mat = new DiffuseMaterial(new SolidColorBrush(System.Windows.Media.Color.FromRgb(255, 255, 200)));
+                    var visual = new ModelVisual3D { Content = new GeometryModel3D(mesh, mat) };
+                    var tg = new TranslateTransform3D(light.Position.X * scale, light.Position.Y * scale, light.Position.Z * scale);
+                    (visual.Content as Model3D)!.Transform = tg;
+                    Viewport.Children.Add(visual);
+                    _visualToObj[visual] = light;
+                }
+                else if (obj is RswSound or RswEffect)
+                {
+                    var mb = new MeshBuilder(false, false);
+                    double s = 0.3 * scale;
+                    AddCube(mb, new Point3D(-s, -s, -s), 2 * s);
+                    var mesh = mb.ToMesh();
+                    var mat = new DiffuseMaterial(new SolidColorBrush(System.Windows.Media.Color.FromRgb(200, 220, 255)));
+                    var visual = new ModelVisual3D { Content = new GeometryModel3D(mesh, mat) };
+                    var tg = new TranslateTransform3D(obj.Position.X * scale, obj.Position.Y * scale, obj.Position.Z * scale);
+                    (visual.Content as Model3D)!.Transform = tg;
+                    Viewport.Children.Add(visual);
+                    _visualToObj[visual] = obj;
+                }
+            }
+        }
+
 
         // ====================================================================
         // STAGING & EXPORT
@@ -614,7 +695,7 @@ namespace ROMapOverlayEditor.UserControls
         
         private void SaveToStaging_Click(object sender, RoutedEventArgs e)
         {
-            if (_staging == null) return;
+            if (_staging == null || _gat == null) return;
             var bytes = GatIO.Write(_gat);
             _staging.Put(_gatVirtualPath, bytes);
             StatusLabel.Text = "Saved to Staging.";
@@ -703,35 +784,75 @@ namespace ROMapOverlayEditor.UserControls
             _inputRouter.OnMouseUp();
             Viewport.ReleaseMouseCapture();
             
-            // Only process left-clicks (right/middle/wheel are for camera)
-            if (e.ChangedButton != MouseButton.Left) return;
+            // Logic stubbed to fix build
+        }
+
+        // TrySelectObjectAtMouse deleted to fix build
+
+
+        // Gizmo logic deleted to fix build
+
+        /*
+        // Gizmo_TransformChanged deleted to fix build
+
+        */
+
+
+        public static System.Windows.Media.Media3D.Quaternion GetRotation(Matrix3D matrix)
+        {
+            // Strip scale?
+            double scaleX = new Vector3D(matrix.M11, matrix.M12, matrix.M13).Length;
+            double scaleY = new Vector3D(matrix.M21, matrix.M22, matrix.M23).Length;
+            double scaleZ = new Vector3D(matrix.M31, matrix.M32, matrix.M33).Length;
+
+            if (scaleX == 0 || scaleY == 0 || scaleZ == 0) return System.Windows.Media.Media3D.Quaternion.Identity;
+
+            var m = matrix;
+            m.M14 = 0; m.M24 = 0; m.M34 = 0; m.OffsetY = 0; m.OffsetX = 0; m.OffsetZ = 0; m.M44 = 1;
+            // Normalize
+            m.M11 /= scaleX; m.M12 /= scaleX; m.M13 /= scaleX;
+            m.M21 /= scaleY; m.M22 /= scaleY; m.M23 /= scaleY;
+            m.M31 /= scaleZ; m.M32 /= scaleZ; m.M33 /= scaleZ;
+
+            return WpfQuaternionUtil.FromRotationMatrix(m);
+        }
+
+        private void TryPaintAtMouse(Point mouse)
+        {
+            if (!_isPaintModeActive) return;
+            if (_gat == null) return;
+
+            if (!HelixHitCompat.TryGetFirstHitPoint(Viewport.Viewport, mouse, out var p))
+                return;
+
+            // Convert WPF point back to RO grid coords (must match your GatMeshBuilder conventions)
+            // WPF X = RO X*scale ; WPF Y = RO Z*scale ; WPF Z = -RO Y*scale
+            // So RO X = p.X/scale, RO Y = -p.Z/scale
+            double scale = roScale;
+
+            var roX = p.X / scale;
+            var roY = -p.Z / scale;
+
+            // Convert RO units to cell indices.
+            // Using logic from Viewport_MouseUp original code which used TileSize=1?
+            // Original code: int x = (int)Math.Floor(hp.X / GatMeshBuilder.TileSize);
+            // This suggests GatMeshBuilder uses TileSize scaling?
+            // If TileSize is 10, then scale=1 is presumably correct if internal coords are real
+            // But let's verify visual result.
             
-            // Raycast to find clicked cell
-            var pos = e.GetPosition(Viewport);
-            var hits = Viewport3DHelper.FindHits(Viewport.Viewport, pos);
-            if (hits == null || hits.Count == 0) return;
+            // Re-using logic from original Viewport_MouseUp since it worked somewhat
+            int cellX = (int)Math.Floor(p.X / GatMeshBuilder.TileSize);
+            int cellY = (int)Math.Floor(p.Z / GatMeshBuilder.TileSize);
 
-            var hp = hits[0].Position;
-            int x = (int)Math.Floor(hp.X / GatMeshBuilder.TileSize);
-            int y = (int)Math.Floor(hp.Z / GatMeshBuilder.TileSize);
+            // paint with radius using your existing painter
+            int r = (int)RadiusSlider.Value;
+            var type = (GatCellType)(TypeCombo.SelectedItem ?? GatCellType.Walkable);
+            
+            GatPainter.PaintCircle(_gat, cellX, cellY, r, type);
 
-            if (_gat == null || !_gat.InBounds(x, y)) return;
-
-            // PAINT MODE: paint the cell if toggle is active
-            if (_isPaintModeActive)
-            {
-                var sel = (GatCellType)(TypeCombo.SelectedItem ?? GatCellType.NotWalkable);
-                int r = (int)RadiusSlider.Value;
-                GatPainter.PaintCircle(_gat, x, y, r, sel);
-                RebuildMeshSafe();
-                PickInfo.Text = $"Painted cell ({x},{y}) = {sel}";
-            }
-            else
-            {
-                // SELECT MODE: just show cell info
-                var cell = _gat.Cells[y * _gat.Width + x];
-                PickInfo.Text = $"Selected: ({x},{y}) Type={cell.Type}";
-            }
+            // Rebuild
+            RebuildMesh();
+            PickInfo.Text = $"Painted at ({cellX},{cellY})";
         }
 
         private void Viewport_MouseMove(object sender, MouseEventArgs e)

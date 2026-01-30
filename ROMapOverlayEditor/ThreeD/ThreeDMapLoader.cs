@@ -1,5 +1,7 @@
 using System;
 using System.IO;
+using ROMapOverlayEditor.Rsw;
+using ROMapOverlayEditor.Sources;
 using ROMapOverlayEditor.Vfs;
 
 namespace ROMapOverlayEditor.ThreeD
@@ -39,36 +41,50 @@ namespace ROMapOverlayEditor.ThreeD
         {
             rswPath = Normalize(rswPath);
 
-            // Derive base name and sibling paths
             var dir = Path.GetDirectoryName(rswPath)?.Replace('\\', '/') ?? "";
             var baseName = Path.GetFileNameWithoutExtension(rswPath);
 
-            // Paths
+            // Default: sibling paths (BrowEdit-style same-folder triplet)
             var gndPath = Combine(dir, baseName + ".gnd");
             var gatPath = Combine(dir, baseName + ".gat");
 
             // 1. Read RSW
             if (!vfs.Exists(rswPath))
-            {
-                 // Try fallback: maybe user gave only filename "prontera.rsw" but it's in "data/prontera.rsw"?
-                 // But typically rswPath comes from a browser, so it's correct.
-                 // We can try to resolve virtually if missing.
-                 return FailMissing("RSW not found in VFS", rswPath);
-            }
+                return FailMissing("RSW not found in VFS", rswPath);
 
             byte[] rswBytes;
             try { rswBytes = vfs.ReadAllBytes(rswPath); }
             catch (Exception ex) { return FailMissing($"RSW not readable: {ex.Message}", rswPath); }
 
-            // 2. Read GND/GAT
-            // Check existence
+            // 2. Resolve GND/GAT: prefer paths from RSW header (like BrowEdit), then fall back to derived
+            var (headerGnd, headerGat) = RswIO.ReadGndGatPaths(rswBytes);
+            if (!string.IsNullOrWhiteSpace(headerGnd))
+            {
+                // Header may be "prontera.gnd" or "data/prontera.gnd"; resolve via VFS
+                foreach (var src in vfs.Sources)
+                {
+                    var resolved = VfsPathResolver.ResolveByFileName(src, headerGnd.Contains("/") || headerGnd.Contains("\\") ? headerGnd : Path.GetFileName(headerGnd));
+                    if (resolved != null && vfs.Exists(resolved)) { gndPath = resolved; break; }
+                }
+                if (!vfs.Exists(gndPath))
+                    gndPath = Combine(dir, Path.GetFileName(headerGnd));
+            }
+            if (!string.IsNullOrWhiteSpace(headerGat))
+            {
+                foreach (var src in vfs.Sources)
+                {
+                    var resolved = VfsPathResolver.ResolveByFileName(src, headerGat.Contains("/") || headerGat.Contains("\\") ? headerGat : Path.GetFileName(headerGat));
+                    if (resolved != null && vfs.Exists(resolved)) { gatPath = resolved; break; }
+                }
+                if (!vfs.Exists(gatPath))
+                    gatPath = Combine(dir, Path.GetFileName(headerGat));
+            }
+
             bool gndExists = vfs.Exists(gndPath);
             bool gatExists = vfs.Exists(gatPath);
 
             if (!gndExists)
                 return FailMissing("GND missing (required for 3D)", gndPath);
-            
-            // GAT is recommended for walkability data
 
             byte[] gndBytes = vfs.ReadAllBytes(gndPath);
             byte[] gatBytes = gatExists ? vfs.ReadAllBytes(gatPath) : Array.Empty<byte>();

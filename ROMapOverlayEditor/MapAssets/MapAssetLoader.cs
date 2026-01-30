@@ -2,7 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using ROMapOverlayEditor.Imaging;
 
 namespace ROMapOverlayEditor.MapAssets
 {
@@ -98,6 +100,9 @@ namespace ROMapOverlayEditor.MapAssets
             // If you need TGA: you’ll need a small TGA decoder later; for now BMP is typically enough.
             try
             {
+                var tga = TgaDecoder.Decode(bytes);
+                if (tga != null) return tga;
+
                 using var ms = new MemoryStream(bytes);
                 var img = new BitmapImage();
                 img.BeginInit();

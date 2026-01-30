@@ -45,6 +45,20 @@ namespace ROMapOverlayEditor.Sources
             return candidates.OrderByDescending(Score).First();
         }
 
+        /// <summary>Enumerate RSW map base names from VFS (for dropdown, BrowEdit-style).</summary>
+        public static List<string> EnumerateRswMapNames(CompositeVfs vfs)
+        {
+            var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var p in vfs.EnumerateAllPathsDistinct())
+            {
+                if (p.EndsWith(".rsw", StringComparison.OrdinalIgnoreCase))
+                    names.Add(Path.GetFileNameWithoutExtension(p));
+            }
+            var list = names.ToList();
+            list.Sort(StringComparer.OrdinalIgnoreCase);
+            return list;
+        }
+
         public static (string? Rsw, string? Gnd, string? Gat) ResolveMapTriplet(CompositeVfs vfs, string mapBaseName)
         {
             mapBaseName = (mapBaseName ?? "").Trim();

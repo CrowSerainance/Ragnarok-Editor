@@ -16,4 +16,9 @@
     <PackageReference Include="System.Text.Encoding.CodePages" Version="10.0.2" />
   </ItemGroup>
 
+  <!-- BrowEdit3-aligned reference assets (texture, shaders reference); copy to output for optional VFS fallback -->
+  <ItemGroup>
+    <Content Include="Data\**\*" CopyToOutputDirectory="PreserveNewest" Link="Data\%(RecursiveDir)%(Filename)%(Extension)" />
+  </ItemGroup>
+
 </Project>

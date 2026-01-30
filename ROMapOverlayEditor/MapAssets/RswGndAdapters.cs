@@ -47,7 +47,7 @@ namespace ROMapOverlayEditor.MapAssets
                         Range = s.Range
                     });
                 else if (o is RswEffectObject e)
-                    objects.Add(new RswEffect { ObjectType = 4, Name = e.Name, Position = V(e.Position), EffectId = e.EffectId, Delay = e.EmitSpeed, Param = e.Param1 });
+                    objects.Add(new RswEffect { ObjectType = 4, Name = e.Name, Position = V(e.Position), EffectId = e.EffectId, Loop = e.EmitSpeed, Param1 = e.Param1, Param2 = e.Unknown1, Param3 = e.Unknown2, Param4 = e.Unknown3 });
             }
             var rsw = new RswFile
             {

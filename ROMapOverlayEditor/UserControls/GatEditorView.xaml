@@ -116,7 +116,8 @@
                     <GroupBox Header="View Options" Grid.Row="2" Margin="0,0,0,8" Foreground="#AAA" BorderBrush="#3A3A3A">
                         <StackPanel>
                             <CheckBox x:Name="ChkTerrainTextures" Content="Terrain (GND textures)" IsChecked="True" Foreground="White" Margin="0,0,0,4" Checked="ViewOptionChanged" Unchecked="ViewOptionChanged"/>
-                            <CheckBox x:Name="ChkGatOverlay" Content="GAT Overlay (walkable / not-walkable)" IsChecked="False" Foreground="White" Margin="0,0,0,8" Checked="ViewOptionChanged" Unchecked="ViewOptionChanged"/>
+                            <CheckBox x:Name="ChkGatOverlay" Content="GAT Overlay (walkable / not-walkable)" IsChecked="False" Foreground="White" Margin="0,0,0,4" Checked="ViewOptionChanged" Unchecked="ViewOptionChanged"/>
+                            <CheckBox x:Name="ChkShowRsmModels" Content="Show RSW models (trees, objects)" IsChecked="False" Foreground="White" Margin="0,0,0,8" Checked="ViewOptionChanged" Unchecked="ViewOptionChanged" ToolTip="Turn on when RSM textures are fixed; off hides broken/missing-texture models"/>
                             
                             <TextBlock Text="Camera Mouse Speed (0.01–3)" Foreground="#AAA" Margin="0,4,0,2"/>
                             <Slider x:Name="CameraSpeedSlider" Minimum="0.01" Maximum="3" Value="1" TickFrequency="0.1" IsSnapToTickEnabled="False" ValueChanged="CameraSpeed_Changed"/>

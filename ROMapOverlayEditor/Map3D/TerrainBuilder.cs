@@ -6,7 +6,6 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Media.Media3D;
 using HelixToolkit.Wpf;
-
 namespace ROMapOverlayEditor.Map3D
 {
     public sealed class TerrainBuildResult
@@ -95,17 +94,20 @@ namespace ROMapOverlayEditor.Map3D
         private static Material CreateMaterialForTexture(int texId, GndFile gnd, Func<string, byte[]?> tryLoadTextureBytes)
         {
             if (texId < 0 || texId >= gnd.Textures.Count)
-                return MaterialHelper.CreateMaterial(Brushes.DarkSlateGray);
+                return MaterialHelper.CreateMaterial(Brushes.Magenta);
 
             string name = gnd.Textures[texId];
             if (string.IsNullOrWhiteSpace(name))
-                return MaterialHelper.CreateMaterial(Brushes.DarkSlateGray);
+                return MaterialHelper.CreateMaterial(Brushes.Magenta);
 
+            // BrowEdit3: "data/texture/" + texture->file (Gnd.cpp line 69)
             string[] candidates =
             {
                 $"data/texture/{name}",
-                $"data/texture/{name}.bmp",
                 $"data/texture/{name}.tga",
+                $"data/texture/{name}.bmp",
+                $"data/texture/{name}.png",
+                $"data/texture/{name}.jpg",
                 name
             };
 
@@ -114,7 +116,7 @@ namespace ROMapOverlayEditor.Map3D
                 var bytes = tryLoadTextureBytes(c);
                 if (bytes == null) continue;
 
-                var bmp = BytesToBitmapImage(bytes);
+                var bmp = TextureLoader.BytesToBitmapSource(bytes, c);
                 if (bmp == null) continue;
 
                 var brush = new ImageBrush(bmp) { Stretch = Stretch.Fill };
@@ -122,25 +124,8 @@ namespace ROMapOverlayEditor.Map3D
                 return new DiffuseMaterial(brush);
             }
 
-            return MaterialHelper.CreateMaterial(Brushes.DarkOliveGreen);
-        }
-
-        private static BitmapImage? BytesToBitmapImage(byte[] bytes)
-        {
-            try
-            {
-                var bmp = new BitmapImage();
-                bmp.BeginInit();
-                bmp.CacheOption = BitmapCacheOption.OnLoad;
-                bmp.StreamSource = new MemoryStream(bytes);
-                bmp.EndInit();
-                bmp.Freeze();
-                return bmp;
-            }
-            catch
-            {
-                return null;
-            }
+            // Fallback: Magenta so missing textures are obvious (per pipeline fix instructions)
+            return MaterialHelper.CreateMaterial(Brushes.Magenta);
         }
     }
 }

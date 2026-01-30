@@ -125,8 +125,7 @@ namespace ROMapOverlayEditor.ThreeD
 
         private static BitmapSource TryLoadTexture(IVfs vfs, string name)
         {
-            // GND texture names are often like "prontera_1.tga" but actual paths can vary.
-            // We try typical RO search roots.
+            // GND texture names are often like "prontera_1.tga". Try TGA decode first (RO terrain is mostly TGA), then BitmapImage.
             foreach (var p in CandidatePaths(name))
             {
                 var norm = VPath.Norm(p);
@@ -135,19 +134,24 @@ namespace ROMapOverlayEditor.ThreeD
                 byte[] bytes = vfs.ReadAllBytes(norm);
                 if (bytes == null || bytes.Length < 8) continue;
 
-                // TGA
-                if (norm.EndsWith(".tga", StringComparison.OrdinalIgnoreCase))
-                    return TgaDecoder.Decode(bytes);
+                var decoded = TgaDecoder.Decode(bytes);
+                if (decoded != null) return decoded;
 
-                // Others: BitmapImage
-                using var ms = new MemoryStream(bytes);
-                var img = new BitmapImage();
-                img.BeginInit();
-                img.CacheOption = BitmapCacheOption.OnLoad;
-                img.StreamSource = ms;
-                img.EndInit();
-                img.Freeze();
-                return img;
+                try
+                {
+                    using var ms = new MemoryStream(bytes);
+                    var img = new BitmapImage();
+                    img.BeginInit();
+                    img.CacheOption = BitmapCacheOption.OnLoad;
+                    img.StreamSource = ms;
+                    img.EndInit();
+                    img.Freeze();
+                    return img;
+                }
+                catch
+                {
+                    // not a valid standard image; try next path
+                }
             }
 
             return null;

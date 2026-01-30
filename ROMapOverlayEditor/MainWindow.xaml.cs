@@ -35,6 +35,7 @@ public partial class MainWindow : Window
         Relocate
     }
 
+    private Ui.GatEditorWindow? _gat3dWindow;
     private ProjectData _project = new();
     private string? _currentProjectPath;
 
@@ -48,6 +49,8 @@ public partial class MainWindow : Window
     private FolderFileSource? _luaFolderSource;
     private CompositeFileSource? _vfs;
     private readonly CompositeVfs _compositeVfs = new();
+    private CompositeVfs? _compositeVfs3D;
+    private GrfFileSource? _grfSource3D;
     private readonly EditStaging _staging = new();
     private readonly SimpleModeController _simpleMode = new();
     private bool _advancedMode = false;
@@ -101,7 +104,7 @@ public partial class MainWindow : Window
             if (DatabaseTab != null) _simpleMode.RegisterAdvanced(DatabaseTab);
             if (ProjectTab != null) _simpleMode.RegisterAdvanced(ProjectTab);
             
-        if (ThreeDEditorTab != null) _simpleMode.RegisterAdvanced(ThreeDEditorTab);
+
             
             // Wire up Tab Selection
             MainTabs.SelectionChanged += MainTabs_SelectionChanged;
@@ -135,16 +138,8 @@ public partial class MainWindow : Window
 
     private void MainTabs_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (e.Source is TabControl && MainTabs.SelectedItem == ThreeDEditorTab)
-        {
-            GatView.Initialize(_compositeVfs, _staging, BrowseGrfInternalPath);
-            
-            var map = (TownCombo.SelectedItem as TownEntry)?.Name ?? _project.MapName;
-            if (!string.IsNullOrWhiteSpace(map))
-            {
-                GatView.LoadMap(map);
-            }
-        }
+        if (MainTabs?.SelectedItem == Map3DEditorTab)
+            EnsureMap3DEditorInitialized();
     }
 
     /// <summary>
@@ -895,7 +890,129 @@ public partial class MainWindow : Window
 
     private void OpenGat3DEditor_Click(object sender, RoutedEventArgs e)
     {
-        if (ThreeDEditorTab != null) MainTabs.SelectedItem = ThreeDEditorTab;
+        if (_gat3dWindow == null || !_gat3dWindow.IsLoaded)
+        {
+            _gat3dWindow = new Ui.GatEditorWindow();
+            _gat3dWindow.Owner = this;
+            _gat3dWindow.Show();
+            _gat3dWindow.Initialize(GetVfsFor3D(), _staging, BrowseGrfInternalPath);
+        }
+        else
+        {
+            _gat3dWindow.Activate();
+        }
+
+        var map = (TownCombo.SelectedItem as TownEntry)?.Name ?? _project.MapName;
+        if (!string.IsNullOrWhiteSpace(map))
+            _gat3dWindow.LoadMap(map);
+    }
+
+    /// <summary>VFS for 3D Map Editor: dedicated 3D GRF if set, else main project GRF.</summary>
+    private CompositeVfs GetVfsFor3D()
+    {
+        if (_compositeVfs3D != null && _compositeVfs3D.Sources.Count > 0)
+            return _compositeVfs3D;
+        return _compositeVfs;
+    }
+
+    private void OpenGrfFor3D_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var dlg = new OpenFileDialog
+            {
+                Title = "Open GRF for 3D Map Editor",
+                Filter = "Ragnarok Archives (*.grf;*.gpf)|*.grf;*.gpf|All files (*.*)|*.*",
+                CheckFileExists = true,
+                Multiselect = false
+            };
+            if (dlg.ShowDialog() != true) return;
+
+            var path = dlg.FileName;
+            _grfSource3D?.Dispose();
+            _grfSource3D = new GrfFileSource(path);
+
+            _compositeVfs3D = new CompositeVfs();
+            _compositeVfs3D.Mount(new GrfSourceAdapter(
+                displayName: $"3D GRF: {IOPath.GetFileName(path)}",
+                priority: 100,
+                listPaths: () => _grfSource3D!.EnumeratePaths(),
+                readBytes: (vp) =>
+                {
+                    try { return (true, _grfSource3D!.ReadAllBytes(vp), null); }
+                    catch (Exception ex) { return (false, null, ex.Message); }
+                }
+            ));
+
+            EnsureMap3DEditorInitialized();
+            PopulateRswMapDropdown();
+            if (Map3DStatusText != null)
+                Map3DStatusText.Text = $"3D GRF: {IOPath.GetFileName(path)} ({VfsPathResolver.EnumerateRswMapNames(_compositeVfs3D!).Count} RSW maps)";
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Failed to open GRF for 3D.\n\n{ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private void LoadMap3D_Click(object sender, RoutedEventArgs e)
+    {
+        var name = (Map3DMapCombo?.SelectedItem as string) ?? Map3DMapCombo?.Text?.Trim() ?? "";
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            MessageBox.Show("Select an RSW map from the dropdown or type a map name (e.g. prontera).", "3D Map Editor", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+        EnsureMap3DEditorInitialized();
+        GatEditorView3DTab?.LoadMap(name);
+    }
+
+    private void Map3DMapCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        // Auto-load when user picks a different map from dropdown (BrowEdit-style). Skip when populating (e.RemovedItems empty = initial set).
+        if (e?.AddedItems?.Count > 0 && e.AddedItems[0] is string name && !string.IsNullOrWhiteSpace(name) &&
+            e.RemovedItems?.Count > 0 && GatEditorView3DTab != null && GetVfsFor3D().Sources.Count > 0)
+        {
+            Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, new Action(() =>
+            {
+                if (Map3DMapCombo?.SelectedItem is string sel && sel == name)
+                    GatEditorView3DTab.LoadMap(name);
+            }));
+        }
+    }
+
+    private void PopulateRswMapDropdown()
+    {
+        if (Map3DMapCombo == null) return;
+        var vfs = GetVfsFor3D();
+        if (vfs.Sources.Count == 0)
+        {
+            Map3DMapCombo.ItemsSource = null;
+            Map3DMapCombo.Text = "";
+            return;
+        }
+        var names = VfsPathResolver.EnumerateRswMapNames(vfs);
+        Map3DMapCombo.ItemsSource = names;
+        if (names.Count > 0)
+            Map3DMapCombo.SelectedIndex = 0;
+        else
+            Map3DMapCombo.Text = "";
+    }
+
+    /// <summary>Initialize 3D tab view with current VFS when tab is used.</summary>
+    private void EnsureMap3DEditorInitialized()
+    {
+        var vfs = GetVfsFor3D();
+        if (vfs.Sources.Count == 0)
+        {
+            if (Map3DStatusText != null)
+                Map3DStatusText.Text = "Open a GRF (Map Editor tab or 'Open GRF for 3D…').";
+            if (Map3DMapCombo != null)
+                Map3DMapCombo.ItemsSource = null;
+            return;
+        }
+        GatEditorView3DTab?.Initialize(vfs, _staging, () => _project?.GrfInternalPath);
+        PopulateRswMapDropdown();
     }
 
 
