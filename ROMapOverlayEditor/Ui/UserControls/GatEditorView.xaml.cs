@@ -82,6 +82,15 @@ namespace ROMapOverlayEditor.UserControls
         // private HelixToolkit.Wpf.TranslateManipulator? _gizmo;
         private bool _ignoreGizmoChange = false;
 
+        // ====================================================================
+        // EVENTS
+        // ====================================================================
+        
+        /// <summary>
+        /// Fired when a map is successfully loaded.
+        /// </summary>
+        public event EventHandler<string>? MapLoaded;
+
         public GatEditorView()
         {
             InitializeComponent();
@@ -303,22 +312,83 @@ namespace ROMapOverlayEditor.UserControls
         
         private async void Open3DMap_Click(object sender, RoutedEventArgs e)
         {
-            if (_vfs == null || _browseGrf == null)
+            if (_vfs == null)
+            {
+                MessageBox.Show("Please open a GRF file first (File → Open GRF).", "3D Map", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            // Prompt for map name
+            var inputDialog = new Window
+            {
+                Title = "Open 3D Map",
+                Width = 400,
+                Height = 150,
+                WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                Owner = Window.GetWindow(this)
+            };
+
+            var stack = new StackPanel { Margin = new Thickness(15) };
+            stack.Children.Add(new TextBlock 
+            { 
+                Text = "Enter map name (e.g., prontera, 0@guild_r):",
+                Margin = new Thickness(0, 0, 0, 10)
+            });
+
+            var textBox = new TextBox 
+            { 
+                Text = string.IsNullOrEmpty(_mapName) ? "prontera" : _mapName,
+                Margin = new Thickness(0, 0, 0, 15)
+            };
+            stack.Children.Add(textBox);
+
+            var buttonPanel = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
+            var okButton = new Button { Content = "Load", Width = 75, Margin = new Thickness(0, 0, 10, 0) };
+            var cancelButton = new Button { Content = "Cancel", Width = 75 };
+            
+            bool? dialogResult = null;
+            okButton.Click += (s, args) => { dialogResult = true; inputDialog.Close(); };
+            cancelButton.Click += (s, args) => { dialogResult = false; inputDialog.Close(); };
+            textBox.KeyDown += (s, args) => { if (args.Key == Key.Enter) { dialogResult = true; inputDialog.Close(); } };
+
+            buttonPanel.Children.Add(okButton);
+            buttonPanel.Children.Add(cancelButton);
+            stack.Children.Add(buttonPanel);
+
+            inputDialog.Content = stack;
+            inputDialog.ShowDialog();
+
+            if (dialogResult != true || string.IsNullOrWhiteSpace(textBox.Text))
+                return;
+
+            var mapName = textBox.Text.Trim();
+            await Load3DMapSafeAsync(mapName);
+        }
+
+        /// <summary>
+        /// Handler for the "Load" button next to the map name input.
+        /// </summary>
+        private async void LoadMapBtn_Click(object sender, RoutedEventArgs e)
+        {
+            if (_vfs == null)
             {
                 MessageBox.Show("Please open a GRF file first.", "3D Map", MessageBoxButton.OK, MessageBoxImage.Information);
                 return;
             }
 
-            var rswPath = _browseGrf();
-            if (string.IsNullOrWhiteSpace(rswPath)) return;
-
-            if (!rswPath.EndsWith(".rsw", StringComparison.OrdinalIgnoreCase))
+            var mapName = MapNameInput?.Text?.Trim() ?? "";
+            
+            if (string.IsNullOrWhiteSpace(mapName))
             {
-                MessageBox.Show("Please select an .rsw file.", "3D Map", MessageBoxButton.OK, MessageBoxImage.Warning);
+                MessageBox.Show("Enter a map name (e.g., prontera) and click Load.", "3D Map", MessageBoxButton.OK, MessageBoxImage.Information);
                 return;
             }
-
-            await Load3DMapSafeAsync(rswPath);
+            
+            // Remove .rsw extension if user typed it
+            if (mapName.EndsWith(".rsw", StringComparison.OrdinalIgnoreCase))
+                mapName = mapName[..^4];
+            
+            await Load3DMapSafeAsync(mapName);
         }
 
         public void LoadMap(string mapNameOrPath)
@@ -432,7 +502,10 @@ namespace ROMapOverlayEditor.UserControls
                      PreviewText.Text = preview;
                      
                      StatusLabel.Text = (_gat != null && map.GatBytes != null) ? $"Loaded {_mapName}" : $"Loaded {_mapName} (No GAT)";
-                });
+                     
+                     // Notify parent window that map loaded
+                     MapLoaded?.Invoke(this, _mapName);
+                 });
             }
             catch (Exception ex)
             {
@@ -483,13 +556,6 @@ namespace ROMapOverlayEditor.UserControls
         private void Set3DStatus(string text)
         {
             Dispatcher.Invoke(() => { StatusLabel.Text = text; });
-        }
-
-        private async void LoadMapBtn_Click(object sender, RoutedEventArgs e)
-        {
-            string mapName = MapNameInput.Text?.Trim() ?? "";
-            if (string.IsNullOrWhiteSpace(mapName)) return;
-            await Load3DMapSafeAsync(mapName);
         }
 
         // ====================================================================

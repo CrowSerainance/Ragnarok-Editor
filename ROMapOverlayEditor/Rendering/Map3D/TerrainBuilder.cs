@@ -17,6 +17,7 @@ namespace ROMapOverlayEditor.Map3D
     public static class TerrainBuilder
     {
         // Builds one MeshGeometry3D per textureId. Only TOP faces (terrain) are rendered.
+        // COORDINATE SYSTEM: BrowEdit3 style (zoom×x, -h, zoom×y)
         public static TerrainBuildResult BuildTexturedTerrain(
             GndFile gnd,
             Func<string, byte[]?> tryLoadTextureBytes,
@@ -27,6 +28,7 @@ namespace ROMapOverlayEditor.Map3D
 
             int w = gnd.Width;
             int h = gnd.Height;
+            float zoom = gnd.TileScale; // BrowEdit3 uses this as zoom/scale factor
 
             for (int y = 0; y < h; y++)
             {
@@ -47,10 +49,12 @@ namespace ROMapOverlayEditor.Map3D
                         perTex[texId] = mesh;
                     }
 
-                    var p1 = new Point3D(x, cube.H1 * yScale, y);
-                    var p2 = new Point3D(x + 1, cube.H2 * yScale, y);
-                    var p3 = new Point3D(x + 1, cube.H3 * yScale, y + 1);
-                    var p4 = new Point3D(x, cube.H4 * yScale, y + 1);
+                    // BrowEdit3 coordinate system: (zoom×x, -h, zoom×y)
+                    // Heights are negated because BrowEdit stores them inverted
+                    var p1 = new Point3D(zoom * x,       -cube.H1 * yScale, zoom * y);
+                    var p2 = new Point3D(zoom * (x + 1), -cube.H2 * yScale, zoom * y);
+                    var p3 = new Point3D(zoom * (x + 1), -cube.H3 * yScale, zoom * (y + 1));
+                    var p4 = new Point3D(zoom * x,       -cube.H4 * yScale, zoom * (y + 1));
 
                     int baseIndex = mesh.Positions.Count;
                     mesh.Positions.Add(p1);
@@ -87,7 +91,7 @@ namespace ROMapOverlayEditor.Map3D
                 res.TerrainPieces.Add(new ModelVisual3D { Content = geom });
             }
 
-            res.Bounds = new Rect3D(0, 0, 0, gnd.Width, 50, gnd.Height);
+            res.Bounds = new Rect3D(0, 0, 0, gnd.Width * zoom, 50, gnd.Height * zoom);
             return res;
         }
 
@@ -116,7 +120,8 @@ namespace ROMapOverlayEditor.Map3D
                 var bytes = tryLoadTextureBytes(c);
                 if (bytes == null) continue;
 
-                var bmp = TextureLoader.BytesToBitmapSource(bytes, c);
+                // Use centralized TextureLoader for consistent TGA/PNG/BMP handling
+                var bmp = TextureLoader.LoadTexture(bytes, c);
                 if (bmp == null) continue;
 
                 var brush = new ImageBrush(bmp) { Stretch = Stretch.Fill };

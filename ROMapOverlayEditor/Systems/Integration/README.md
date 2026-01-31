@@ -1,22 +1,8 @@
-# ROMapOverlayEditor BrowEdit Integration (Reference)
-
-## Integration status
-
-The V2 parsers and helpers from this folder are **integrated** into the main ROMapOverlayEditor:
-
-- **RSW**: `Rsw/RswFileV2.cs`, `Rsw/RswReaderV2.cs` — used as first-choice parser in the 3D Map view; fallback to `RswIO` on failure.
-- **GND**: `Gnd/GndFileV2.cs`, `Gnd/GndReaderV2.cs` — used as first-choice parser; fallback to `GndIO`.
-- **Adapters**: `MapAssets/RswGndAdapters.cs` — `RswV2Adapter.ToRswFile`, `GndV2Adapter.ToGndFile` for existing UI and `GndMeshBuilder`.
-- **3D**: `ThreeD/TerrainMeshBuilderV2.cs`, `ThreeD/BrowEditCoordinates.cs` — available for mesh build and coordinate math.
-- **MapAssets**: `MapAssets/IMapFileResolver.cs` — interface for async resolvers; `MapLoaderV2` and `VfsResolvers` remain here as reference for async/GRF pipelines.
-
-This `rsw_viewer` folder is kept as **reference** and for `MapLoaderV2`, `VfsResolvers`, and `BrowEdit_Integration_SourceCode.txt`.
-
----
+# ROMapOverlayEditor BrowEdit Integration
 
 ## Overview
 
-This integration package provides optimized, BrowEdit3-compatible file parsing and rendering utilities for Ragnarok Online map editing. All code is designed to be **copy-paste ready** for integration with Cursor, VS Code, or any other IDE.
+This integration package provides optimized, BrowEdit3-compatible file parsing and rendering utilities for Ragnarok Online map editing.
 
 ## File Structure
 

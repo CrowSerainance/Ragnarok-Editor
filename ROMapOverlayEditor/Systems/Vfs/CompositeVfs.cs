@@ -10,14 +10,29 @@ namespace ROMapOverlayEditor.Vfs
 
         public IReadOnlyList<IAssetSource> Sources => _sources;
 
+        /// <summary>
+        /// Event fired when VFS sources change (mount/unmount).
+        /// Use this to invalidate caches and reload textures.
+        /// </summary>
+        public event EventHandler? VfsChanged;
+
         public void Mount(IAssetSource src)
         {
             if (src == null) throw new ArgumentNullException(nameof(src));
             _sources.Add(src);
             _sources.Sort((a, b) => b.Priority.CompareTo(a.Priority));
+            
+            // Notify listeners that VFS has changed
+            VfsChanged?.Invoke(this, EventArgs.Empty);
         }
 
-        public void UnmountAll() => _sources.Clear();
+        public void UnmountAll()
+        {
+            _sources.Clear();
+            
+            // Notify listeners that VFS has changed
+            VfsChanged?.Invoke(this, EventArgs.Empty);
+        }
 
         public bool TryReadAllBytes(string virtualPath, out byte[]? bytes, out string? error)
         {

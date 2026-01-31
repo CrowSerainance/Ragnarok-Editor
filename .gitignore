@@ -1,4 +1,19 @@
 # ═══════════════════════════════════════════════════════════════════════════════
+# ROOT CLEANUP (Added by Agent)
+# ═══════════════════════════════════════════════════════════════════════════════
+# Ignore everything in the root directory...
+/*
+
+# ...Except the ROMapOverlayEditor folder:
+!/ROMapOverlayEditor/
+
+# And the .gitignore file itself:
+!/.gitignore
+
+# And the solution file (optional, but recommended):
+!/*.sln
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Ragnarok Editor / ROMapOverlayEditor — .gitignore for .NET / WPF / Visual Studio
 # ═══════════════════════════════════════════════════════════════════════════════
 

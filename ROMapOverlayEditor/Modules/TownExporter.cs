@@ -1,6 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════════
 // FILE: TownExporter.cs
-// PURPOSE: Exports town NPC data in copy-paste format for Cursor/Antigravity
+// PURPOSE: Exports town NPC data in copy-paste format
 // ═══════════════════════════════════════════════════════════════════════════════
 
 using System;

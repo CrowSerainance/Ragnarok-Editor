@@ -957,46 +957,76 @@ public partial class MainWindow : Window
 
     private void LoadMap3D_Click(object sender, RoutedEventArgs e)
     {
-        var name = (Map3DMapCombo?.SelectedItem as string) ?? Map3DMapCombo?.Text?.Trim() ?? "";
+        // Get map name from combo text (editable) or selected item
+        string name = Map3DMapCombo?.Text?.Trim() ?? "";
+        
         if (string.IsNullOrWhiteSpace(name))
         {
-            MessageBox.Show("Select an RSW map from the dropdown or type a map name (e.g. prontera).", "3D Map Editor", MessageBoxButton.OK, MessageBoxImage.Information);
+            MessageBox.Show("Enter a map name (e.g. prontera) and click Load.", "3D Map Editor", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
+        
+        // Remove .rsw extension if user typed it
+        if (name.EndsWith(".rsw", StringComparison.OrdinalIgnoreCase))
+            name = name[..^4];
+        
+        var vfs = GetVfsFor3D();
+        if (vfs.Sources.Count == 0)
+        {
+            MessageBox.Show("Please open a GRF file first (use 'Open GRF for 3D…' or load a GRF in Map Editor tab).", "3D Map Editor", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+        
         EnsureMap3DEditorInitialized();
-        GatEditorView3DTab?.LoadMap(name);
+        
+        if (GatEditorView3DTab != null)
+        {
+            Map3DStatusText.Text = $"Loading {name}...";
+            GatEditorView3DTab.LoadMap(name);
+        }
     }
 
     private void Map3DMapCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        // Auto-load when user picks a different map from dropdown (BrowEdit-style). Skip when populating (e.RemovedItems empty = initial set).
-        if (e?.AddedItems?.Count > 0 && e.AddedItems[0] is string name && !string.IsNullOrWhiteSpace(name) &&
-            e.RemovedItems?.Count > 0 && GatEditorView3DTab != null && GetVfsFor3D().Sources.Count > 0)
+        // NO auto-loading on selection change - user must click Load button
+        // This makes the UI more predictable and avoids stuck/preview issues
+        
+        // Just update the text when selection changes (for editable combo)
+        if (e?.AddedItems?.Count > 0 && e.AddedItems[0] is string selectedName)
         {
-            Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, new Action(() =>
+            // Don't overwrite if user is typing
+            if (Map3DMapCombo != null && !Map3DMapCombo.IsKeyboardFocusWithin)
             {
-                if (Map3DMapCombo?.SelectedItem is string sel && sel == name)
-                    GatEditorView3DTab.LoadMap(name);
-            }));
+                Map3DMapCombo.Text = selectedName;
+            }
         }
     }
 
     private void PopulateRswMapDropdown()
     {
         if (Map3DMapCombo == null) return;
+        
         var vfs = GetVfsFor3D();
         if (vfs.Sources.Count == 0)
         {
             Map3DMapCombo.ItemsSource = null;
             Map3DMapCombo.Text = "";
+            Map3DStatusText.Text = "Open a GRF to browse maps.";
             return;
         }
+        
+        // Get all RSW map names from VFS
         var names = VfsPathResolver.EnumerateRswMapNames(vfs);
         Map3DMapCombo.ItemsSource = names;
+        
+        // Don't auto-select - just show placeholder text
+        Map3DMapCombo.SelectedIndex = -1;
+        Map3DMapCombo.Text = "";
+        
         if (names.Count > 0)
-            Map3DMapCombo.SelectedIndex = 0;
+            Map3DStatusText.Text = $"{names.Count} maps available. Type name and click Load.";
         else
-            Map3DMapCombo.Text = "";
+            Map3DStatusText.Text = "No RSW maps found in GRF.";
     }
 
     /// <summary>Initialize 3D tab view with current VFS when tab is used.</summary>
@@ -1011,8 +1041,32 @@ public partial class MainWindow : Window
                 Map3DMapCombo.ItemsSource = null;
             return;
         }
+        
+        // Initialize the view
         GatEditorView3DTab?.Initialize(vfs, _staging, () => _project?.GrfInternalPath);
+        
+        // Subscribe to map loaded event to update dropdown
+        if (GatEditorView3DTab != null)
+        {
+            GatEditorView3DTab.MapLoaded -= GatEditorView3DTab_MapLoaded; // Unsubscribe first to avoid duplicates
+            GatEditorView3DTab.MapLoaded += GatEditorView3DTab_MapLoaded;
+        }
+        
         PopulateRswMapDropdown();
+    }
+    
+    private void GatEditorView3DTab_MapLoaded(object? sender, string mapName)
+    {
+        // Update the dropdown to show the loaded map
+        if (Map3DMapCombo != null)
+        {
+            Map3DMapCombo.Text = mapName;
+        }
+        
+        if (Map3DStatusText != null)
+        {
+            Map3DStatusText.Text = $"Loaded: {mapName}";
+        }
     }
 
 
