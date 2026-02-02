@@ -92,9 +92,6 @@ namespace ROMapOverlayEditor.MapAssets
         /// <summary>Terrain mesh options</summary>
         public TerrainMeshOptions MeshOptions { get; init; } = TerrainMeshOptions.Default;
         
-        /// <summary>GND read options</summary>
-        public GndReadOptions GndOptions { get; init; } = GndReadOptions.Default;
-        
         /// <summary>Default options</summary>
         public static readonly MapLoadOptions Default = new();
         
@@ -102,8 +99,7 @@ namespace ROMapOverlayEditor.MapAssets
         public static readonly MapLoadOptions Preview = new()
         {
             LoadGat = false,
-            MeshOptions = TerrainMeshOptions.Preview,
-            GndOptions = GndReadOptions.Preview
+            MeshOptions = TerrainMeshOptions.Preview
         };
     }
     
@@ -244,7 +240,7 @@ namespace ROMapOverlayEditor.MapAssets
                 {
                     try
                     {
-                        gnd = GndReaderV2.Read(gndBytes, options.GndOptions);
+                        gnd = GndReaderV2.Read(gndBytes);
                     }
                     catch (Exception ex)
                     {

@@ -123,7 +123,7 @@ namespace ROMapOverlayEditor.ThreeD
             target.WritePixels(dst, buf, stride, 0);
         }
 
-        private static BitmapSource TryLoadTexture(IVfs vfs, string name)
+        private static BitmapSource? TryLoadTexture(IVfs vfs, string name)
         {
             // GND texture names are often like "prontera_1.tga". Try TGA decode first (RO terrain is mostly TGA), then BitmapImage.
             foreach (var p in CandidatePaths(name))

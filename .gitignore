@@ -71,6 +71,7 @@ msbuild.wrn
 build_error.txt
 build_log*.txt
 build_output.txt
+Logs/
 
 # NuGet
 packages/

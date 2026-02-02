@@ -98,14 +98,15 @@ namespace ROMapOverlayEditor.ThreeD
             mesh.TextureCoordinates.Add(new Point(s.U3, s.V3));
             mesh.TextureCoordinates.Add(new Point(s.U4, s.V4));
 
-            // Triangle 1
+            // Triangle 1 (Swapped 0-1-2 to 0-2-1 for visibility test)
             mesh.TriangleIndices.Add(baseIdx + 0);
+            mesh.TriangleIndices.Add(baseIdx + 2);
+            mesh.TriangleIndices.Add(baseIdx + 1);
+
+            // Triangle 2 (Swapped 1-3-2 to 1-2-3 for visibility test)
             mesh.TriangleIndices.Add(baseIdx + 1);
             mesh.TriangleIndices.Add(baseIdx + 2);
-            // Triangle 2
-            mesh.TriangleIndices.Add(baseIdx + 1);
             mesh.TriangleIndices.Add(baseIdx + 3);
-            mesh.TriangleIndices.Add(baseIdx + 2);
         }
     }
 }

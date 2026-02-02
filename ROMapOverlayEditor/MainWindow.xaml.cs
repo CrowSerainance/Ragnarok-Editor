@@ -988,16 +988,16 @@ public partial class MainWindow : Window
 
     private void Map3DMapCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        // NO auto-loading on selection change - user must click Load button
-        // This makes the UI more predictable and avoids stuck/preview issues
-        
-        // Just update the text when selection changes (for editable combo)
+        // Auto-load on selection change to satisfy user expectation
         if (e?.AddedItems?.Count > 0 && e.AddedItems[0] is string selectedName)
         {
-            // Don't overwrite if user is typing
+            // Update text if not typing
             if (Map3DMapCombo != null && !Map3DMapCombo.IsKeyboardFocusWithin)
             {
                 Map3DMapCombo.Text = selectedName;
+                
+                // Trigger load immediately
+                LoadMap3D_Click(sender, new RoutedEventArgs());
             }
         }
     }

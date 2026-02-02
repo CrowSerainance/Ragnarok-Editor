@@ -30,6 +30,7 @@ using ROMapOverlayEditor.Patching;
 using ROMapOverlayEditor.Rsw;
 using ROMapOverlayEditor.Tools;
 using ROMapOverlayEditor.Vfs;
+using ROMapOverlayEditor.Gnd;
 using ROMapOverlayEditor.Map3D;
 using ROMapOverlayEditor.ThreeD;
 using ROMapOverlayEditor.Rsm;
@@ -50,7 +51,7 @@ namespace ROMapOverlayEditor.UserControls
         private RswFile? _rsw;
         private string _gatVirtualPath = "";
         
-        private ROMapOverlayEditor.Map3D.GndFile? _gndMap3D;
+        private GndFileV2? _gndMap3D;
         private byte[]? _gndBytes;
 
         private CancellationTokenSource? _loadCts;
@@ -419,7 +420,7 @@ namespace ROMapOverlayEditor.UserControls
                 // 2) Parse RSW, GAT, GND
                 RswFile? rsw = null;
                 GatFile? gat = null;
-                ROMapOverlayEditor.Map3D.GndFile? gndMap3D = null;
+                GndFileV2? gndMap3D = null;
                 string rswErr = "", gatErr = "", gndErr = "";
 
                 try { rsw = RswIO.Read(map.RswBytes); }
@@ -439,8 +440,7 @@ namespace ROMapOverlayEditor.UserControls
 
                 try 
                 { 
-                    using var gm = new MemoryStream(map.GndBytes); 
-                    gndMap3D = GndReader.Read(gm); 
+                     gndMap3D = GndReaderV2.Read(map.GndBytes); 
                 }
                 catch (Exception ex) 
                 { 
@@ -617,9 +617,10 @@ namespace ROMapOverlayEditor.UserControls
                              {
                                  // We use existing logic to build
                                  // Note: We patched GndTexturedTerrainBuilder to have walls now!
-                                 var terrain =TerrainBuilder.BuildTexturedTerrain(_gndMap3D, TryLoadBytesFromVfs, 1.0f);
+                                 // Use UnifiedTerrainBuilder for better visuals (walls, gaps fixed)
+                                 var pieces = ROMapOverlayEditor.ThreeD.UnifiedTerrainBuilder.Build(_gndMap3D, (id) => TerrainBuilder.CreateMaterialForTexture(id, _gndMap3D, TryLoadBytesFromVfs));
                                  var group = new Model3DGroup();
-                                 foreach (var t in terrain.TerrainPieces) group.Children.Add(t.Content);
+                                 foreach (var p in pieces) group.Children.Add(p);
                                  _terrainModel = group;
                              }
                              Viewport.Children.Add(new ModelVisual3D { Content = _terrainModel });
@@ -813,8 +814,32 @@ namespace ROMapOverlayEditor.UserControls
 
         private byte[]? TryLoadBytesFromVfs(string path)
         {
-            if (_vfs == null) return null;
-            return _vfs.TryReadAllBytes(path, out var b, out _) ? b : null;
+            if (_vfs == null || string.IsNullOrWhiteSpace(path)) return null;
+
+            // Normalize path
+            string normPath = path.Replace('\\', '/');
+
+            // 1. Try exact path
+            if (_vfs.TryReadAllBytes(normPath, out var b, out _)) return b;
+
+            // 2. Try prefixing with data/texture/ if not already
+            if (!normPath.StartsWith("data/", StringComparison.OrdinalIgnoreCase))
+            {
+                if (_vfs.TryReadAllBytes("data/texture/" + normPath, out b, out _)) return b;
+            }
+
+            // 3. Try failing back to filename only in data/texture/
+            string name = System.IO.Path.GetFileName(normPath);
+            if (!string.Equals(name, normPath, StringComparison.OrdinalIgnoreCase))
+            {
+                if (_vfs.TryReadAllBytes("data/texture/" + name, out b, out _)) return b;
+            }
+            
+            // 4. Try texture/ prefix
+            if (_vfs.TryReadAllBytes("texture/" + name, out b, out _)) return b;
+
+            System.Diagnostics.Debug.WriteLine($"[GatEditorView] Missing Texture: {path}");
+            return null;
         }
 
         private void CameraSpeed_Changed(object sender, RoutedPropertyChangedEventArgs<double> e)
