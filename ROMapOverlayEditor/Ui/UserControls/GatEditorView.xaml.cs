@@ -285,7 +285,10 @@ private void Inspector_Delete_Click(object? sender, RoutedEventArgs e)
                 double cx = (_gndMap3D.Width * 0.5) * _gndMap3D.TileScale;
                 double cz = (_gndMap3D.Height * 0.5) * _gndMap3D.TileScale;
                 double dist = Math.Max(_gndMap3D.Width * _gndMap3D.TileScale, _gndMap3D.Height * _gndMap3D.TileScale) * 1.25;
-                _cam.ResetEvenOut(suggestedDistance: dist, tx: cx, ty: 100, tz: cz);
+                // Use terrain height extent for camera target Y instead of flat Y=100
+                var (minY, maxY) = _gndMap3D.GetTerrainHeightExtent(1.0f);
+                double centerY = (minY + maxY) * 0.5;
+                _cam.ResetEvenOut(suggestedDistance: dist, tx: cx, ty: centerY, tz: cz);
                 ApplyCameraToRenderer();
             }
             _needsCameraReset = true;
@@ -642,7 +645,7 @@ private void Inspector_Delete_Click(object? sender, RoutedEventArgs e)
                     else
                         Viewport.Children.Add(new DefaultLights());
                     
-                    // 1) Terrain
+                    // 1) Terrain — 3D overlay uses GndFileV2 (from GndReaderV2) with Cubes and Height00/10/01/11; not ParsedGnd. yScale is not clamped/zeroed. Camera framing uses terrain height extent (ResetView, Bounds).
                     if (ChkTerrainTextures?.IsChecked == true && _gndMap3D != null)
                     {
                         if (_vfs == null)
@@ -656,7 +659,7 @@ private void Inspector_Delete_Click(object? sender, RoutedEventArgs e)
                         else
                         {
                             // Build terrain on background thread to avoid blocking UI (stuck loading / 0 FPS).
-                            // Uses GndFileV2 (from GndReaderV2) so Cubes carry full Height00/10/01/11; yScale must not be zeroed.
+                            // GndFileV2.Cubes with Height00/10/01/11; yScale preserved (do not zero).
                             Set3DStatus("Building terrain...");
                             var gnd = _gndMap3D;
                             var loadTex = TryLoadBytesFromVfs;
@@ -711,10 +714,16 @@ private void Inspector_Delete_Click(object? sender, RoutedEventArgs e)
                         Viewport.Children.Add(new ModelVisual3D { Content = gatM });
                     }
 
-                    // 3) RSW Models
+                    // 3) RSW Models — checkbox gates actual rendering: when checked, RSW object list is converted to meshes and added to the viewport
                     if (_rsw != null && _vfs != null && ChkShowRsmModels?.IsChecked == true)
                     {
-                        try { AddRsmModels(_rsw, roScale); }
+                        try
+                        {
+                            int drawCalls = AddRsmModelsWithCounts(_rsw, roScale, out int rswModelCount, out int rsmResolved, out int instanced);
+                            System.Diagnostics.Debug.WriteLine($"[3D RSM] ChkShowRsmModels=ON | RSW model objects={rswModelCount} | RSM files resolved={rsmResolved} | instanced={instanced} | draw calls (ModelVisual3D added)={drawCalls}");
+                            if (rswModelCount > 0 && drawCalls == 0)
+                                Set3DStatus("RSM: objects present but none rendered (check GRF has .rsm files).");
+                        }
                         catch (Exception ex) { Set3DStatus($"RSM render failed: {ex.Message}"); }
                     }
 
@@ -810,18 +819,33 @@ private void Inspector_Delete_Click(object? sender, RoutedEventArgs e)
         // ====================================================================
         // RSM MODELS & MARKERS
         // ====================================================================
+        // Show RSW models checkbox (ChkShowRsmModels) is read in RebuildMesh; when true,
+        // the RSW object list is loaded, .rsm files resolved from VFS, and each instance
+        // is converted to a renderable mesh with correct position/rotation/scale and added
+        // to the viewport (one ModelVisual3D per instance = one draw call).
 
-        private void AddRsmModels(RswFile rsw, double worldScale)
+        /// <summary>
+        /// Loads RSW object list, resolves .rsm files from VFS, and instances each as a renderable mesh with correct transforms.
+        /// Returns number of ModelVisual3D added (draw calls). Out params for debug/logging.
+        /// </summary>
+        private int AddRsmModelsWithCounts(RswFile rsw, double worldScale, out int rswModelCount, out int rsmResolved, out int instanced)
         {
-            if (_vfs == null) return;
+            rswModelCount = 0;
+            rsmResolved = 0;
+            instanced = 0;
+            if (_vfs == null || Viewport == null) return 0;
+
+            int drawCalls = 0;
             foreach (var obj in rsw.Objects)
             {
                 if (obj is not RswModel model) continue;
+                rswModelCount++;
                 if (string.IsNullOrWhiteSpace(model.FileName)) continue;
 
                 byte[]? bytes = TryReadRsmFromVfs(model.FileName);
                 if (bytes == null || bytes.Length < 16)
                     continue;
+                rsmResolved++;
 
                 var (ok, _, rsm) = RsmParser.TryParse(bytes);
                 if (!ok || rsm == null) continue;
@@ -829,11 +853,19 @@ private void Inspector_Delete_Click(object? sender, RoutedEventArgs e)
                 var model3d = RsmMeshBuilder.BuildFromRswModel(rsm, _vfs, model, worldScale);
                 if (model3d != null)
                 {
+                    instanced++;
                     var visual = new ModelVisual3D { Content = model3d };
                     Viewport.Children.Add(visual);
                     _visualToObj[visual] = model;
+                    drawCalls++;
                 }
             }
+            return drawCalls;
+        }
+
+        private void AddRsmModels(RswFile rsw, double worldScale)
+        {
+            AddRsmModelsWithCounts(rsw, worldScale, out _, out _, out _);
         }
 
         /// <summary>Try to read RSM bytes from VFS using BrowEdit-style path fallbacks (data/model/, data/models/, etc.).</summary>

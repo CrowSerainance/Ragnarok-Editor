@@ -67,7 +67,8 @@ namespace ROMapOverlayEditor.Map3D
             if (!hasLightmaps)
             {
                 // Fallback: build mesh data + load textures (no WPF visuals) so we can run on any thread
-                data.Bounds = new Rect3D(0, 0, 0, gnd.Width * gnd.TileScale, 50, gnd.Height * gnd.TileScale);
+                var (minY, maxY) = gnd.GetTerrainHeightExtent(yScale);
+                data.Bounds = new Rect3D(0, minY, 0, gnd.Width * gnd.TileScale, maxY - minY, gnd.Height * gnd.TileScale);
                 var perTex = new Dictionary<int, (List<Point3D> pos, List<Point> tc, List<int> idx)>();
                 int w = gnd.Width, h = gnd.Height;
                 float zoom = gnd.TileScale;
@@ -194,7 +195,8 @@ namespace ROMapOverlayEditor.Map3D
             foreach (var c in chunks)
                 data.Chunks.Add(c);
 
-            data.Bounds = new Rect3D(0, 0, 0, mapW * tileZoom, 50, mapH * tileZoom);
+            var (extentMinY, extentMaxY) = gnd.GetTerrainHeightExtent(yScale);
+            data.Bounds = new Rect3D(0, extentMinY, 0, mapW * tileZoom, extentMaxY - extentMinY, mapH * tileZoom);
             return data;
         }
 
@@ -481,7 +483,8 @@ namespace ROMapOverlayEditor.Map3D
                 res.TerrainPieces.Add(new ModelVisual3D { Content = geom });
             }
 
-            res.Bounds = new Rect3D(0, 0, 0, gnd.Width * zoom, 50, gnd.Height * zoom);
+            var (minY, maxY) = gnd.GetTerrainHeightExtent(yScale);
+            res.Bounds = new Rect3D(0, minY, 0, gnd.Width * zoom, maxY - minY, gnd.Height * zoom);
             System.Diagnostics.Debug.WriteLine($"[TerrainBuilderWithLightmaps] Built {res.TerrainPieces.Count} terrain pieces with lightmaps");
             return res;
         }

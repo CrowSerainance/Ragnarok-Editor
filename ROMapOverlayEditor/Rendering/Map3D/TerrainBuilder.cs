@@ -95,7 +95,8 @@ namespace ROMapOverlayEditor.Map3D
                 res.TerrainPieces.Add(new ModelVisual3D { Content = geom });
             }
 
-            res.Bounds = new Rect3D(0, 0, 0, gnd.Width * zoom, 50, gnd.Height * zoom);
+            var (minY, maxY) = gnd.GetTerrainHeightExtent(yScale);
+            res.Bounds = new Rect3D(0, minY, 0, gnd.Width * zoom, maxY - minY, gnd.Height * zoom);
             return res;
         }
 

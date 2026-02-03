@@ -186,6 +186,33 @@ namespace ROMapOverlayEditor.Gnd
             int minor = Version & 0xFF;    // Low byte
             return $"GND v{major}.{minor} {Width}x{Height} textures={Textures.Count} surfaces={Surfaces.Count}";
         }
+
+        /// <summary>
+        /// Computes terrain height extent in world space (Y = -height * yScale).
+        /// Use for camera framing and bounds so the view uses terrain height instead of a flat Y=0 plane.
+        /// </summary>
+        /// <param name="yScale">Scale applied to elevation (must not be zero).</param>
+        /// <returns>(minY, maxY) in world coordinates.</returns>
+        public (double MinY, double MaxY) GetTerrainHeightExtent(float yScale)
+        {
+            if (Cubes == null || Width == 0 || Height == 0 || yScale == 0)
+                return (0, 50);
+            float minH = float.MaxValue;
+            float maxH = float.MinValue;
+            for (int y = 0; y < Height; y++)
+            {
+                for (int x = 0; x < Width; x++)
+                {
+                    var c = Cubes[x, y];
+                    minH = Math.Min(minH, Math.Min(Math.Min(c.Height00, c.Height10), Math.Min(c.Height01, c.Height11)));
+                    maxH = Math.Max(maxH, Math.Max(Math.Max(c.Height00, c.Height10), Math.Max(c.Height01, c.Height11)));
+                }
+            }
+            if (minH == float.MaxValue) return (0, 50);
+            double minY = -maxH * yScale;
+            double maxY = -minH * yScale;
+            return (minY, maxY);
+        }
     }
     
     // =========================================================================
