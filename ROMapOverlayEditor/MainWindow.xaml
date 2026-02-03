@@ -162,7 +162,7 @@
                     <ToolBar DockPanel.Dock="Top" Background="#2D2D30">
                         <Button x:Name="OpenGrfFor3DBtn" Content="Open GRF for 3D…" Click="OpenGrfFor3D_Click" ToolTip="Load a GRF for 3D viewing only (separate from Map Editor GRF)" Margin="2,0"/>
                         <TextBlock Text="RSW Map:" VerticalAlignment="Center" Margin="8,0,4,0" Foreground="#CCC"/>
-                        <ComboBox x:Name="Map3DMapCombo" Width="200" Height="24" IsEditable="True" VerticalContentAlignment="Center" Margin="0,0,4,0" ToolTip="Select or type map name (e.g. prontera). Populated from GRF when opened." SelectionChanged="Map3DMapCombo_SelectionChanged"/>
+                        <ComboBox x:Name="Map3DMapCombo" Width="220" Height="24" IsEditable="True" VerticalContentAlignment="Center" Margin="0,0,4,0" MaxDropDownHeight="400" ToolTip="Every map in the GRF is listed here. Select or type map name (e.g. prontera). Open GRF for 3D first." SelectionChanged="Map3DMapCombo_SelectionChanged"/>
                         <Button x:Name="LoadMap3DBtn" Content="Load" Click="LoadMap3D_Click" Margin="0,0,8,0"/>
                         <TextBlock x:Name="Map3DStatusText" Text="" VerticalAlignment="Center" Foreground="#888" Margin="4,0"/>
                     </ToolBar>

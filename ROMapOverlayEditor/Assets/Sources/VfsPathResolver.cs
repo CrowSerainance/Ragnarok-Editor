@@ -45,7 +45,7 @@ namespace ROMapOverlayEditor.Sources
             return candidates.OrderByDescending(Score).First();
         }
 
-        /// <summary>Enumerate RSW map base names from VFS (for dropdown, BrowEdit-style).</summary>
+        /// <summary>Enumerate RSW map base names from VFS (for backward compatibility).</summary>
         public static List<string> EnumerateRswMapNames(CompositeVfs vfs)
         {
             var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -59,14 +59,50 @@ namespace ROMapOverlayEditor.Sources
             return list;
         }
 
+        /// <summary>Enumerate all RSW file paths from VFS (BrowEdit-style: every RSW in GRF, including data/, data/maps/, etc.).</summary>
+        public static List<string> EnumerateRswPaths(CompositeVfs vfs)
+        {
+            var paths = new List<string>();
+            foreach (var p in vfs.EnumerateAllPathsDistinct())
+            {
+                if (p.EndsWith(".rsw", StringComparison.OrdinalIgnoreCase))
+                    paths.Add(p);
+            }
+            paths.Sort(StringComparer.OrdinalIgnoreCase);
+            return paths;
+        }
+
         public static (string? Rsw, string? Gnd, string? Gat) ResolveMapTriplet(CompositeVfs vfs, string mapBaseName)
         {
             mapBaseName = (mapBaseName ?? "").Trim();
             if (string.IsNullOrWhiteSpace(mapBaseName))
                 return (null, null, null);
 
+            var normalized = Normalize(mapBaseName);
+            var isFullPath = normalized.Contains("/") || normalized.Contains("\\");
+
+            // If user selected full path (e.g. "data/maps/prontera.rsw"), use that RSW and resolve GND/GAT from same folder first
+            if (isFullPath && normalized.EndsWith(".rsw", StringComparison.OrdinalIgnoreCase) && vfs.Exists(normalized))
+            {
+                var dir = Path.GetDirectoryName(normalized)?.Replace('\\', '/') ?? "";
+                var baseName = Path.GetFileNameWithoutExtension(normalized);
+                var siblingGnd = string.IsNullOrEmpty(dir) ? baseName + ".gnd" : dir.TrimEnd('/') + "/" + baseName + ".gnd";
+                var siblingGat = string.IsNullOrEmpty(dir) ? baseName + ".gat" : dir.TrimEnd('/') + "/" + baseName + ".gat";
+                string? gndPath = vfs.Exists(siblingGnd) ? siblingGnd : null;
+                string? gatPath = vfs.Exists(siblingGat) ? siblingGat : null;
+                if (gndPath == null || gatPath == null)
+                {
+                    foreach (var source in vfs.Sources)
+                    {
+                        if (gndPath == null) gndPath = ResolveByFileName(source, baseName + ".gnd");
+                        if (gatPath == null) gatPath = ResolveByFileName(source, baseName + ".gat");
+                    }
+                }
+                return (normalized, gndPath, gatPath);
+            }
+
             // Allow user to type "prontera.rsw" or "prontera"
-            var baseName = Path.GetFileNameWithoutExtension(mapBaseName);
+            var baseNameOnly = Path.GetFileNameWithoutExtension(mapBaseName);
 
             string? rsw = null;
             string? gnd = null;
@@ -75,9 +111,9 @@ namespace ROMapOverlayEditor.Sources
             // Search across all mounted sources
             foreach (var source in vfs.Sources)
             {
-                if (rsw == null) rsw = ResolveByFileName(source, baseName + ".rsw");
-                if (gnd == null) gnd = ResolveByFileName(source, baseName + ".gnd");
-                if (gat == null) gat = ResolveByFileName(source, baseName + ".gat");
+                if (rsw == null) rsw = ResolveByFileName(source, baseNameOnly + ".rsw");
+                if (gnd == null) gnd = ResolveByFileName(source, baseNameOnly + ".gnd");
+                if (gat == null) gat = ResolveByFileName(source, baseNameOnly + ".gat");
             }
 
             return (rsw, gnd, gat);

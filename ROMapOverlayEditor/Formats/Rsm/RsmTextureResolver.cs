@@ -12,61 +12,76 @@ namespace ROMapOverlayEditor.Rsm
     {
         // RO model textures are often referenced as "texture\\xxx.bmp" or "xxx.bmp" etc.
         // We try multiple candidate roots + extensions and return the first decodable BitmapSource.
-        private static readonly string[] Roots =
-        {
-            "data/texture/",
-            "data/model/",
-            "data/model/texture/",
-            "data/"
-        };
-
-        private static readonly string[] Exts =
-        {
-            "", ".bmp", ".tga", ".png", ".jpg", ".jpeg"
-        };
-
         public static BitmapSource? TryLoadTexture(IVfs vfs, string rawName)
         {
-            if (string.IsNullOrWhiteSpace(rawName)) return null;
+            var bytes = TryLoadTextureBytes(vfs, rawName);
+            return bytes != null ? TryDecode(bytes) : null;
+        }
 
-            // Normalize separators; RO uses backslashes a lot.
-            var name = rawName.Replace('\\', '/').TrimStart('/');
-
-            // Some files contain absolute-ish "texture/xxx" already.
-            var candidates = new List<string>();
-
-            // If name already contains a slash, try it as-is under "data/" first.
-            candidates.Add("data/" + name);
-
-            foreach (var root in Roots)
+        public static byte[]? TryLoadTextureBytes(IVfs vfs, string textureName)
+        {
+            foreach (var candidate in BuildTextureCandidates(textureName))
             {
-                candidates.Add(root + name);
+                if (TryReadBytes(vfs, candidate, out var bytes))
+                    return bytes;
             }
+            return null;
+        }
 
-            // Also attempt leaf-name in common roots (some RSMs only store "foo.bmp")
-            var leaf = Path.GetFileName(name);
-            if (!string.IsNullOrWhiteSpace(leaf))
+        private static bool TryReadBytes(IVfs vfs, string vpath, out byte[]? bytes)
+        {
+            bytes = null;
+            if (vfs == null) return false;
+            if (string.IsNullOrWhiteSpace(vpath)) return false;
+
+            if (vfs.TryReadAllBytes(vpath, out var tmp, out var err) && tmp != null && tmp.Length > 0)
             {
-                foreach (var root in Roots)
-                    candidates.Add(root + leaf);
+                bytes = tmp;
+                return true;
             }
+            return false;
+        }
 
-            foreach (var pathBase in candidates.Distinct(StringComparer.OrdinalIgnoreCase))
+        private static IEnumerable<string> BuildTextureCandidates(string rawName)
+        {
+            // RO is messy: texture names may be without extension, with backslashes, etc.
+            var n = (rawName ?? "").Replace('\\', '/').Trim();
+            while (n.StartsWith("/")) n = n.Substring(1);
+
+            if (string.IsNullOrWhiteSpace(n))
+                yield break;
+
+            // If already rooted in data/, keep it first.
+            if (n.StartsWith("data/", StringComparison.OrdinalIgnoreCase))
+                yield return n;
+
+            // Common RO texture locations
+            yield return $"data/texture/{n}";
+            yield return $"data/texture/À¯ÀúÀÎÅÍÆäÀÌ½º/{n}";
+            yield return n;
+
+            // Add extensions if none
+            bool hasExt =
+                n.EndsWith(".bmp", StringComparison.OrdinalIgnoreCase) ||
+                n.EndsWith(".tga", StringComparison.OrdinalIgnoreCase) ||
+                n.EndsWith(".png", StringComparison.OrdinalIgnoreCase) ||
+                n.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase);
+
+            if (!hasExt)
             {
-                foreach (var ext in Exts)
+                foreach (var basePath in new[]
                 {
-                    var p = pathBase.EndsWith(ext, StringComparison.OrdinalIgnoreCase) ? pathBase : (pathBase + ext);
-
-                    if (!vfs.TryReadAllBytes(p, out var bytes, out _) || bytes == null || bytes.Length < 16)
-                        continue;
-
-                    var bmp = TryDecode(bytes);
-                    if (bmp != null)
-                        return bmp;
+                    n.StartsWith("data/", StringComparison.OrdinalIgnoreCase) ? n : $"data/texture/{n}",
+                    $"data/texture/{n}",
+                    n
+                })
+                {
+                    yield return basePath + ".bmp";
+                    yield return basePath + ".tga";
+                    yield return basePath + ".png";
+                    yield return basePath + ".jpg";
                 }
             }
-
-            return null;
         }
 
         private static BitmapSource? TryDecode(byte[] bytes)

@@ -67,20 +67,22 @@ namespace ROMapOverlayEditor.Gnd
 
             if (version <= 0) return gnd;
 
-            // 3. Lightmaps - Exact 256 bytes per 8x8 entry
+            // 3. Lightmaps - Format: alpha (W*H bytes) + RGB (W*H*3 bytes) = 256 bytes for 8x8
             if (ms.Position + 16 > ms.Length) return gnd;
             int lmCount = br.ReadInt32();
             int lmWidth = br.ReadInt32();
             int lmHeight = br.ReadInt32();
             int gridSize = br.ReadInt32();
             
-            int perLmSize = lmWidth * lmHeight * 4;
+            // GND lightmap format: first (W*H) bytes = alpha, next (W*H*3) bytes = RGB
+            int pixelsPerLm = lmWidth * lmHeight;
+            int perLmSize = pixelsPerLm + (pixelsPerLm * 3); // alpha + RGB = 256 for 8x8
             long totalLmSize = (long)lmCount * perLmSize;
             
             if (ms.Position + totalLmSize <= ms.Length) {
                 gnd.Lightmaps = new GndLightmapInfo { 
                     Count = lmCount, CellWidth = lmWidth, CellHeight = lmHeight, 
-                    GridSizeCell = gridSize, RawData = br.ReadBytes((int)totalLmSize) 
+                    GridSizeCell = gridSize, Data = br.ReadBytes((int)totalLmSize) 
                 };
             } else {
                 // Return partial data on truncation instead of throwing

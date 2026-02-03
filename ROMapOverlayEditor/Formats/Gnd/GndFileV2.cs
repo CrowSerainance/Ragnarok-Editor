@@ -287,11 +287,12 @@ namespace ROMapOverlayEditor.Gnd
         public int GridSizeCell { get; set; }
         
         /// <summary>
-        /// Raw lightmap pixel data. Each lightmap is CellWidth * CellHeight * 4 bytes.
-        /// Format: 1 byte intensity + 3 bytes RGB color per pixel.
-        /// Total size: Count * CellWidth * CellHeight * 4 bytes.
+        /// Raw lightmap pixel data in GND format.
+        /// Format: First (W*H) bytes = alpha/shadow, next (W*H*3) bytes = RGB color.
+        /// Total per lightmap: (W*H) + (W*H*3) = 256 bytes for 8x8.
+        /// Total size: Count * ((CellWidth * CellHeight) + (CellWidth * CellHeight * 3)) bytes.
         /// </summary>
-        public byte[] RawData { get; set; } = Array.Empty<byte>();
+        public byte[] Data { get; set; } = Array.Empty<byte>();
     }
     
     /// <summary>

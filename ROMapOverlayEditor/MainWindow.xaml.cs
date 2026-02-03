@@ -947,7 +947,7 @@ public partial class MainWindow : Window
             EnsureMap3DEditorInitialized();
             PopulateRswMapDropdown();
             if (Map3DStatusText != null)
-                Map3DStatusText.Text = $"3D GRF: {IOPath.GetFileName(path)} ({VfsPathResolver.EnumerateRswMapNames(_compositeVfs3D!).Count} RSW maps)";
+                Map3DStatusText.Text = $"3D GRF: {IOPath.GetFileName(path)} ({VfsPathResolver.EnumerateRswPaths(_compositeVfs3D!).Count} RSW maps)";
         }
         catch (Exception ex)
         {
@@ -957,18 +957,14 @@ public partial class MainWindow : Window
 
     private void LoadMap3D_Click(object sender, RoutedEventArgs e)
     {
-        // Get map name from combo text (editable) or selected item
+        // Get map name or full path from combo text (editable) or selected item
         string name = Map3DMapCombo?.Text?.Trim() ?? "";
         
         if (string.IsNullOrWhiteSpace(name))
         {
-            MessageBox.Show("Enter a map name (e.g. prontera) and click Load.", "3D Map Editor", MessageBoxButton.OK, MessageBoxImage.Information);
+            MessageBox.Show("Select a map from the list or type map name (e.g. prontera) or path (e.g. data/maps/prontera.rsw), then Load.", "3D Map Editor", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
-        
-        // Remove .rsw extension if user typed it
-        if (name.EndsWith(".rsw", StringComparison.OrdinalIgnoreCase))
-            name = name[..^4];
         
         var vfs = GetVfsFor3D();
         if (vfs.Sources.Count == 0)
@@ -982,6 +978,7 @@ public partial class MainWindow : Window
         if (GatEditorView3DTab != null)
         {
             Map3DStatusText.Text = $"Loading {name}...";
+            // Pass full path or base name so ResolveMapTriplet can load exact RSW (and same-folder GND/GAT)
             GatEditorView3DTab.LoadMap(name);
         }
     }
@@ -1015,16 +1012,16 @@ public partial class MainWindow : Window
             return;
         }
         
-        // Get all RSW map names from VFS
-        var names = VfsPathResolver.EnumerateRswMapNames(vfs);
-        Map3DMapCombo.ItemsSource = names;
+        // List every RSW path in the GRF (BrowEdit-style: data/prontera.rsw, data/maps/xxx.rsw, etc.)
+        var paths = VfsPathResolver.EnumerateRswPaths(vfs);
+        Map3DMapCombo.ItemsSource = paths;
         
         // Don't auto-select - just show placeholder text
         Map3DMapCombo.SelectedIndex = -1;
         Map3DMapCombo.Text = "";
         
-        if (names.Count > 0)
-            Map3DStatusText.Text = $"{names.Count} maps available. Type name and click Load.";
+        if (paths.Count > 0)
+            Map3DStatusText.Text = $"{paths.Count} RSW maps in GRF — select from list or type name/path, then Load.";
         else
             Map3DStatusText.Text = "No RSW maps found in GRF.";
     }
@@ -1055,17 +1052,17 @@ public partial class MainWindow : Window
         PopulateRswMapDropdown();
     }
     
-    private void GatEditorView3DTab_MapLoaded(object? sender, string mapName)
+    private void GatEditorView3DTab_MapLoaded(object? sender, string mapNameOrPath)
     {
-        // Update the dropdown to show the loaded map
+        // Update the dropdown to show the loaded map (path or base name)
         if (Map3DMapCombo != null)
         {
-            Map3DMapCombo.Text = mapName;
+            Map3DMapCombo.Text = mapNameOrPath ?? "";
         }
         
         if (Map3DStatusText != null)
         {
-            Map3DStatusText.Text = $"Loaded: {mapName}";
+            Map3DStatusText.Text = $"Loaded: {mapNameOrPath ?? ""}";
         }
     }
 

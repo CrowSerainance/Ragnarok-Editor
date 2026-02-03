@@ -7,11 +7,32 @@ namespace ROMapOverlayEditor.ThreeD
         // Camera state
         public double Yaw { get; private set; } = 45;
         public double Pitch { get; private set; } = -45;
-        public double Distance { get; private set; } = 220;
+        public double Distance { get; set; } = 220;
 
-        public double TargetX { get; private set; }
-        public double TargetY { get; private set; }
-        public double TargetZ { get; private set; }
+        public double TargetX { get; set; }
+        public double TargetY { get; set; }
+        public double TargetZ { get; set; }
+
+
+        /// <summary>
+        /// Multiplier for overall camera movement speed.
+        /// </summary>
+        public float SpeedMultiplier { get; set; } = 1.0f;
+
+        /// <summary>
+        /// Sensitivity for camera rotation (orbit).
+        /// </summary>
+        public float RotateSensitivity { get; set; } = 1.0f;
+
+        /// <summary>
+        /// Sensitivity for camera panning.
+        /// </summary>
+        public float PanSensitivity { get; set; } = 1.0f;
+
+        /// <summary>
+        /// Sensitivity for camera zoom.
+        /// </summary>
+        public float ZoomSensitivity { get; set; } = 1.0f;
 
         public void ResetDefault()
         {
@@ -49,6 +70,36 @@ namespace ROMapOverlayEditor.ThreeD
         {
             Distance -= delta * 0.05 * sens;
             Distance = Math.Max(5, Distance);
+        }
+
+        // Helper methods for setting camera state
+        public void SetTarget(double x, double y, double z)
+        {
+            TargetX = x;
+            TargetY = y;
+            TargetZ = z;
+        }
+
+        public void SetDistance(double distance)
+        {
+            Distance = distance;
+        }
+
+        public void SetYawPitch(double yawDeg, double pitchDeg)
+        {
+            Yaw = yawDeg;
+            Pitch = pitchDeg;
+        }
+
+        public void SetState(float tx, float ty, float tz, float distance, float yawDeg, float pitchDeg)
+        {
+            // These assignments compile because they're inside the class that owns the setters.
+            TargetX = tx;
+            TargetY = ty;
+            TargetZ = tz;
+            Distance = distance;
+            Yaw = yawDeg;
+            Pitch = pitchDeg;
         }
     }
 }
