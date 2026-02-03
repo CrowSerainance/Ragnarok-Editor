@@ -285,7 +285,7 @@ private void Inspector_Delete_Click(object? sender, RoutedEventArgs e)
                 double cx = (_gndMap3D.Width * 0.5) * _gndMap3D.TileScale;
                 double cz = (_gndMap3D.Height * 0.5) * _gndMap3D.TileScale;
                 double dist = Math.Max(_gndMap3D.Width * _gndMap3D.TileScale, _gndMap3D.Height * _gndMap3D.TileScale) * 1.25;
-                _cam.ResetEvenOut(suggestedDistance: dist, tx: cx, ty: 40, tz: cz);
+                _cam.ResetEvenOut(suggestedDistance: dist, tx: cx, ty: 100, tz: cz);
                 ApplyCameraToRenderer();
             }
             _needsCameraReset = true;
@@ -636,7 +636,11 @@ private void Inspector_Delete_Click(object? sender, RoutedEventArgs e)
 
                     Viewport.Children.Clear();
                     _visualToObj.Clear();
-                    Viewport.Children.Add(new DefaultLights());
+                    // RSW-based lights (BrowEdit-style preview): sun + ambient from RSW header, point lights from RSW light list
+                    if (_rsw != null)
+                        AddRswLights(_rsw, roScale);
+                    else
+                        Viewport.Children.Add(new DefaultLights());
                     
                     // 1) Terrain
                     if (ChkTerrainTextures?.IsChecked == true && _gndMap3D != null)
@@ -651,16 +655,18 @@ private void Inspector_Delete_Click(object? sender, RoutedEventArgs e)
                         }
                         else
                         {
-                            // Build terrain on background thread to avoid blocking UI (stuck loading / 0 FPS)
+                            // Build terrain on background thread to avoid blocking UI (stuck loading / 0 FPS).
+                            // Uses GndFileV2 (from GndReaderV2) so Cubes carry full Height00/10/01/11; yScale must not be zeroed.
                             Set3DStatus("Building terrain...");
                             var gnd = _gndMap3D;
                             var loadTex = TryLoadBytesFromVfs;
+                            const float terrainYScale = 1.0f; // Preserve GND elevation; do not zero or flatten.
                             int buildId = ++_terrainBuildId;
                             Task.Run(() =>
                             {
                                 try
                                 {
-                                    return TerrainBuilderLM.BuildTerrainDataOffThread(gnd, loadTex);
+                                    return TerrainBuilderLM.BuildTerrainDataOffThread(gnd, loadTex, terrainYScale);
                                 }
                                 catch (Exception ex)
                                 {
@@ -851,6 +857,53 @@ private void Inspector_Delete_Click(object? sender, RoutedEventArgs e)
                     return bytes;
             }
             return null;
+        }
+
+        /// <summary>
+        /// Adds RSW-based lights to the viewport (BrowEdit-style limited preview):
+        /// ambient + directional sun from RSW header (Longitude/Latitude, Diffuse/Ambient),
+        /// plus point lights from each RSW light object in the map.
+        /// </summary>
+        private void AddRswLights(RswFile rsw, double scale)
+        {
+            if (Viewport == null) return;
+
+            static float Clamp01(float v) => v < 0 ? 0 : (v > 1 ? 1 : v);
+            static Color Vec3ToColor(Vec3 v) => Color.FromScRgb(1f, Clamp01(v.X), Clamp01(v.Y), Clamp01(v.Z));
+
+            // 1) Ambient from RSW header
+            var amb = rsw.Light?.Ambient ?? new Vec3(0.3f, 0.3f, 0.3f);
+            Viewport.Children.Add(new ModelVisual3D { Content = new AmbientLight(Vec3ToColor(amb)) });
+
+            // 2) Directional sun from RSW header (Longitude/Latitude -> direction, Diffuse -> color)
+            var dif = rsw.Light?.Diffuse ?? new Vec3(1f, 1f, 1f);
+            int lon = rsw.Light?.Longitude ?? 45;
+            int lat = rsw.Light?.Latitude ?? 45;
+            double lonRad = lon * Math.PI / 180.0;
+            double latRad = lat * Math.PI / 180.0;
+            double cosLat = Math.Cos(latRad);
+            double sinLat = Math.Sin(latRad);
+            double sinLon = Math.Sin(lonRad);
+            double cosLon = Math.Cos(lonRad);
+            var sunDir = new Vector3D(cosLat * sinLon, sinLat, cosLat * cosLon);
+            if (sunDir.LengthSquared < 1e-6) sunDir = new Vector3D(0, 1, 0);
+            else sunDir.Normalize();
+            Viewport.Children.Add(new ModelVisual3D { Content = new DirectionalLight(Vec3ToColor(dif), sunDir) });
+
+            // 3) Point lights from RSW light list (limited preview)
+            foreach (var obj in rsw.Objects)
+            {
+                if (obj is not RswLight light) continue;
+                double x = light.Position.X * scale;
+                double y = light.Position.Y * scale;
+                double z = light.Position.Z * scale;
+                var pl = new PointLight(Vec3ToColor(light.Color), new Point3D(x, y, z));
+                double range = Math.Max(light.Range, 1.0);
+                pl.LinearAttenuation = 1.0 / range;
+                pl.ConstantAttenuation = 0.5;
+                pl.QuadraticAttenuation = 0;
+                Viewport.Children.Add(new ModelVisual3D { Content = pl });
+            }
         }
 
         private void AddRswMarkers(RswFile rsw, double scale)

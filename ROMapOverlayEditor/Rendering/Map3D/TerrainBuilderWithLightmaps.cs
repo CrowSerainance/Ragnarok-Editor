@@ -37,8 +37,11 @@ namespace ROMapOverlayEditor.Map3D
 
     /// <summary>
     /// Enhanced terrain builder that bakes lightmaps into textures for BrowEdit3-style lighting.
-    /// This creates the dramatic lighting effect seen in BrowEdit by multiplying base textures
-    /// with lightmap data (shadows and colored lighting).
+    /// Blending model (matches BrowEdit GND shader):
+    /// 1. Lightmap alpha = shadow multiplier: baseRGB *= lightmap.a (occlusion/shadows).
+    /// 2. Lightmap RGB = additive term: baseRGB += lightmap.rgb (baked colored lighting).
+    /// 3. Per-tile vertex color (BGRA from GND surface) = tint: baseRGB *= vertexColor.rgb, baseA *= vertexColor.a.
+    /// Final: color = (baseTex * vertexColor * lightmapAlpha) + lightmapRGB; alpha = baseAlpha * vertexAlpha.
     /// </summary>
     public static class TerrainBuilderWithLightmaps
     {
@@ -50,6 +53,8 @@ namespace ROMapOverlayEditor.Map3D
         /// Call CreateModel3DGroupFromTerrainData on the UI thread to create the Model3DGroup.
         /// Use this to avoid blocking the UI during heavy lightmap baking.
         /// </summary>
+        /// <param name="gnd">Must be GndFileV2 from GndReaderV2 (populates Cubes with full Height00/10/01/11). Do not use ParsedGnd — it does not carry full cube height data.</param>
+        /// <param name="yScale">Scale applied to vertex Y (elevation). Use 1.0f to preserve GND heights; do not zero or force flat.</param>
         public static TerrainBuildData BuildTerrainDataOffThread(
             GndFileV2 gnd,
             Func<string, byte[]?> tryLoadTextureBytes,
@@ -114,7 +119,7 @@ namespace ROMapOverlayEditor.Map3D
                     baseTextures[i] = tex;
             }
 
-            var perMaterial = new Dictionary<(int texId, int lmId), (List<Point3D> pos, List<Point> tc, List<int> idx)>();
+            var perMaterial = new Dictionary<(int texId, int lmId, int packedColor), (List<Point3D> pos, List<Point> tc, List<int> idx)>();
             int mapW = gnd.Width;
             int mapH = gnd.Height;
             float tileZoom = gnd.TileScale;
@@ -130,7 +135,10 @@ namespace ROMapOverlayEditor.Map3D
                     var s = gnd.Surfaces[surfIndex];
                     int texId = s.TextureIndex;
                     int lmId = s.LightmapIndex;
-                    var key = (texId, lmId);
+                    // Pack BGRA into an int for the dictionary key
+                    int packedColor = (s.A << 24) | (s.R << 16) | (s.G << 8) | s.B;
+
+                    var key = (texId, lmId, packedColor);
                     if (!perMaterial.TryGetValue(key, out var lists))
                     {
                         lists = (new List<Point3D>(), new List<Point>(), new List<int>());
@@ -155,12 +163,20 @@ namespace ROMapOverlayEditor.Map3D
                 var kv = materialList[i];
                 int texId = kv.Key.texId;
                 int lightmapIndex = kv.Key.lmId;
+                int packedColor = kv.Key.packedColor;
+                
+                // Unpack color for bake
+                byte b = (byte)(packedColor & 0xFF);
+                byte g = (byte)((packedColor >> 8) & 0xFF);
+                byte r = (byte)((packedColor >> 16) & 0xFF);
+                byte a = (byte)((packedColor >> 24) & 0xFF);
+
                 var (pos, tc, idx) = kv.Value;
                 BitmapSource? baked = null;
                 bool fallback = false;
                 if (baseTextures.TryGetValue(texId, out var baseTex))
                 {
-                    baked = BakeLightmapIntoTextureLowRes(baseTex, lightmapIndex, gnd);
+                    baked = BakeLightmapIntoTextureLowRes(baseTex, lightmapIndex, r, g, b, a, gnd);
                     if (baked != null && baked.CanFreeze)
                         baked.Freeze();
                 }
@@ -237,8 +253,8 @@ namespace ROMapOverlayEditor.Map3D
                     baseTextures[i] = tex;
             }
 
-            // Group tiles by texture AND lightmap for efficient batching
-            var perMaterial = new Dictionary<(int texId, int lmId), MeshGeometry3D>();
+            // Group tiles by texture AND lightmap AND vertex color for efficient batching
+            var perMaterial = new Dictionary<(int texId, int lmId, int packedColor), MeshGeometry3D>();
 
             int w = gnd.Width;
             int h = gnd.Height;
@@ -257,8 +273,10 @@ namespace ROMapOverlayEditor.Map3D
                     var s = gnd.Surfaces[surfIndex];
                     int texId = s.TextureIndex;
                     int lmId = s.LightmapIndex;
+                    // Pack BGRA into an int
+                    int packedColor = (s.A << 24) | (s.R << 16) | (s.G << 8) | s.B;
 
-                    var key = (texId, lmId);
+                    var key = (texId, lmId, packedColor);
                     if (!perMaterial.TryGetValue(key, out var mesh))
                     {
                         mesh = new MeshGeometry3D();
@@ -288,6 +306,140 @@ namespace ROMapOverlayEditor.Map3D
                     mesh.TriangleIndices.Add(baseIndex + 0);
                     mesh.TriangleIndices.Add(baseIndex + 3);
                     mesh.TriangleIndices.Add(baseIndex + 2);
+
+                    // =========================================================
+                    // WALLS (Front & Side) - Filling the gaps between tiles
+                    // =========================================================
+                    
+                    // 1) FRONT WALL (Faces +Z, connects Height11/01 to neighbor's Height10/00)
+                    if (cube.TileFront >= 0 && cube.TileFront < gnd.Surfaces.Count)
+                    {
+                        var sF = gnd.Surfaces[cube.TileFront];
+                        // If neighbor (y+1) exists, we connect to its top edge. 
+                        // If map edge, we extend down or ignore? 
+                        // BrowEdit uses Height01/Height11 of current tile for the top of the wall
+                        // and Height00/Height10 of the neighbor (y+1) for the bottom of the wall (visually).
+                        
+                        // We need to add this wall to the batch corresponding to its texture
+                        int fPack = (sF.A << 24) | (sF.R << 16) | (sF.G << 8) | sF.B;
+                        var fKey = (sF.TextureIndex, (int)sF.LightmapIndex, fPack);
+
+                        if (!perMaterial.TryGetValue(fKey, out var fMesh))
+                        {
+                            fMesh = new MeshGeometry3D();
+                            perMaterial[fKey] = fMesh;
+                        }
+
+                        // Geometry:
+                        // Top-Left (p4 in main tile):     x,   Height01, y+1
+                        // Top-Right (p3 in main tile):    x+1, Height11, y+1
+                        // Bottom-Left (neighbor's p1):    x,   Neighbor.Height00, y+1
+                        // Bottom-Right (neighbor's p2):   x+1, Neighbor.Height10, y+1
+                        
+                        // Check neighbor for height reference
+                        float hBL = cube.Height01; // Current tile bottom-left (relative to mesh top)
+                        float hBR = cube.Height11; // Current tile bottom-right
+                        float hNextBL = hBL; // Default if no neighbor
+                        float hNextBR = hBR; 
+
+                        if (y < h - 1)
+                        {
+                            var nextCube = gnd.Cubes[x, y + 1];
+                            hNextBL = nextCube.Height00;
+                            hNextBR = nextCube.Height10;
+                        }
+                        
+                        // Vertices
+                        // 0: Top-Left (x, -hBL, y+1)
+                        // 1: Top-Right (x+1, -hBR, y+1)
+                        // 2: Btm-Right (x+1, -hNextBR, y+1)
+                        // 3: Btm-Left (x, -hNextBL, y+1)
+                        
+                        var wp0 = new Point3D(zoom * x,       -hBL * yScale, zoom * (y + 1));
+                        var wp1 = new Point3D(zoom * (x + 1), -hBR * yScale, zoom * (y + 1));
+                        var wp2 = new Point3D(zoom * (x + 1), -hNextBR * yScale, zoom * (y + 1));
+                        var wp3 = new Point3D(zoom * x,       -hNextBL * yScale, zoom * (y + 1));
+
+                        int fIdx = fMesh.Positions.Count;
+                        fMesh.Positions.Add(wp0);
+                        fMesh.Positions.Add(wp1);
+                        fMesh.Positions.Add(wp2);
+                        fMesh.Positions.Add(wp3);
+
+                        // UVs
+                        fMesh.TextureCoordinates.Add(new Point(sF.U1, sF.V1));
+                        fMesh.TextureCoordinates.Add(new Point(sF.U2, sF.V2));
+                        fMesh.TextureCoordinates.Add(new Point(sF.U4, sF.V4)); // BrowEdit typically maps U3/V3 to bottom-left? Standard quad mapping
+                        fMesh.TextureCoordinates.Add(new Point(sF.U3, sF.V3)); 
+
+                        // Indices (0-1-2, 0-2-3)
+                        fMesh.TriangleIndices.Add(fIdx + 0);
+                        fMesh.TriangleIndices.Add(fIdx + 1);
+                        fMesh.TriangleIndices.Add(fIdx + 2);
+
+                        fMesh.TriangleIndices.Add(fIdx + 0);
+                        fMesh.TriangleIndices.Add(fIdx + 2);
+                        fMesh.TriangleIndices.Add(fIdx + 3);
+                    }
+
+                    // 2) SIDE WALL (Faces +X, connects Height10/11 to neighbor's Height00/01)
+                    if (cube.TileSide >= 0 && cube.TileSide < gnd.Surfaces.Count)
+                    {
+                        var sS = gnd.Surfaces[cube.TileSide];
+                        int sPack = (sS.A << 24) | (sS.R << 16) | (sS.G << 8) | sS.B;
+                        var sKey = (sS.TextureIndex, (int)sS.LightmapIndex, sPack);
+
+                        if (!perMaterial.TryGetValue(sKey, out var sMesh))
+                        {
+                            sMesh = new MeshGeometry3D();
+                            perMaterial[sKey] = sMesh;
+                        }
+
+                        // Heights
+                        float hTR = cube.Height10; // Top-Right of current
+                        float hBR = cube.Height11; // Bottom-Right of current
+                        float hNextTL = hTR;
+                        float hNextBL = hBR;
+
+                        if (x < w - 1)
+                        {
+                            var nextCube = gnd.Cubes[x + 1, y];
+                            hNextTL = nextCube.Height00;
+                            hNextBL = nextCube.Height01;
+                        }
+
+                        // Vertices (vertical plane at x+1)
+                        // 0: Top-Left (x+1, -hTR, y)
+                        // 1: Top-Right (x+1, -hBR, y+1)
+                        // 2: Btm-Right (x+1, -hNextBL, y+1)
+                        // 3: Btm-Left (x+1, -hNextTL, y)
+
+                        var wp0 = new Point3D(zoom * (x + 1), -hTR * yScale, zoom * y);
+                        var wp1 = new Point3D(zoom * (x + 1), -hBR * yScale, zoom * (y + 1));
+                        var wp2 = new Point3D(zoom * (x + 1), -hNextBL * yScale, zoom * (y + 1));
+                        var wp3 = new Point3D(zoom * (x + 1), -hNextTL * yScale, zoom * y);
+
+                        int sIdx = sMesh.Positions.Count;
+                        sMesh.Positions.Add(wp0);
+                        sMesh.Positions.Add(wp1);
+                        sMesh.Positions.Add(wp2);
+                        sMesh.Positions.Add(wp3);
+
+                        // UVs
+                        sMesh.TextureCoordinates.Add(new Point(sS.U1, sS.V1));
+                        sMesh.TextureCoordinates.Add(new Point(sS.U2, sS.V2));
+                        sMesh.TextureCoordinates.Add(new Point(sS.U4, sS.V4));
+                        sMesh.TextureCoordinates.Add(new Point(sS.U3, sS.V3));
+
+                        // Indices
+                        sMesh.TriangleIndices.Add(sIdx + 0);
+                        sMesh.TriangleIndices.Add(sIdx + 1);
+                        sMesh.TriangleIndices.Add(sIdx + 2);
+
+                        sMesh.TriangleIndices.Add(sIdx + 0);
+                        sMesh.TriangleIndices.Add(sIdx + 2);
+                        sMesh.TriangleIndices.Add(sIdx + 3);
+                    }
                 }
             }
 
@@ -296,13 +448,21 @@ namespace ROMapOverlayEditor.Map3D
             {
                 int texId = kv.Key.texId;
                 int lmId = kv.Key.lmId;
+                int packedColor = kv.Key.packedColor;
+                
+                // Unpack color for bake
+                byte b = (byte)(packedColor & 0xFF);
+                byte g = (byte)((packedColor >> 8) & 0xFF);
+                byte r = (byte)((packedColor >> 16) & 0xFF);
+                byte a = (byte)((packedColor >> 24) & 0xFF);
+
                 var mesh = kv.Value;
 
                 Material mat;
                 if (baseTextures.TryGetValue(texId, out var baseTex))
                 {
                     // Bake lightmap into texture
-                    var litTex = BakeLightmapIntoTexture(baseTex, lmId, gnd);
+                    var litTex = BakeLightmapIntoTexture(baseTex, lmId, r, g, b, a, gnd);
                     var brush = new ImageBrush(litTex) { Stretch = Stretch.Fill };
                     brush.Freeze();
                     mat = new DiffuseMaterial(brush);
@@ -328,8 +488,12 @@ namespace ROMapOverlayEditor.Map3D
 
         /// <summary>
         /// Bakes at 64x64 only — BrowEdit does GPU sampling (one texture + one lightmap atlas); we approximate with far fewer pixels per bake for speed.
+        /// Now applies vertex color multiplication and ADDITIVE lightmap logic (match BrowEdit shader).
         /// </summary>
-        private static BitmapSource? BakeLightmapIntoTextureLowRes(BitmapSource baseTexture, int lightmapIndex, GndFileV2 gnd)
+        private static BitmapSource? BakeLightmapIntoTextureLowRes(
+            BitmapSource baseTexture, int lightmapIndex, 
+            byte vR, byte vG, byte vB, byte vA,
+            GndFileV2 gnd)
         {
             var lm = ExtractLightmap(lightmapIndex, gnd);
             if (lm == null) return baseTexture;
@@ -341,11 +505,18 @@ namespace ROMapOverlayEditor.Map3D
             int texW = baseTexture.PixelWidth;
             int texH = baseTexture.PixelHeight;
 
+            // Base texture to 64x64
             var converted = new FormatConvertedBitmap(baseTexture, PixelFormats.Bgra32, null, 0);
             var scale = new ScaleTransform((double)outW / texW, (double)outH / texH);
             var scaled = new TransformedBitmap(converted, scale);
             var texPixels = new byte[outW * outH * 4];
             scaled.CopyPixels(texPixels, outW * 4, 0);
+
+            // Per-tile vertex color (BGRA from GND surface) — tint and alpha
+            float fVr = vR / 255f;
+            float fVg = vG / 255f;
+            float fB = vB / 255f;
+            float fVa = vA / 255f;
 
             for (int y = 0; y < outH; y++)
             {
@@ -354,14 +525,44 @@ namespace ROMapOverlayEditor.Map3D
                     int lmX = (x * lmW) / outW; if (lmX >= lmW) lmX = lmW - 1;
                     int lmY = (y * lmH) / outH; if (lmY >= lmH) lmY = lmH - 1;
                     int lmIdx = lmX + lmY * lmW;
-                    float r = lm[lmIdx * 4 + 2] / 255f;
-                    float g = lm[lmIdx * 4 + 1] / 255f;
-                    float b = lm[lmIdx * 4 + 0] / 255f;
-                    float a = lm[lmIdx * 4 + 3] / 255f;
+                    
+                    // Lightmap RGBA (GND format is A, RGB in 256 byte blocks, our ExtractLightmap returns BGRA)
+                    // ExtractLightmap returns BGRA
+                    float lmB = lm[lmIdx * 4 + 0] / 255f;
+                    float lmG = lm[lmIdx * 4 + 1] / 255f;
+                    float lmR = lm[lmIdx * 4 + 2] / 255f;
+                    float lmShadow = lm[lmIdx * 4 + 3] / 255f; // Alpha channel is shadow/occlusion
+
                     int texIdx = (x + y * outW) * 4;
-                    texPixels[texIdx + 0] = (byte)(texPixels[texIdx + 0] * b * a);
-                    texPixels[texIdx + 1] = (byte)(texPixels[texIdx + 1] * g * a);
-                    texPixels[texIdx + 2] = (byte)(texPixels[texIdx + 2] * r * a);
+                    float texB = texPixels[texIdx + 0] / 255f;
+                    float texG = texPixels[texIdx + 1] / 255f;
+                    float texR = texPixels[texIdx + 2] / 255f;
+                    float texA = texPixels[texIdx + 3] / 255f;
+
+                    // BrowEdit shader blending: (Base * VertexColor * LightmapAlpha) + LightmapRGB; Alpha = BaseAlpha * VertexAlpha
+                    // 1. Multiply base by per-tile vertex color (BGRA tint)
+                    float baseB = texB * fB;
+                    float baseG = texG * fVg;
+                    float baseR = texR * fVr;
+
+                    // 2. Apply lightmap alpha as shadow multiplier
+                    baseB *= lmShadow;
+                    baseG *= lmShadow;
+                    baseR *= lmShadow;
+
+                    // 3. Add lightmap RGB (additive term)
+                    float finalB = baseB + lmB;
+                    float finalG = baseG + lmG;
+                    float finalR = baseR + lmR;
+
+                    if (finalB > 1f) finalB = 1f;
+                    if (finalG > 1f) finalG = 1f;
+                    if (finalR > 1f) finalR = 1f;
+
+                    texPixels[texIdx + 0] = (byte)(finalB * 255f);
+                    texPixels[texIdx + 1] = (byte)(finalG * 255f);
+                    texPixels[texIdx + 2] = (byte)(finalR * 255f);
+                    texPixels[texIdx + 3] = (byte)((texA * fVa) * 255f);
                 }
             }
 
@@ -372,8 +573,12 @@ namespace ROMapOverlayEditor.Map3D
 
         /// <summary>
         /// Bakes a lightmap into a texture (full resolution). Use BakeLightmapIntoTextureLowRes for fast path.
+        /// Now applies vertex color multiplication and ADDITIVE lightmap logic.
         /// </summary>
-        private static BitmapSource BakeLightmapIntoTexture(BitmapSource baseTexture, int lightmapIndex, GndFileV2 gnd)
+        private static BitmapSource BakeLightmapIntoTexture(
+            BitmapSource baseTexture, int lightmapIndex, 
+            byte vR, byte vG, byte vB, byte vA,
+            GndFileV2 gnd)
         {
             var lm = ExtractLightmap(lightmapIndex, gnd);
             if (lm == null) return baseTexture;
@@ -387,6 +592,12 @@ namespace ROMapOverlayEditor.Map3D
             var texPixels = new byte[texW * texH * 4];
             converted.CopyPixels(texPixels, texW * 4, 0);
 
+            // Per-tile vertex color (BGRA from GND surface)
+            float fVr = vR / 255f;
+            float fVg = vG / 255f;
+            float fB = vB / 255f;
+            float fVa = vA / 255f;
+
             for (int y = 0; y < texH; y++)
             {
                 for (int x = 0; x < texW; x++)
@@ -394,14 +605,41 @@ namespace ROMapOverlayEditor.Map3D
                     int lmX = (x * lmW) / texW; if (lmX >= lmW) lmX = lmW - 1;
                     int lmY = (y * lmH) / texH; if (lmY >= lmH) lmY = lmH - 1;
                     int lmIdx = lmX + lmY * lmW;
-                    float r = lm[lmIdx * 4 + 2] / 255f;
-                    float g = lm[lmIdx * 4 + 1] / 255f;
-                    float b = lm[lmIdx * 4 + 0] / 255f;
-                    float a = lm[lmIdx * 4 + 3] / 255f;
+                    
+                    float lmB = lm[lmIdx * 4 + 0] / 255f;
+                    float lmG = lm[lmIdx * 4 + 1] / 255f;
+                    float lmR = lm[lmIdx * 4 + 2] / 255f;
+                    float lmShadow = lm[lmIdx * 4 + 3] / 255f;
+
                     int texIdx = (x + y * texW) * 4;
-                    texPixels[texIdx + 0] = (byte)(texPixels[texIdx + 0] * b * a);
-                    texPixels[texIdx + 1] = (byte)(texPixels[texIdx + 1] * g * a);
-                    texPixels[texIdx + 2] = (byte)(texPixels[texIdx + 2] * r * a);
+                    float texB = texPixels[texIdx + 0] / 255f;
+                    float texG = texPixels[texIdx + 1] / 255f;
+                    float texR = texPixels[texIdx + 2] / 255f;
+                    float texA = texPixels[texIdx + 3] / 255f;
+
+                    // 1. Base * vertex color (tint)
+                    float baseB = texB * fB;
+                    float baseG = texG * fVg;
+                    float baseR = texR * fVr;
+
+                    // 2. Lightmap alpha = shadow multiplier
+                    baseB *= lmShadow;
+                    baseG *= lmShadow;
+                    baseR *= lmShadow;
+
+                    // 3. Lightmap RGB = additive
+                    float finalB = baseB + lmB;
+                    float finalG = baseG + lmG;
+                    float finalR = baseR + lmR;
+
+                    if (finalB > 1f) finalB = 1f;
+                    if (finalG > 1f) finalG = 1f;
+                    if (finalR > 1f) finalR = 1f;
+
+                    texPixels[texIdx + 0] = (byte)(finalB * 255f);
+                    texPixels[texIdx + 1] = (byte)(finalG * 255f);
+                    texPixels[texIdx + 2] = (byte)(finalR * 255f);
+                    texPixels[texIdx + 3] = (byte)((texA * fVa) * 255f);
                 }
             }
 

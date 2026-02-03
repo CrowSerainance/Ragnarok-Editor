@@ -20,8 +20,10 @@ namespace ROMapOverlayEditor.Map3D
     {
         /// <summary>
         /// Builds one MeshGeometry3D per textureId. Only TOP faces (terrain) are rendered.
-        /// COORDINATE SYSTEM: BrowEdit3 style (zoom×x, -h, zoom×y)
+        /// COORDINATE SYSTEM: BrowEdit3 style (zoom×x, -h, zoom×y).
+        /// Uses GndFileV2.Cubes (GndCubeV2_Legacy Height00/10/01/11) for vertex positions. Requires GndReaderV2; do not use ParsedGnd.
         /// </summary>
+        /// <param name="yScale">Scale for elevation; do not zero or force flat.</param>
         public static TerrainBuildResult BuildTexturedTerrain(
             GndFileV2 gnd,
             Func<string, byte[]?> tryLoadTextureBytes,

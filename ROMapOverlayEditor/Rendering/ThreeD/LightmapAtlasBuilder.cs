@@ -75,23 +75,25 @@ namespace ROMapOverlayEditor.ThreeD
         }
 
         /// <summary>
-        /// Build from Gnd.GndLightmapInfo (e.g. from GndReaderV2). Entry size assumed 256 for 8x8.
+        /// Build from Gnd.GndLightmapInfo (e.g. from GndReaderV2) or from pre-built RGBA data.
         /// </summary>
-        public static WriteableBitmap? BuildAtlasFromGndLightmapInfo(int count, int cellWidth, int cellHeight, byte[]? rawData)
+        /// <param name="count">Number of lightmap cells.</param>
+        /// <param name="cellWidth">Width of each cell (e.g. 8).</param>
+        /// <param name="cellHeight">Height of each cell (e.g. 8).</param>
+        /// <param name="rawData">Raw bytes: split format (alpha then RGB per cell) or interleaved RGBA.</param>
+        /// <param name="isInterleavedRgba">True if rawData is interleaved RGBA (4 bytes per pixel per cell). False for GndReaderV2 split format (256 bytes per 8x8 = 64 alpha + 192 RGB).</param>
+        /// <returns>RGBA atlas bitmap, or null if data invalid.</returns>
+        public static WriteableBitmap? BuildAtlasFromGndLightmapInfo(int count, int cellWidth, int cellHeight, byte[]? rawData, bool isInterleavedRgba = false)
         {
-            if (rawData == null || count <= 0) return null;
-            // GndReaderV2 uses LIGHTMAP_ENTRY_SIZE = 256 for 8x8
+            if (rawData == null || count <= 0 || cellWidth <= 0 || cellHeight <= 0) return null;
             int pixelsPerLm = cellWidth * cellHeight;
-            int expectedSize = count * (pixelsPerLm + pixelsPerLm * 3);
-            if (rawData.Length < count * 256)
-                return null;
-            // Support both 256-byte (8x8) and full RGBA-style layout
-            int bytesPerLm = (rawData.Length / count >= pixelsPerLm * 4) ? pixelsPerLm * 4 : 256;
-            if (bytesPerLm == 256 && pixelsPerLm == 64)
-                return BuildAtlas(count, cellWidth, cellHeight, rawData);
-            if (rawData.Length >= count * pixelsPerLm * 4)
+
+            if (isInterleavedRgba)
             {
-                // Already RGBA
+                // RGBA path only: require exactly interleaved RGBA layout (4 bytes per pixel per cell)
+                int requiredBytes = count * pixelsPerLm * 4;
+                if (rawData.Length < requiredBytes)
+                    return null;
                 int atlasW = NextPow2(cellWidth * (int)Math.Ceiling(Math.Sqrt(count)));
                 int cols = atlasW / cellWidth;
                 int rows = (count + cols - 1) / cols;
@@ -118,6 +120,11 @@ namespace ROMapOverlayEditor.ThreeD
                 bmp.Freeze();
                 return bmp;
             }
+
+            // Split format (GndReaderV2): 256 bytes per 8x8 = (W*H) alpha + (W*H*3) RGB
+            int bytesPerLmSplit = pixelsPerLm + pixelsPerLm * 3;
+            if (rawData.Length < count * bytesPerLmSplit)
+                return null;
             return BuildAtlas(count, cellWidth, cellHeight, rawData);
         }
 
