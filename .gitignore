@@ -116,5 +116,5 @@ Desktop.ini
 *.coveragexml
 
 
-# Publish
+# Publish for executable files.
 ROMapOverlayEditor/Publish/
