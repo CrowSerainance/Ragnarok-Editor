@@ -1,5 +1,5 @@
 # ═══════════════════════════════════════════════════════════════════════════════
-# ROOT CLEANUP (Added by Agent)
+# ROOT CLEANUP
 # ═══════════════════════════════════════════════════════════════════════════════
 # Ignore everything in the root directory...
 /*
@@ -117,4 +117,8 @@ Desktop.ini
 
 
 # Publish for executable files.
+<<<<<<< HEAD
 ROMapOverlayEditor/Publish/
+=======
+ROMapOverlayEditor/Publish/
+>>>>>>> 622a449 (Updated gitignore.)
