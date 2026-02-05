@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <RootNamespace>RoDbEditor</RootNamespace>
+    <AssemblyName>RoDbEditor</AssemblyName>
+    <!-- Path to GRFEditor Libraries (override if your EDITORS folder is elsewhere) -->
+    <GrfEditorLibraries Condition="'$(GrfEditorLibraries)' == ''">F:\MMORPG\RAGNAROK ONLINE\EDITORS\GRF EDITOR\GRFEditor-main\Libraries</GrfEditorLibraries>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="YamlDotNet" Version="15.1.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <Reference Include="ErrorManager">
+      <HintPath>$(GrfEditorLibraries)\ErrorManager.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="Encryption">
+      <HintPath>$(GrfEditorLibraries)\Encryption.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="Utilities">
+      <HintPath>$(GrfEditorLibraries)\Utilities.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="GRF">
+      <HintPath>$(GrfEditorLibraries)\GRF.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+  </ItemGroup>
+
+</Project>
