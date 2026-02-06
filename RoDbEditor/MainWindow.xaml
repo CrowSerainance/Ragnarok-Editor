@@ -4,9 +4,11 @@
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:local="clr-namespace:RoDbEditor"
+        xmlns:controls="clr-namespace:RoDbEditor.Core.Controls"
+        xmlns:avalon="clr-namespace:ICSharpCode.AvalonEdit;assembly=ICSharpCode.AvalonEdit"
         mc:Ignorable="d"
-        Title="RoDbEditor - Asset Browser" Height="600" Width="1000"
-        MinHeight="450" MinWidth="800">
+        Title="RoDbEditor (GRF-based) — RateMyServer-style DB Editor" Height="720" Width="1280"
+        MinHeight="500" MinWidth="900">
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
@@ -39,55 +41,180 @@
             <TabItem Header="QUESTS"/>
         </TabControl>
 
-        <!-- Search + List + Details -->
-        <Grid Grid.Row="2" Margin="8" x:Name="MainContentGrid">
+        <!-- List | Preview | Details (RateMyServer-style 3-panel) -->
+        <Grid Grid.Row="2" Margin="6" x:Name="MainContentGrid">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" MinWidth="200"/>
-                <ColumnDefinition Width="4"/>
-                <ColumnDefinition Width="2*" MinWidth="280"/>
+                <ColumnDefinition Width="280" MinWidth="180" MaxWidth="500"/>
+                <ColumnDefinition Width="6"/>
+                <ColumnDefinition Width="*" MinWidth="200" MaxWidth="400"/>
+                <ColumnDefinition Width="6"/>
+                <ColumnDefinition Width="*" MinWidth="280"/>
             </Grid.ColumnDefinitions>
 
-            <!-- Left: Search + Current list -->
-            <StackPanel Grid.Column="0">
-                <TextBlock Text="SEARCH:" Margin="0,0,0,4"/>
-                <Grid Margin="0,0,0,8">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="Auto"/>
-                        <ColumnDefinition Width="Auto"/>
-                    </Grid.ColumnDefinitions>
-                    <TextBox x:Name="SearchBox" Grid.Column="0" Margin="0,0,4,0" Padding="4,2"
-                             VerticalContentAlignment="Center" KeyDown="SearchBox_KeyDown"/>
-                    <Button x:Name="TypeFilterButton" Grid.Column="1" Content="TYPE ▼" Margin="0,0,4,0" Padding="8,2"/>
-                    <Button x:Name="SearchButton" Grid.Column="2" Content="SEARCH" Padding="8,2" Click="SearchButton_Click"/>
+            <!-- Left: Search + virtualized list -->
+            <Grid Grid.Column="0">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*" MinHeight="120"/>
+                </Grid.RowDefinitions>
+                <StackPanel Grid.Row="0">
+                    <TextBlock Text="SEARCH:" Margin="0,0,0,4"/>
+                    <Grid Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBox x:Name="SearchBox" Grid.Column="0" Margin="0,0,4,0" Padding="4,2"
+                                 VerticalContentAlignment="Center" KeyDown="SearchBox_KeyDown"/>
+                        <Button x:Name="TypeFilterButton" Grid.Column="1" Content="TYPE ▼" Margin="0,0,4,0" Padding="8,2"/>
+                        <Button x:Name="SearchButton" Grid.Column="2" Content="SEARCH" Padding="8,2" Click="SearchButton_Click"/>
+                    </Grid>
+                </StackPanel>
+                <StackPanel Grid.Row="1">
+                    <StackPanel x:Name="NpcMapFilterPanel" Visibility="Collapsed">
+                        <TextBlock Text="MAP:" Margin="0,0,0,4"/>
+                        <ComboBox x:Name="NpcMapCombo" Margin="0,0,0,8" SelectionChanged="NpcMapCombo_SelectionChanged"/>
+                    </StackPanel>
+                    <TextBlock x:Name="CurrentListLabel" Text="CURRENT LIST: ITEMS" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                </StackPanel>
+                <ListBox x:Name="AssetListBox" Grid.Row="2" DisplayMemberPath="DisplayName" SelectedValuePath="Path"
+                         SelectionChanged="AssetListBox_SelectionChanged"
+                         VirtualizingStackPanel.IsVirtualizing="True"
+                         VirtualizingStackPanel.VirtualizationMode="Recycling"
+                         ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                         ScrollViewer.CanContentScroll="True"/>
+            </Grid>
+
+            <GridSplitter Grid.Column="1" Width="6" HorizontalAlignment="Stretch" Background="#c0c0c0"
+                          ResizeDirection="Columns" ShowsPreview="False" DragIncrement="1"/>
+
+            <!-- Center: Preview only (icon / sprite / map) -->
+    <GroupBox Grid.Column="2" Header="PREVIEW" Margin="0">
+        <Border Background="#2a2a2a" CornerRadius="6" Margin="8">
+            <Viewbox Stretch="Uniform" StretchDirection="DownOnly" Margin="8">
+                 <Grid>
+                    <!-- Fallback static image (for items/maps) -->
+                    <Image x:Name="CenterPreviewImage" Stretch="None" SnapsToDevicePixels="True"
+                           RenderOptions.BitmapScalingMode="NearestNeighbor"/>
+                    <!-- Animated viewer (for mobs/NPCs) -->
+                    <controls:SpriteAnimationViewer x:Name="SpriteViewer" Visibility="Collapsed"/>
                 </Grid>
-                <TextBlock x:Name="CurrentListLabel" Text="CURRENT LIST: ITEMS" FontWeight="SemiBold" Margin="0,0,0,4"/>
-                <ListBox x:Name="AssetListBox" DisplayMemberPath="DisplayName" SelectedValuePath="Path"
-                         SelectionChanged="AssetListBox_SelectionChanged" MinHeight="200"/>
-            </StackPanel>
+            </Viewbox>
+        </Border>
+    </GroupBox>
 
-            <GridSplitter Grid.Column="1" Width="4" HorizontalAlignment="Stretch" Background="#ccc"/>
+            <GridSplitter Grid.Column="3" Width="6" HorizontalAlignment="Stretch" Background="#c0c0c0"
+                          ResizeDirection="Columns" ShowsPreview="False" DragIncrement="1"/>
 
-            <!-- Right: Details panel -->
-            <Border Grid.Column="2" BorderBrush="#ccc" BorderThickness="1" Padding="12" CornerRadius="4">
+            <!-- Right: Details panel (fields + script + Save/Export/Cancel) -->
+            <Border Grid.Column="4" BorderBrush="#ccc" BorderThickness="1" Padding="12" CornerRadius="4">
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                     <StackPanel>
-                        <TextBlock Text="DETAILS PANEL" FontWeight="SemiBold" Margin="0,0,0,8"/>
-                        <!-- Asset preview (icon / spr frame / map) -->
-                        <Border x:Name="PreviewBorder" Background="#2a2a2a" CornerRadius="6" MinHeight="120" Margin="0,0,0,12">
-                            <Image x:Name="PreviewImage" Stretch="Uniform" Margin="8"/>
-                        </Border>
-                        <TextBlock x:Name="DetailName" Text="NAME: (select an asset)" Margin="0,0,0,4"/>
-                        <TextBlock x:Name="DetailId" Text="ID: —" Margin="0,0,0,4"/>
-                        <TextBlock x:Name="DetailType" Text="TYPE: —" Margin="0,0,0,4"/>
-                        <TextBlock Text="DESCRIPTION:" Margin="0,8,0,4"/>
-                        <TextBox x:Name="DetailDescription" TextWrapping="Wrap" AcceptsReturn="True" MinHeight="60" IsReadOnly="True" Margin="0,0,0,8"/>
-                        <TextBlock Text="SCRIPT" Margin="0,4,0,4"/>
-                        <TextBox x:Name="DetailScript" Text="{},{},{}" TextWrapping="Wrap" AcceptsReturn="True" MinHeight="60" Margin="0,0,0,12"/>
-                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                            <Button x:Name="SaveButton" Content="SAVE" Padding="12,6" Margin="0,0,8,0" Click="SaveButton_Click"/>
-                            <Button Content="EXPORT" Padding="12,6" Margin="0,0,8,0"/>
-                            <Button Content="CANCEL" Padding="12,6" Click="CancelButton_Click"/>
+                        <!-- Item details (ITEMS tab) -->
+                        <StackPanel x:Name="ItemDetailsPanel">
+                            <TextBlock Text="DETAILS PANEL" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                            <TextBlock x:Name="DetailName" Text="NAME: (select an asset)" Margin="0,0,0,4"/>
+                            <TextBlock x:Name="DetailId" Text="ID: —" Margin="0,0,0,4"/>
+                            <TextBlock x:Name="DetailType" Text="TYPE: —" Margin="0,0,0,4"/>
+                            <TextBlock Text="DESCRIPTION:" Margin="0,8,0,4"/>
+                            <TextBox x:Name="DetailDescription" TextWrapping="Wrap" AcceptsReturn="True" MinHeight="60" IsReadOnly="True" Margin="0,0,0,8"/>
+                            <TextBlock Text="SCRIPT" Margin="0,4,0,4"/>
+                            <TextBox x:Name="DetailScript" Text="{},{},{}" TextWrapping="Wrap" AcceptsReturn="True" MinHeight="60" Margin="0,0,0,12"/>
+                            <Expander x:Name="ItemDiffExpander" Header="What changed" Margin="0,8,0,8" Collapsed="DiffExpander_Collapsed" Expanded="DiffExpander_Expanded">
+                                <TextBox x:Name="ItemDiffTextBox" IsReadOnly="True" TextWrapping="NoWrap" AcceptsReturn="True" MinHeight="80" FontFamily="Consolas" FontSize="11" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"/>
+                            </Expander>
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                <Button x:Name="SaveButton" Content="SAVE" Padding="12,6" Margin="0,0,8,0" Click="SaveButton_Click"/>
+                                <Button x:Name="ItemExportButton" Content="EXPORT" Padding="12,6" Margin="0,0,8,0" Click="ItemExportButton_Click"/>
+                                <Button Content="CANCEL" Padding="12,6" Click="CancelButton_Click"/>
+                            </StackPanel>
+                        </StackPanel>
+                        <!-- Monster details (MONSTERS tab) -->
+                        <StackPanel x:Name="MonsterDetailsPanel" Visibility="Collapsed">
+                            <TextBlock Text="MONSTER DETAILS" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                            <TextBlock x:Name="MonsterDetailName" Text="NAME: —" Margin="0,0,0,4"/>
+                            <TextBlock x:Name="MonsterDetailId" Text="ID: —" Margin="0,0,0,4"/>
+                            <TextBlock x:Name="MonsterDetailLevelHp" Text="Level / HP: —" Margin="0,0,0,8"/>
+                            <TextBlock Text="DROPS" FontWeight="SemiBold" Margin="0,4,0,4"/>
+                            <DataGrid x:Name="MonsterDropsGrid" AutoGenerateColumns="False" CanUserAddRows="True" CanUserDeleteRows="True"
+                                      MinHeight="80" Margin="0,0,0,8" HeadersVisibility="Column">
+                                <DataGrid.Columns>
+                                    <DataGridTextColumn Header="Item" Binding="{Binding Item}" Width="*"/>
+                                    <DataGridTextColumn Header="Rate" Binding="{Binding Rate}" Width="60"/>
+                                    <DataGridCheckBoxColumn Header="Steal" Binding="{Binding StealProtected}" Width="50"/>
+                                </DataGrid.Columns>
+                            </DataGrid>
+                            <TextBlock Text="MVP DROPS" FontWeight="SemiBold" Margin="0,4,0,4"/>
+                            <DataGrid x:Name="MonsterMvpDropsGrid" AutoGenerateColumns="False" CanUserAddRows="True" CanUserDeleteRows="True"
+                                      MinHeight="60" Margin="0,0,0,8" HeadersVisibility="Column">
+                                <DataGrid.Columns>
+                                    <DataGridTextColumn Header="Item" Binding="{Binding Item}" Width="*"/>
+                                    <DataGridTextColumn Header="Rate" Binding="{Binding Rate}" Width="60"/>
+                                </DataGrid.Columns>
+                            </DataGrid>
+                            <TextBlock Text="SPAWN LOCATIONS (npc/re/mobs/*.txt)" FontWeight="SemiBold" Margin="0,4,0,4"/>
+                            <ListBox x:Name="MonsterSpawnListBox" MinHeight="60" Margin="0,0,0,8"
+                                     DisplayMemberPath="DisplayText"/>
+                            <Expander x:Name="MonsterDiffExpander" Header="What changed" Margin="0,8,0,8" Collapsed="DiffExpander_Collapsed" Expanded="DiffExpander_Expanded">
+                                <TextBox x:Name="MonsterDiffTextBox" IsReadOnly="True" TextWrapping="NoWrap" AcceptsReturn="True" MinHeight="80" FontFamily="Consolas" FontSize="11" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"/>
+                            </Expander>
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                <Button x:Name="MonsterSaveButton" Content="SAVE" Padding="12,6" Margin="0,0,8,0" Click="MonsterSaveButton_Click"/>
+                                <Button x:Name="MonsterExportButton" Content="EXPORT" Padding="12,6" Margin="0,0,8,0" Click="MonsterExportButton_Click"/>
+                                <Button Content="CANCEL" Padding="12,6" Click="MonsterCancelButton_Click"/>
+                            </StackPanel>
+                        </StackPanel>
+                        <!-- NPC details (NPCs tab) -->
+                        <StackPanel x:Name="NpcDetailsPanel" Visibility="Collapsed">
+                            <TextBlock Text="NPC DETAILS" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                            <TextBlock x:Name="NpcDetailName" Text="NAME: —" Margin="0,0,0,4"/>
+                            <TextBlock x:Name="NpcDetailMapPos" Text="Map (X,Y): —" Margin="0,0,0,4"/>
+                            <TextBlock x:Name="NpcDetailType" Text="TYPE: —" Margin="0,0,0,8"/>
+                            <!-- Shop structured -->
+                            <StackPanel x:Name="NpcShopPanel" Visibility="Collapsed">
+                                <TextBlock Text="SHOP ITEMS" FontWeight="SemiBold" Margin="0,4,0,4"/>
+                                <DataGrid x:Name="NpcShopGrid" AutoGenerateColumns="False" CanUserAddRows="True" CanUserDeleteRows="True"
+                                          MinHeight="100" Margin="0,0,0,8" HeadersVisibility="Column">
+                                    <DataGrid.Columns>
+                                        <DataGridTextColumn Header="Item ID" Binding="{Binding ItemId}" Width="80"/>
+                                        <DataGridTextColumn Header="Price (-1=db)" Binding="{Binding Price}" Width="80"/>
+                                    </DataGrid.Columns>
+                                </DataGrid>
+                            </StackPanel>
+                            <!-- Warp structured -->
+                            <StackPanel x:Name="NpcWarpPanel" Visibility="Collapsed">
+                                <TextBlock Text="WARP TARGET" FontWeight="SemiBold" Margin="0,4,0,4"/>
+                                <Grid Margin="0,0,0,8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                    </Grid.RowDefinitions>
+                                    <TextBlock Text="Map:" Grid.Row="0" Grid.Column="0" Margin="0,0,8,4"/>
+                                    <TextBox x:Name="NpcWarpMap" Grid.Row="0" Grid.Column="1" Margin="0,0,0,4" Padding="4,2"/>
+                                    <TextBlock Text="X:" Grid.Row="1" Grid.Column="0" Margin="0,0,8,4"/>
+                                    <TextBox x:Name="NpcWarpX" Grid.Row="1" Grid.Column="1" Margin="0,0,0,4" Padding="4,2"/>
+                                    <TextBlock Text="Y:" Grid.Row="2" Grid.Column="0" Margin="0,0,8,4"/>
+                                    <TextBox x:Name="NpcWarpY" Grid.Row="2" Grid.Column="1" Margin="0,0,0,4" Padding="4,2"/>
+                                </Grid>
+                            </StackPanel>
+                            <TextBlock Text="SCRIPT" FontWeight="SemiBold" Margin="0,4,0,4"/>
+                            <avalon:TextEditor x:Name="NpcScriptEditor" MinHeight="120" Margin="0,0,0,8"
+                                               FontFamily="Consolas" FontSize="12" ShowLineNumbers="True"/>
+                            <Expander x:Name="NpcDiffExpander" Header="What changed" Margin="0,8,0,8" Collapsed="DiffExpander_Collapsed" Expanded="DiffExpander_Expanded">
+                                <TextBox x:Name="NpcDiffTextBox" IsReadOnly="True" TextWrapping="NoWrap" AcceptsReturn="True" MinHeight="80" FontFamily="Consolas" FontSize="11" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"/>
+                            </Expander>
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                <Button x:Name="NpcSaveButton" Content="SAVE" Padding="12,6" Margin="0,0,8,0" Click="NpcSaveButton_Click"/>
+                                <Button x:Name="NpcExportButton" Content="EXPORT" Padding="12,6" Margin="0,0,8,0" Click="NpcExportButton_Click"/>
+                                <Button Content="CANCEL" Padding="12,6" Click="NpcCancelButton_Click"/>
+                            </StackPanel>
                         </StackPanel>
                     </StackPanel>
                 </ScrollViewer>

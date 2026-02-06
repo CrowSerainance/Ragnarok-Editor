@@ -6,6 +6,7 @@
 
 # ...Except the ROMapOverlayEditor folder:
 !/ROMapOverlayEditor/
+!/RoDbEditor/
 
 # And the .gitignore file itself:
 !/.gitignore
@@ -117,8 +118,4 @@ Desktop.ini
 
 
 # Publish for executable files.
-<<<<<<< HEAD
 ROMapOverlayEditor/Publish/
-=======
-ROMapOverlayEditor/Publish/
->>>>>>> 622a449 (Updated gitignore.)

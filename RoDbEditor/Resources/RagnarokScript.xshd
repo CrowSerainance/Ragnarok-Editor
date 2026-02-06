@@ -1,0 +1,48 @@
+<?xml version="1.0"?>
+<SyntaxDefinition name="Ragnarok Script" xmlns="http://icsharpcode.net/sharpdevelop/syntaxdefinition/2008">
+  <Color name="Comment" foreground="Green" />
+  <Color name="String" foreground="DarkRed" />
+  <Color name="Keyword" foreground="Blue" />
+  <Color name="Number" foreground="DarkMagenta" />
+  <RuleSet>
+    <Span color="Comment" begin="//" />
+    <Span color="Comment" multiline="true" begin="/*" end="*/" />
+    <Span color="String">
+      <Begin>"</Begin>
+      <End>"</End>
+      <RuleSet>
+        <Span begin="\\" end="." />
+      </RuleSet>
+    </Span>
+    <Keywords color="Keyword">
+      <Word>script</Word>
+      <Word>shop</Word>
+      <Word>warp</Word>
+      <Word>if</Word>
+      <Word>else</Word>
+      <Word>elseif</Word>
+      <Word>end</Word>
+      <Word>set</Word>
+      <Word>getitem</Word>
+      <Word>mes</Word>
+      <Word>close</Word>
+      <Word>next</Word>
+      <Word>menu</Word>
+      <Word>goto</Word>
+      <Word>callfunc</Word>
+      <Word>callsub</Word>
+      <Word>return</Word>
+      <Word>sleep</Word>
+      <Word>additem</Word>
+      <Word>delitem</Word>
+      <Word>countitem</Word>
+      <Word>zeny</Word>
+      <Word>announce</Word>
+      <Word>mapwarp</Word>
+      <Word>donpcevent</Word>
+      <Word>attachrid</Word>
+      <Word>detachrid</Word>
+    </Keywords>
+    <Rule color="Number">\b\d+\b</Rule>
+  </RuleSet>
+</SyntaxDefinition>

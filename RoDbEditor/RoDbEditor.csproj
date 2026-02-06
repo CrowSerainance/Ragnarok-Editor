@@ -14,7 +14,11 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="AvalonEdit" Version="6.3.1.90" />
     <PackageReference Include="YamlDotNet" Version="15.1.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="Resources\RagnarokScript.xshd" />
   </ItemGroup>
   <ItemGroup>
     <Reference Include="ErrorManager">
