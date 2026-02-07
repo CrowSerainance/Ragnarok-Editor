@@ -140,9 +140,13 @@ public class NpcIndexService
         else entry.SpriteId = spriteAndData;
         if (spriteAndData.EndsWith(",{"))
         {
-            entry.ScriptBody = ExtractScriptBody(allLines, lineIndex);
-            if (entry.ScriptBody != null)
-                entry.WarpTarget = ParseWarpFromBody(entry.ScriptBody);
+            var body = ExtractScriptBody(allLines, lineIndex);
+            entry.ScriptBody = body ?? "";
+            if (body != null)
+            {
+                var warp = ParseWarpFromBody(body);
+                if (warp != null) entry.WarpTarget = warp;
+            }
         }
         return entry;
     }

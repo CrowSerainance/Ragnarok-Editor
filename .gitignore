@@ -117,5 +117,11 @@ Desktop.ini
 *.coveragexml
 
 
+
 # Publish for executable files.
 ROMapOverlayEditor/Publish/
+
+# RoDbEditor specific
+RoDbEditor/RoDbEditor.ini
+RoDbEditor/RoDbEditor.slnx
+RoDbEditor/tmp/

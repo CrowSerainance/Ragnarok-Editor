@@ -14,6 +14,7 @@ public class RoDbEditorConfig
 
     public List<string> GrfPaths { get; } = new();
     public string? DataPath { get; set; }
+    public string? ExtractedAssetsPath { get; set; }
 
     public static RoDbEditorConfig Load()
     {
@@ -50,6 +51,11 @@ public class RoDbEditorConfig
                     }
                     if (string.Equals(key, "DataPath", System.StringComparison.OrdinalIgnoreCase))
                         config.DataPath = value;
+                    if (string.Equals(key, "ExtractedAssetsPath", System.StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (!string.IsNullOrEmpty(value) && Directory.Exists(value))
+                            config.ExtractedAssetsPath = value;
+                    }
                 }
             }
         }

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
@@ -53,32 +54,58 @@ public partial class SpriteAnimationViewer : System.Windows.Controls.UserControl
 
         if (sprData == null || sprData.Length == 0)
         {
+            System.Diagnostics.Debug.WriteLine("[SpriteAnimationViewer] No SPR data provided");
             ClearDisplay();
             return;
         }
 
+        System.Diagnostics.Debug.WriteLine($"[SpriteAnimationViewer] Loading SPR data: {sprData.Length} bytes, ACT: {actData?.Length ?? 0} bytes");
+
         try
         {
             _spr = new Spr(sprData);
+            System.Diagnostics.Debug.WriteLine($"[SpriteAnimationViewer] SPR loaded: {_spr.Images.Count} images");
 
             // Cache all sprite images as BitmapSource
+            int successCount = 0;
+            int failCount = 0;
             foreach (var img in _spr.Images)
             {
-                var bmp = img.Cast<BitmapSource>();
-                bmp?.Freeze();
-                _spriteCache.Add(bmp!);
+                try
+                {
+                    var bmp = img.Cast<BitmapSource>();
+                    if (bmp != null)
+                    {
+                        bmp.Freeze();
+                        _spriteCache.Add(bmp);
+                        successCount++;
+                    }
+                    else
+                    {
+                        _spriteCache.Add(null!);
+                        failCount++;
+                    }
+                }
+                catch (Exception imgEx)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[SpriteAnimationViewer] Failed to convert image: {imgEx.Message}");
+                    _spriteCache.Add(null!);
+                    failCount++;
+                }
             }
+            System.Diagnostics.Debug.WriteLine($"[SpriteAnimationViewer] Cached {successCount} images, {failCount} failed");
 
             if (actData != null && actData.Length > 0)
             {
                 _act = new Act(actData, sprData);
+                System.Diagnostics.Debug.WriteLine($"[SpriteAnimationViewer] ACT loaded: {_act.NumberOfActions} actions");
             }
 
             RenderCurrentFrame();
         }
         catch (Exception ex)
         {
-            System.Diagnostics.Debug.WriteLine($"Failed to load sprite: {ex.Message}");
+            System.Diagnostics.Debug.WriteLine($"[SpriteAnimationViewer] Failed to load sprite: {ex.Message}\n{ex.StackTrace}");
             ClearDisplay();
         }
     }
@@ -110,8 +137,13 @@ public partial class SpriteAnimationViewer : System.Windows.Controls.UserControl
         {
             if (_spriteCache.Count > 0)
             {
-                SpriteImage.Source = _spriteCache[0];
-                CenterImage(_spriteCache[0]);
+                // Find first non-null sprite
+                var firstSprite = _spriteCache.FirstOrDefault(s => s != null);
+                if (firstSprite != null)
+                {
+                    SpriteImage.Source = firstSprite;
+                    CenterImage(firstSprite);
+                }
             }
             TxtInfo.Text = $"Sprite 0/{_spriteCache.Count}";
             return;
@@ -150,70 +182,64 @@ public partial class SpriteAnimationViewer : System.Windows.Controls.UserControl
 
     private BitmapSource? CompositeFrame(ActFrame frame)
     {
-        if (frame.Layers.Count == 0) return null;
+        if (frame.Layers.Count == 0 || _spr == null) return null;
 
-        // Calculate bounds
+        var layerData = new List<(BitmapSource bmp, int imgW, int imgH, int ox, int oy, float sx, float sy, int angle, int mirrorOffset)>();
+
         int minX = 0, minY = 0, maxX = 0, maxY = 0;
-        var layerData = new List<(BitmapSource bmp, int ox, int oy, float sx, float sy, int angle)>();
 
         foreach (var layer in frame.Layers)
         {
-            if (layer.SpriteIndex < 0 || layer.SpriteIndex >= _spriteCache.Count)
+            int absIdx = layer.GetAbsoluteSpriteId(_spr);
+            if (absIdx < 0 || absIdx >= _spr.Images.Count)
                 continue;
 
-            var bmp = _spriteCache[layer.SpriteIndex];
+            var grfImg = _spr.Images[absIdx];
+            if (grfImg == null) continue;
+
+            int imgW = grfImg.Width;
+            int imgH = grfImg.Height;
+
+            // Apply layer tint/alpha (ActImaging pattern)
+            var img = grfImg.Copy();
+            img.ApplyChannelColor(layer.Color);
+            var bmp = img.Cast<BitmapSource>();
             if (bmp == null) continue;
 
-            int w = (int)(bmp.PixelWidth * Math.Abs(layer.ScaleX));
-            int h = (int)(bmp.PixelHeight * Math.Abs(layer.ScaleY));
-            int x = layer.OffsetX - w / 2;
-            int y = layer.OffsetY - h / 2;
+            // Mirror: effective scale and offset correction (per ActImaging)
+            float effectiveScaleX = layer.ScaleX * (layer.Mirror ? -1f : 1f);
+            int mirrorOffset = layer.Mirror ? -(imgW + 1) % 2 : 0;
 
-            minX = Math.Min(minX, x);
-            minY = Math.Min(minY, y);
-            maxX = Math.Max(maxX, x + w);
-            maxY = Math.Max(maxY, y + h);
+            // Rotation-aware bounds: transform corners by scale → mirror → rotate → translate
+            GetTransformedCorners(imgW, imgH, layer.OffsetX + mirrorOffset, layer.OffsetY, effectiveScaleX, layer.ScaleY, layer.Rotation, out int lminX, out int lminY, out int lmaxX, out int lmaxY);
+            minX = Math.Min(minX, lminX);
+            minY = Math.Min(minY, lminY);
+            maxX = Math.Max(maxX, lmaxX);
+            maxY = Math.Max(maxY, lmaxY);
 
-            layerData.Add((bmp, layer.OffsetX, layer.OffsetY, layer.ScaleX, layer.ScaleY, layer.Rotation));
+            layerData.Add((bmp, imgW, imgH, layer.OffsetX, layer.OffsetY, effectiveScaleX, layer.ScaleY, layer.Rotation, mirrorOffset));
         }
 
         if (layerData.Count == 0) return null;
 
         int width = maxX - minX + 1;
         int height = maxY - minY + 1;
-
         if (width <= 0 || height <= 0) return null;
 
-        // Create drawing visual
         var dv = new DrawingVisual();
         using (var dc = dv.RenderOpen())
         {
-            foreach (var (bmp, ox, oy, sx, sy, angle) in layerData)
+            foreach (var (bmp, imgW, imgH, ox, oy, sx, sy, angle, mirrorOffset) in layerData)
             {
-                double w = bmp.PixelWidth * Math.Abs(sx);
-                double h = bmp.PixelHeight * Math.Abs(sy);
-                double x = ox - minX - w / 2;
-                double y = oy - minY - h / 2;
-
+                // ActImaging transform order: center (with mirror offset) → scale → rotate → translate
                 var transform = new TransformGroup();
-
-                // Scale (handle flipping)
-                transform.Children.Add(new ScaleTransform(
-                    sx < 0 ? -1 : 1,
-                    sy < 0 ? -1 : 1,
-                    w / 2, h / 2));
-
-                // Rotation
-                if (angle != 0)
-                {
-                    transform.Children.Add(new RotateTransform(angle, w / 2, h / 2));
-                }
-
-                // Translation
-                transform.Children.Add(new TranslateTransform(x, y));
+                transform.Children.Add(new TranslateTransform(-(imgW + 1) / 2.0 + mirrorOffset, -(imgH + 1) / 2.0));
+                transform.Children.Add(new ScaleTransform(sx, sy));
+                transform.Children.Add(new RotateTransform(angle, 0, 0));
+                transform.Children.Add(new TranslateTransform(ox - minX, oy - minY));
 
                 dc.PushTransform(transform);
-                dc.DrawImage(bmp, new Rect(0, 0, w, h));
+                dc.DrawImage(bmp, new Rect(0, 0, imgW, imgH));
                 dc.Pop();
             }
         }
@@ -222,6 +248,46 @@ public partial class SpriteAnimationViewer : System.Windows.Controls.UserControl
         rtb.Render(dv);
         rtb.Freeze();
         return rtb;
+    }
+
+    private static void GetTransformedCorners(int w, int h, int offsetX, int offsetY, float scaleX, float scaleY, int angleDeg,
+        out int minX, out int minY, out int maxX, out int maxY)
+    {
+        double rad = angleDeg * Math.PI / 180;
+        double cos = Math.Cos(rad);
+        double sin = Math.Sin(rad);
+
+        double cx = -(w + 1) / 2.0;
+        double cy = -(h + 1) / 2.0;
+
+        double Tx(double x, double y)
+        {
+            double sx = (x + cx) * scaleX;
+            double sy = (y + cy) * scaleY;
+            return sx * cos - sy * sin + offsetX;
+        }
+        double Ty(double x, double y)
+        {
+            double sx = (x + cx) * scaleX;
+            double sy = (y + cy) * scaleY;
+            return sx * sin + sy * cos + offsetY;
+        }
+
+        var corners = new[] { (0, 0), (w, 0), (w, h), (0, h) };
+        minX = int.MaxValue;
+        minY = int.MaxValue;
+        maxX = int.MinValue;
+        maxY = int.MinValue;
+
+        foreach (var (px, py) in corners)
+        {
+            double fx = Tx(px, py);
+            double fy = Ty(px, py);
+            minX = Math.Min(minX, (int)Math.Floor(fx));
+            minY = Math.Min(minY, (int)Math.Floor(fy));
+            maxX = Math.Max(maxX, (int)Math.Ceiling(fx));
+            maxY = Math.Max(maxY, (int)Math.Ceiling(fy));
+        }
     }
 
     private void CenterImage(BitmapSource bmp)

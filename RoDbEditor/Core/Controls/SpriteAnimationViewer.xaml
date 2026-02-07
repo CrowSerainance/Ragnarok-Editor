@@ -13,10 +13,15 @@
         </Grid.RowDefinitions>
         
         <!-- Sprite Canvas -->
-        <Border Grid.Row="0" Background="#2D2D30" BorderBrush="#3F3F46" BorderThickness="1">
-            <Canvas x:Name="SpriteCanvas" ClipToBounds="True">
+        <Border Grid.Row="0" Background="#2D2D30" BorderBrush="#3F3F46" BorderThickness="1"
+                UseLayoutRounding="True" SnapsToDevicePixels="True">
+            <Canvas x:Name="SpriteCanvas" ClipToBounds="True"
+                    RenderOptions.EdgeMode="Aliased"
+                    UseLayoutRounding="True" SnapsToDevicePixels="True">
                 <Image x:Name="SpriteImage" 
                        RenderOptions.BitmapScalingMode="NearestNeighbor"
+                       RenderOptions.EdgeMode="Aliased"
+                       UseLayoutRounding="True" SnapsToDevicePixels="True"
                        Canvas.Left="0" Canvas.Top="0"/>
             </Canvas>
         </Border>

@@ -20,7 +20,8 @@
         <Menu Grid.Row="0">
             <MenuItem Header="_File">
                 <MenuItem Header="Open GRF..." Click="MenuOpenGrf_Click"/>
-                <MenuItem Header="Open _data folder..." Click="MenuOpenDataFolder_Click"/>
+                <MenuItem Header="Select rAthena folder..." Click="MenuOpenDataFolder_Click"/>
+                <MenuItem Header="Open Extracted Assets..." Click="MenuOpenExtractedAssets_Click"/>
                 <Separator/>
                 <MenuItem Header="E_xit" Click="MenuExit_Click"/>
             </MenuItem>
@@ -77,7 +78,10 @@
                         <TextBlock Text="MAP:" Margin="0,0,0,4"/>
                         <ComboBox x:Name="NpcMapCombo" Margin="0,0,0,8" SelectionChanged="NpcMapCombo_SelectionChanged"/>
                     </StackPanel>
-                    <TextBlock x:Name="CurrentListLabel" Text="CURRENT LIST: ITEMS" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                        <TextBlock x:Name="CurrentListLabel" Text="CURRENT LIST: ITEMS" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                        <Button x:Name="CreateNewButton" Content="+ NEW" Padding="8,2" Margin="8,0,0,0" Click="CreateNewButton_Click" FontSize="11"/>
+                    </StackPanel>
                 </StackPanel>
                 <ListBox x:Name="AssetListBox" Grid.Row="2" DisplayMemberPath="DisplayName" SelectedValuePath="Path"
                          SelectionChanged="AssetListBox_SelectionChanged"
@@ -90,20 +94,20 @@
             <GridSplitter Grid.Column="1" Width="6" HorizontalAlignment="Stretch" Background="#c0c0c0"
                           ResizeDirection="Columns" ShowsPreview="False" DragIncrement="1"/>
 
-            <!-- Center: Preview only (icon / sprite / map) -->
-    <GroupBox Grid.Column="2" Header="PREVIEW" Margin="0">
-        <Border Background="#2a2a2a" CornerRadius="6" Margin="8">
-            <Viewbox Stretch="Uniform" StretchDirection="DownOnly" Margin="8">
-                 <Grid>
-                    <!-- Fallback static image (for items/maps) -->
-                    <Image x:Name="CenterPreviewImage" Stretch="None" SnapsToDevicePixels="True"
-                           RenderOptions.BitmapScalingMode="NearestNeighbor"/>
-                    <!-- Animated viewer (for mobs/NPCs) -->
-                    <controls:SpriteAnimationViewer x:Name="SpriteViewer" Visibility="Collapsed"/>
-                </Grid>
-            </Viewbox>
-        </Border>
-    </GroupBox>
+            <!-- Center: Preview (icon / sprite / map) - collapse/expand by selection -->
+            <Expander Grid.Column="2" Header="PREVIEW" IsExpanded="True" Margin="0">
+                <GroupBox BorderThickness="0" Padding="0" Margin="0">
+                    <Border Background="#2a2a2a" CornerRadius="6" Margin="8">
+                        <Viewbox Stretch="Uniform" StretchDirection="DownOnly" Margin="8">
+                            <Grid>
+                                <Image x:Name="CenterPreviewImage" Stretch="None" SnapsToDevicePixels="True"
+                                       RenderOptions.BitmapScalingMode="NearestNeighbor"/>
+                                <controls:SpriteAnimationViewer x:Name="SpriteViewer" Visibility="Collapsed"/>
+                            </Grid>
+                        </Viewbox>
+                    </Border>
+                </GroupBox>
+            </Expander>
 
             <GridSplitter Grid.Column="3" Width="6" HorizontalAlignment="Stretch" Background="#c0c0c0"
                           ResizeDirection="Columns" ShowsPreview="False" DragIncrement="1"/>
@@ -112,12 +116,24 @@
             <Border Grid.Column="4" BorderBrush="#ccc" BorderThickness="1" Padding="12" CornerRadius="4">
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                     <StackPanel>
+                        <!-- Source indicators strip (always visible) -->
+                        <Border Background="#f0f0f0" Padding="8,6" Margin="0,0,0,8" CornerRadius="4">
+                            <StackPanel>
+                                <TextBlock x:Name="SourceIndicator1" FontSize="11" Text="GRF: Not loaded" TextTrimming="CharacterEllipsis" Margin="0,0,0,2"/>
+                                <TextBlock x:Name="SourceIndicator2" FontSize="11" Text="rAthena: Not set" TextTrimming="CharacterEllipsis" Margin="0,0,0,2"/>
+                                <TextBlock x:Name="SourceIndicator3" FontSize="11" Text="Items: None" TextTrimming="CharacterEllipsis"/>
+                            </StackPanel>
+                        </Border>
                         <!-- Item details (ITEMS tab) -->
                         <StackPanel x:Name="ItemDetailsPanel">
                             <TextBlock Text="DETAILS PANEL" FontWeight="SemiBold" Margin="0,0,0,8"/>
                             <TextBlock x:Name="DetailName" Text="NAME: (select an asset)" Margin="0,0,0,4"/>
                             <TextBlock x:Name="DetailId" Text="ID: —" Margin="0,0,0,4"/>
                             <TextBlock x:Name="DetailType" Text="TYPE: —" Margin="0,0,0,4"/>
+                            <Expander x:Name="ItemRelatedFilesExpander" Header="Related files" Margin="0,4,0,4" IsExpanded="False">
+                                <ListBox x:Name="ItemRelatedFilesListBox" MinHeight="40" MaxHeight="120" FontFamily="Consolas" FontSize="11"
+                                         ScrollViewer.HorizontalScrollBarVisibility="Auto" ScrollViewer.VerticalScrollBarVisibility="Auto"/>
+                            </Expander>
                             <TextBlock Text="DESCRIPTION:" Margin="0,8,0,4"/>
                             <TextBox x:Name="DetailDescription" TextWrapping="Wrap" AcceptsReturn="True" MinHeight="60" IsReadOnly="True" Margin="0,0,0,8"/>
                             <TextBlock Text="SCRIPT" Margin="0,4,0,4"/>

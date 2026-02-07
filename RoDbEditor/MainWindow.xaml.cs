@@ -15,6 +15,8 @@ using RoDbEditor.Services;
 
 namespace RoDbEditor;
 
+public enum PreviewMode { None, Image, Sprite }
+
 public partial class MainWindow : Window
 {
     private readonly List<AssetEntry> _allAssets = new();
@@ -30,7 +32,44 @@ public partial class MainWindow : Window
         {
             RefreshList();
             UpdateListLabel();
+            UpdateSourceIndicators();
         };
+    }
+
+    private void UpdateSourceIndicators()
+    {
+        if (SourceIndicator1 == null || SourceIndicator2 == null || SourceIndicator3 == null)
+            return;
+
+        var grf = App.GrfService;
+        if (grf != null && grf.IsLoaded && grf.GrfPaths.Count > 0)
+        {
+            var first = System.IO.Path.GetFileName(grf.GrfPaths[0]);
+            var grfText = grf.GrfPaths.Count == 1
+                ? $"GRF: {first}"
+                : $"GRF: {first} (+{grf.GrfPaths.Count - 1} more)";
+            if (App.FileSystemSpriteSource != null)
+                grfText += $" | Assets: {App.FileSystemSpriteSource.CachedCount} sprites";
+            SourceIndicator1.Text = grfText;
+        }
+        else if (App.FileSystemSpriteSource != null)
+            SourceIndicator1.Text = $"Assets: {App.FileSystemSpriteSource.CachedCount} sprites";
+        else
+            SourceIndicator1.Text = "GRF: Not loaded";
+
+        var dataPath = App.Config?.DataPath;
+        if (!string.IsNullOrWhiteSpace(dataPath))
+            SourceIndicator2.Text = "rAthena: " + dataPath;
+        else
+            SourceIndicator2.Text = "rAthena: Not set";
+
+        var itemSvc = App.ItemDbService;
+        if (itemSvc != null && itemSvc.Items.Count > 0)
+            SourceIndicator3.Text = itemSvc.IsLoadedFromYaml
+                ? $"Items: YAML (rAthena) ({itemSvc.Items.Count:N0})"
+                : $"Items: iteminfo.lub ({itemSvc.Items.Count:N0})";
+        else
+            SourceIndicator3.Text = "Items: None";
     }
 
     private void UpdateListLabel()
@@ -79,91 +118,91 @@ public partial class MainWindow : Window
         RefreshList();
     }
 
-    private void RefreshList()
-    {
-        if (SearchBox == null || AssetListBox == null)
-            return;
-
-        if (_currentCategory == "ITEMS")
+        private void RefreshList()
         {
-            var filter = SearchBox.Text?.Trim();
-            var items = App.ItemDbService.Search(filter).ToList();
-            AssetListBox.ItemsSource = null;
-            AssetListBox.ItemsSource = items;
-            AssetListBox.DisplayMemberPath = "DisplayName";
-            return;
-        }
+            if (SearchBox == null || AssetListBox == null)
+                return;
 
-        if (_currentCategory == "MONSTERS")
-        {
-            var filter = SearchBox.Text?.Trim();
-            var mobs = App.MobDbService.Search(filter).ToList();
-            AssetListBox.ItemsSource = null;
-            AssetListBox.ItemsSource = mobs;
-            AssetListBox.DisplayMemberPath = "DisplayName";
-            return;
-        }
-
-        if (_currentCategory == "NPCs")
-        {
-            var map = (NpcMapCombo?.SelectedItem as string) ?? "";
-            var npcs = App.NpcIndexService.GetNpcsOnMap(map).ToList();
-            var filter = SearchBox.Text?.Trim();
-            if (!string.IsNullOrEmpty(filter))
-                npcs = npcs.Where(n => (n.Name?.Contains(filter, StringComparison.OrdinalIgnoreCase) ?? false) ||
-                                        (n.Map?.Contains(filter, StringComparison.OrdinalIgnoreCase) ?? false)).ToList();
-            AssetListBox.ItemsSource = null;
-            AssetListBox.ItemsSource = npcs;
-            AssetListBox.DisplayMemberPath = "DisplayName";
-            return;
-        }
-
-        _allAssets.Clear();
-        var grf = App.GrfService;
-        if (grf?.Reader?.FileTable == null)
-        {
-            AssetListBox.ItemsSource = null;
-            AssetListBox.ItemsSource = _allAssets;
-            AssetListBox.DisplayMemberPath = "DisplayName";
-            return;
-        }
-
-        string dir;
-        string[] exts;
-        switch (_currentCategory)
-        {
-            case "MONSTERS":
-            case "NPCs":
-                dir = "data\\sprite";
-                exts = new[] { ".act", ".spr" };
-                break;
-            case "MAPS":
-                dir = "data";
-                exts = new[] { ".gat", ".rsw" };
-                break;
-            default:
-                dir = "data";
-                exts = new[] { ".txt", ".lua" };
-                break;
-        }
-
-        try
-        {
-            var files = grf.GetFiles(dir).ToList();
-            foreach (var path in files)
+            if (_currentCategory == "ITEMS")
             {
-                var ext = Path.GetExtension(path)?.ToLowerInvariant();
-                if (ext == null || !exts.Contains(ext)) continue;
-                var name = Path.GetFileName(path);
-                _allAssets.Add(new AssetEntry { Path = path, DisplayName = name });
+                var filter = SearchBox.Text?.Trim();
+                var items = App.ItemDbService != null ? App.ItemDbService.Search(filter).ToList() : new List<ItemEntry>();
+                AssetListBox.ItemsSource = null;
+                AssetListBox.ItemsSource = items;
+                AssetListBox.DisplayMemberPath = "DisplayName";
+                return;
             }
-        }
-        catch { }
 
-        _allAssets.Sort((a, b) => string.Compare(a.DisplayName, b.DisplayName, StringComparison.OrdinalIgnoreCase));
+            if (_currentCategory == "MONSTERS")
+            {
+                var filter = SearchBox.Text?.Trim();
+                var mobs = App.MobDbService != null ? App.MobDbService.Search(filter).ToList() : new List<MobEntry>();
+                AssetListBox.ItemsSource = null;
+                AssetListBox.ItemsSource = mobs;
+                AssetListBox.DisplayMemberPath = "DisplayName";
+                return;
+            }
+
+            if (_currentCategory == "NPCs")
+            {
+                var map = (NpcMapCombo?.SelectedItem as string) ?? "";
+                if (App.NpcIndexService == null)
+                    return;
+                var npcs = App.NpcIndexService.GetNpcsOnMap(map).ToList();
+                var filter = SearchBox.Text?.Trim();
+        if (!string.IsNullOrEmpty(filter))
+            npcs = npcs.Where(n => (n.Name?.Contains(filter, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                                    (n.Map?.Contains(filter, StringComparison.OrdinalIgnoreCase) ?? false)).ToList();
+        AssetListBox.ItemsSource = null;
+        AssetListBox.ItemsSource = npcs;
+        AssetListBox.DisplayMemberPath = "DisplayName";
+        return;
+    }
+
+    _allAssets.Clear();
+
+    var grf = App.GrfService;
+    if (grf == null || !grf.IsLoaded)
+    {
         AssetListBox.ItemsSource = null;
         AssetListBox.ItemsSource = _allAssets;
         AssetListBox.DisplayMemberPath = "DisplayName";
+        return;
+    }
+
+    // Only MAPS + QUESTS use GRF file browsing; ITEMS and MONSTERS use their DB lists only
+    string dir = "data";
+    string[] patterns = _currentCategory switch
+    {
+        "MAPS" => new[] { "*.rsw", "*.gnd", "*.gat" },
+        "QUESTS" => new[] { "*.lua", "*.lub", "*.txt" },
+        _ => new[] { "*.*" }
+    };
+
+    try
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var pat in patterns)
+        {
+            foreach (var path in grf.GetFiles(dir, pat, SearchOption.AllDirectories))
+            {
+                if (!seen.Add(path)) continue;
+
+                var name = System.IO.Path.GetFileName(path);
+                _allAssets.Add(new AssetEntry { Path = path, DisplayName = name });
+            }
+        }
+    }
+    catch
+    {
+        // ignore
+    }
+
+    _allAssets.Sort((a, b) => string.Compare(a.DisplayName, b.DisplayName, StringComparison.OrdinalIgnoreCase));
+    AssetListBox.ItemsSource = null;
+    AssetListBox.ItemsSource = _allAssets;
+    AssetListBox.DisplayMemberPath = "DisplayName";
     }
 
     private void AssetListBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -202,10 +241,41 @@ public partial class MainWindow : Window
             return;
         }
 
-        ItemDetailsPanel.Visibility = Visibility.Visible;
-        MonsterDetailsPanel.Visibility = Visibility.Collapsed;
+        // No selection: show the correct detail panel for current tab
         NpcDetailsPanel.Visibility = Visibility.Collapsed;
+        if (_currentCategory == "MONSTERS")
+        {
+            ItemDetailsPanel.Visibility = Visibility.Collapsed;
+            MonsterDetailsPanel.Visibility = Visibility.Visible;
+        }
+        else
+        {
+            ItemDetailsPanel.Visibility = Visibility.Visible;
+            MonsterDetailsPanel.Visibility = Visibility.Collapsed;
+        }
         ClearDetails();
+    }
+
+    private void SetPreviewMode(PreviewMode mode)
+    {
+        SpriteViewer.Stop();
+        switch (mode)
+        {
+            case PreviewMode.Sprite:
+                CenterPreviewImage.Visibility = Visibility.Collapsed;
+                SpriteViewer.Visibility = Visibility.Visible;
+                CenterPreviewImage.Source = null;
+                break;
+            case PreviewMode.Image:
+                CenterPreviewImage.Visibility = Visibility.Visible;
+                SpriteViewer.Visibility = Visibility.Collapsed;
+                break;
+            default:
+                CenterPreviewImage.Visibility = Visibility.Visible;
+                SpriteViewer.Visibility = Visibility.Collapsed;
+                CenterPreviewImage.Source = null;
+                break;
+        }
     }
 
     private void ShowNpcDetails(NpcScriptEntry npc)
@@ -244,11 +314,8 @@ public partial class MainWindow : Window
             NpcScriptEditor.Text = npc.RawLine;
         NpcDiffExpander.Visibility = Visibility.Visible;
         NpcDiffTextBox.Text = "";
-        
-        // Load NPC sprite (animated)
-        CenterPreviewImage.Visibility = Visibility.Collapsed;
-        SpriteViewer.Visibility = Visibility.Visible;
-        
+
+        SetPreviewMode(PreviewMode.Sprite);
         var (actPath, sprPath) = App.SpriteLookupService.FindNpcSprite(npc.SpriteId);
         if (actPath != null && sprPath != null)
         {
@@ -313,13 +380,26 @@ public partial class MainWindow : Window
         MonsterDiffTextBox.Text = "";
         var spawns = App.SpawnParser.GetSpawnsForMob(mob.Id).ToList();
         MonsterSpawnListBox.ItemsSource = spawns;
-        
-        // Load animated sprite
-        CenterPreviewImage.Visibility = Visibility.Collapsed;
-        SpriteViewer.Visibility = Visibility.Visible;
-        
+
+        SetPreviewMode(PreviewMode.Sprite);
+
+        // Debug: Log sprite lookup attempt
+        System.Diagnostics.Debug.WriteLine($"[ShowMonsterDetails] Looking for sprite: AegisName={mob.AegisName}");
+        System.Diagnostics.Debug.WriteLine($"[ShowMonsterDetails] Sprite cache count: {App.SpriteLookupService?.CachedSpriteCount ?? 0}");
+
+        if (App.SpriteLookupService == null)
+        {
+            System.Diagnostics.Debug.WriteLine("[ShowMonsterDetails] SpriteLookupService is NULL!");
+            SpriteViewer.LoadFromData(null, null);
+            return;
+        }
+
         var (actPath, sprPath) = App.SpriteLookupService.FindMonsterSprite(mob.AegisName);
+        System.Diagnostics.Debug.WriteLine($"[ShowMonsterDetails] Found paths: ACT={actPath ?? "NULL"}, SPR={sprPath ?? "NULL"}");
+
         var (actData, sprData) = App.SpriteLookupService.GetSpriteData(actPath, sprPath);
+        System.Diagnostics.Debug.WriteLine($"[ShowMonsterDetails] Data sizes: ACT={actData?.Length ?? 0}, SPR={sprData?.Length ?? 0}");
+
         SpriteViewer.LoadFromData(actData, sprData);
         SpriteViewer.Play();
     }
@@ -368,22 +448,80 @@ public partial class MainWindow : Window
         ItemDiffExpander.Visibility = Visibility.Visible;
         ItemDiffTextBox.Text = "";
         ItemDiffTextBox.Text = "";
-        
-        CenterPreviewImage.Visibility = Visibility.Visible;
-        SpriteViewer.Visibility = Visibility.Collapsed;
-        SpriteViewer.Stop();
-        CenterPreviewImage.Source = LoadItemIcon(item);
+
+        // Try loading item sprite animation first (from extracted assets or GRF)
+        bool hasSpritePreview = false;
+        if (App.SpriteLookupService != null)
+        {
+            // Items use 아이템 (item) sprite folder, search by ID or AegisName
+            var (actPath, sprPath) = App.SpriteLookupService.FindMonsterSprite(item.AegisName);
+            if (actPath == null && sprPath == null)
+            {
+                // Also try by numeric ID (item sprites are often named by ID)
+                (actPath, sprPath) = App.SpriteLookupService.FindMonsterSprite(item.Id.ToString());
+            }
+            if (actPath != null || sprPath != null)
+            {
+                var (actData, sprData) = App.SpriteLookupService.GetSpriteData(actPath, sprPath);
+                if (sprData != null && sprData.Length > 0)
+                {
+                    SetPreviewMode(PreviewMode.Sprite);
+                    SpriteViewer.LoadFromData(actData, sprData);
+                    SpriteViewer.Play();
+                    hasSpritePreview = true;
+                }
+            }
+        }
+
+        // Fall back to static item icon
+        if (!hasSpritePreview)
+        {
+            SetPreviewMode(PreviewMode.Image);
+            CenterPreviewImage.Source = LoadItemIcon(item);
+        }
+
+        if (App.ItemPathService != null && ItemRelatedFilesListBox != null && ItemRelatedFilesExpander != null)
+        {
+            var related = App.ItemPathService.GetRelatedPaths(item);
+            ItemRelatedFilesListBox.ItemsSource = related.Select(r => $"{r.Label}: {r.Path}").ToList();
+            ItemRelatedFilesExpander.Visibility = related.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        }
     }
 
     private BitmapSource? LoadItemIcon(ItemEntry item)
     {
+        // Try extracted filesystem textures first
+        if (App.FileSystemSpriteSource != null)
+        {
+            var iconPath = App.FileSystemSpriteSource.FindItemIcon(item.Id, item.AegisName);
+            if (iconPath != null)
+            {
+                var iconData = App.FileSystemSpriteSource.GetTextureData(iconPath);
+                if (iconData != null && iconData.Length > 0)
+                {
+                    var iconExt = Path.GetExtension(iconPath)?.ToLowerInvariant() ?? ".bmp";
+                    try
+                    {
+                        var img = ImageProvider.GetImage(iconData, iconExt);
+                        if (img != null)
+                            return img.Cast<BitmapSource>();
+                    }
+                    catch { }
+                }
+            }
+        }
+
+        // Fall back to GRF
         var grf = App.GrfService;
         if (grf == null) return null;
         var paths = new[]
         {
             $"data\\texture\\effect\\{item.Id}.bmp",
             $"data\\texture\\effect\\{item.AegisName}.bmp",
-            $"data\\texture\\effect\\item\\{item.Id}.bmp"
+            $"data\\texture\\effect\\item\\{item.Id}.bmp",
+            $"data\\texture\\effect\\collection\\{item.Id}.bmp",
+            $"data\\texture\\effect\\collection\\{item.AegisName}.bmp",
+            $@"data\texture\유저인터페이스\item\{item.Id}.bmp",
         };
         foreach (var rel in paths)
         {
@@ -403,7 +541,15 @@ public partial class MainWindow : Window
 
     private void ShowAssetDetails(AssetEntry entry)
     {
-        DetailName.Text = "NAME: " + (entry.DisplayName ?? entry.Path);
+        var path = entry.Path ?? "";
+        var displayName = entry.DisplayName ?? path;
+        if (App.ItemPathService != null && App.ItemPathService.IsItemRelatedPath(path))
+        {
+            var item = App.ItemPathService.TryGetItemForPath(path);
+            if (item != null)
+                displayName = $"{displayName} — Item: {item.DisplayName} (ID {item.Id})";
+        }
+        DetailName.Text = "NAME: " + displayName;
         DetailId.Text = "ID: —";
         DetailType.Text = "TYPE: —";
         DetailDescription.Text = "";
@@ -414,46 +560,50 @@ public partial class MainWindow : Window
         ItemDiffExpander.Visibility = Visibility.Collapsed;
 
 
-        var path = entry.Path ?? "";
-        
-        // Determine type
         var ext = Path.GetExtension(path)?.ToLowerInvariant();
-        
+
         if (ext == ".act" || ext == ".spr")
         {
-            CenterPreviewImage.Visibility = Visibility.Collapsed;
-            SpriteViewer.Visibility = Visibility.Visible;
-            
+            SetPreviewMode(PreviewMode.Sprite);
             var actPath = ext == ".act" ? path : Path.ChangeExtension(path, ".act");
             var sprPath = ext == ".spr" ? path : Path.ChangeExtension(path, ".spr");
-            
             var (actData, sprData) = App.SpriteLookupService.GetSpriteData(actPath, sprPath);
             SpriteViewer.LoadFromData(actData, sprData);
             SpriteViewer.Play();
             return;
         }
 
-        CenterPreviewImage.Visibility = Visibility.Visible;
-        SpriteViewer.Visibility = Visibility.Collapsed;
-        SpriteViewer.Stop();
+        SetPreviewMode(PreviewMode.Image);
 
-        var data = App.GrfService.GetData(path);
+        byte[]? data = null;
+        string? loadExt = ext;
+
+        if (ext == ".rsw")
+        {
+            var gatPath = Path.ChangeExtension(path, ".gat");
+            data = App.GrfService.GetData(gatPath);
+            loadExt = ".gat";
+        }
+        else
+        {
+            data = App.GrfService.GetData(path);
+        }
+
         if (data == null || data.Length == 0)
         {
             CenterPreviewImage.Source = null;
             return;
         }
 
-        ext = Path.GetExtension(entry.Path)?.ToLowerInvariant();
         BitmapSource? preview = null;
         try
         {
-            if (ext == ".bmp" || ext == ".png" || ext == ".tga" || ext == ".jpg")
+            if (loadExt == ".bmp" || loadExt == ".png" || loadExt == ".tga" || loadExt == ".jpg")
             {
-                var img = ImageProvider.GetImage(data, ext);
+                var img = ImageProvider.GetImage(data, loadExt);
                 if (img != null) preview = img.Cast<BitmapSource>();
             }
-            else if (ext == ".gat")
+            else if (loadExt == ".gat")
             {
                 var img = ImageProvider.GetImage(data, ".gat");
                 if (img != null) preview = img.Cast<BitmapSource>();
@@ -468,11 +618,12 @@ public partial class MainWindow : Window
 
     private void ClearDetails()
     {
-        CenterPreviewImage.Source = null;
-        CenterPreviewImage.Visibility = Visibility.Visible;
-        SpriteViewer.Visibility = Visibility.Collapsed;
-        SpriteViewer.Stop();
-        
+        SetPreviewMode(PreviewMode.None);
+        if (ItemRelatedFilesListBox != null)
+            ItemRelatedFilesListBox.ItemsSource = null;
+        if (ItemRelatedFilesExpander != null)
+            ItemRelatedFilesExpander.Visibility = Visibility.Collapsed;
+
         DetailName.Text = "NAME: (select an asset)";
         DetailId.Text = "ID: —";
         DetailType.Text = "TYPE: —";
@@ -503,7 +654,7 @@ public partial class MainWindow : Window
             RefreshList();
     }
 
-    private void MenuOpenGrf_Click(object sender, RoutedEventArgs e)
+            private void MenuOpenGrf_Click(object sender, RoutedEventArgs e)
     {
         var dlg = new Microsoft.Win32.OpenFileDialog
         {
@@ -513,45 +664,90 @@ public partial class MainWindow : Window
         };
         if (dlg.ShowDialog(this) != true) return;
 
-        int loadedCount = 0;
+        int added = 0;
         foreach (var path in dlg.FileNames)
         {
-            App.GrfService.AddGrfPath(path);
-            loadedCount++;
+            if (App.GrfService.AddGrfPath(path))
+                added++;
         }
 
-        // Clear sprite cache so it rebuilds with new GRF
-        App.SpriteLookupService.ClearCache();
-        RefreshList();
+        App.SpriteLookupService?.ClearCache();
 
-        // Show status
-        var sb = new System.Text.StringBuilder();
-        sb.AppendLine($"GRF files added: {loadedCount}");
-        sb.AppendLine($"Total GRF paths: {App.GrfService.GrfPaths.Count}");
-        sb.AppendLine($"GRF loaded: {App.GrfService.IsLoaded}");
-
-        if (App.GrfService.IsLoaded)
+        // Try parsing iteminfo directly for diagnostics
+        string parseLog = "";
+        try
         {
-            // Try to get a file count
-            try
+            var iteminfoPath = @"data\luafiles514\lua files\datainfo\iteminfo.lub";
+            var iteminfoData = App.GrfService.GetData(iteminfoPath);
+            if (iteminfoData != null && iteminfoData.Length > 0)
             {
-                var testFiles = App.GrfService.GetFiles("data", null, SearchOption.TopDirectoryOnly).Take(10).ToList();
-                sb.AppendLine($"Sample files in data\\: {testFiles.Count} (showing first 10)");
+                parseLog = $"iteminfo.lub data size: {iteminfoData.Length} bytes\n";
+                var items = ItemInfoLubParser.ParseItemEntriesFromData(iteminfoData);
+                parseLog += $"Parsed items from iteminfo.lub: {items.Count}\n";
+                if (items.Count > 0)
+                {
+                    parseLog += $"First item: ID={items[0].Id}, Name={items[0].Name}\n";
+                }
             }
-            catch (Exception ex)
+            else
             {
-                sb.AppendLine($"Error reading GRF: {ex.Message}");
+                parseLog = "iteminfo.lub data: NULL or EMPTY\n";
             }
         }
+        catch (Exception ex)
+        {
+            parseLog = $"iteminfo.lub parse error: {ex.Message}\n{ex.StackTrace?.Substring(0, Math.Min(500, ex.StackTrace?.Length ?? 0))}";
+        }
+
+        App.ReloadFromGrf();
+
+        RefreshList();
+        UpdateSourceIndicators();
+
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine($"New sources added: {added}");
+        sb.AppendLine($"Total sources: {App.GrfService.GrfPaths.Count}");
+        sb.AppendLine($"GRF loaded: {App.GrfService.IsLoaded}");
+        sb.AppendLine($"Items loaded: {App.ItemDbService.Items.Count}");
+        sb.AppendLine($"Mobs loaded: {App.MobDbService.Mobs.Count}");
+        sb.AppendLine($"Sprites cached: {App.SpriteLookupService?.CachedSpriteCount ?? 0}");
+        sb.AppendLine($"Filesystem sprites: {App.FileSystemSpriteSource?.CachedCount ?? 0}");
+        sb.AppendLine();
+        sb.AppendLine("--- iteminfo.lub parse diagnostics ---");
+        sb.AppendLine(parseLog);
+        sb.AppendLine();
+        sb.AppendLine(App.GrfService.BuildSanityReport());
 
         System.Windows.MessageBox.Show(this, sb.ToString(), "RoDbEditor - GRF Loaded", MessageBoxButton.OK);
+    }
+
+
+    private void MenuOpenExtractedAssets_Click(object sender, RoutedEventArgs e)
+    {
+        using var dlg = new System.Windows.Forms.FolderBrowserDialog
+        {
+            Description = "Select extracted assets root folder (contains server variant subfolders)",
+            UseDescriptionForTitle = true
+        };
+        if (dlg.ShowDialog() != System.Windows.Forms.DialogResult.OK) return;
+        var path = dlg.SelectedPath;
+        if (string.IsNullOrEmpty(path)) return;
+
+        App.FileSystemSpriteSource = new FileSystemSpriteSource(path);
+        App.SpriteLookupService.ClearCache();
+        App.SpriteLookupService = new SpriteLookupService(App.GrfService, App.FileSystemSpriteSource);
+
+        UpdateSourceIndicators();
+        System.Windows.MessageBox.Show(this,
+            $"Extracted assets loaded.\nSprites indexed: {App.FileSystemSpriteSource.CachedCount}",
+            "RoDbEditor", MessageBoxButton.OK);
     }
 
     private void MenuOpenDataFolder_Click(object sender, RoutedEventArgs e)
     {
         using var dlg = new System.Windows.Forms.FolderBrowserDialog
         {
-            Description = "Select server data folder (contains db/, system/)",
+            Description = "Select server data folder (contains db/, npc/, system/)",
             UseDescriptionForTitle = true
         };
         if (dlg.ShowDialog() != System.Windows.Forms.DialogResult.OK) return;
@@ -560,19 +756,96 @@ public partial class MainWindow : Window
         App.Config.DataPath = path;
         App.ReloadDataPath(path);
         RefreshList();
+        UpdateSourceIndicators();
+        System.Windows.MessageBox.Show(this, $"Data folder set.\nItems: {App.ItemDbService?.Items?.Count ?? 0}, Mobs: {App.MobDbService?.Mobs?.Count ?? 0}, NPCs: {App.NpcIndexService?.All?.Count ?? 0}.", "RoDbEditor", MessageBoxButton.OK);
+    }
 
-        // Build a status message with details
-        var sb = new System.Text.StringBuilder();
-        sb.AppendLine($"Data folder: {path}");
-        sb.AppendLine($"Items loaded: {App.ItemDbService.Items.Count}");
-        sb.AppendLine($"Mobs loaded: {App.MobDbService.Mobs.Count}");
+    // This duplicate code block for MAPS/QUESTS asset listing in RefreshList appears to be an accidental copy-paste.
+    // It should be deleted. The correct MAPS/QUESTS handling is already earlier in RefreshList.
+    // Removed duplicate MAPS/QUESTS asset listing code block.
+    // Functionality is preserved by the earlier logic in RefreshList().
 
-        if (!string.IsNullOrEmpty(App.ItemDbService.LastError))
-            sb.AppendLine($"\nItem DB Error: {App.ItemDbService.LastError}");
-        if (!string.IsNullOrEmpty(App.MobDbService.LastError))
-            sb.AppendLine($"\nMob DB Error: {App.MobDbService.LastError}");
+    private void CreateNewButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_currentCategory == "ITEMS")
+        {
+            CreateNewItem();
+        }
+        else if (_currentCategory == "MONSTERS")
+        {
+            CreateNewMonster();
+        }
+        else
+        {
+            System.Windows.MessageBox.Show(this, "Create New is available for ITEMS and MONSTERS.", "RoDbEditor", MessageBoxButton.OK);
+        }
+    }
 
-        System.Windows.MessageBox.Show(this, sb.ToString(), "RoDbEditor - Load Results", MessageBoxButton.OK);
+    private void CreateNewItem()
+    {
+        var nextId = App.ItemDbService.GetNextCustomItemId();
+        var item = new ItemEntry
+        {
+            Id = nextId,
+            AegisName = $"Custom_Item_{nextId}",
+            Name = $"Custom Item {nextId}",
+            Type = "Etc",
+            Buy = 0,
+            Weight = 0,
+            SourceFile = "item_db.yml",
+            SourceIndex = -1 // Will be set on save (append)
+        };
+
+        App.ItemDbService.AddItem(item);
+        RefreshList();
+
+        // Select the new item in the list
+        AssetListBox.SelectedItem = App.ItemDbService.Items.FirstOrDefault(i => i.Id == item.Id);
+        ShowItemDetails(item);
+
+        System.Windows.MessageBox.Show(this,
+            $"New custom item created with ID {nextId}.\n\n" +
+            "Edit the fields above and click SAVE to write it to\ndb/import/item_db.yml.",
+            "RoDbEditor - New Item", MessageBoxButton.OK);
+    }
+
+    private void CreateNewMonster()
+    {
+        var nextId = App.MobDbService.GetNextCustomMobId();
+        var mob = new MobEntry
+        {
+            Id = nextId,
+            AegisName = $"CUSTOM_MOB_{nextId}",
+            Name = $"Custom Monster {nextId}",
+            Level = 1,
+            Hp = 100,
+            Attack = 10,
+            Attack2 = 15,
+            Defense = 5,
+            MagicDefense = 5,
+            Str = 1, Agi = 1, Vit = 1, Int = 1, Dex = 1, Luk = 1,
+            AttackRange = 1, SkillRange = 1, ChaseRange = 1,
+            Size = "Medium",
+            Race = "Formless",
+            Element = "Neutral",
+            ElementLevel = 1,
+            WalkSpeed = 200,
+            Ai = "06",
+            Class = "Normal",
+            SourceFile = "mob_db.yml",
+            SourceIndex = -1
+        };
+
+        App.MobDbService.AddMob(mob);
+        RefreshList();
+
+        AssetListBox.SelectedItem = App.MobDbService.Mobs.FirstOrDefault(m => m.Id == mob.Id);
+        ShowMonsterDetails(mob);
+
+        System.Windows.MessageBox.Show(this,
+            $"New custom monster created with ID {nextId}.\n\n" +
+            "Edit the fields above and click SAVE to write it to\ndb/import/mob_db.yml.",
+            "RoDbEditor - New Monster", MessageBoxButton.OK);
     }
 
     private void MenuExit_Click(object sender, RoutedEventArgs e) => Close();

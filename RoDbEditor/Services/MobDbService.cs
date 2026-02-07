@@ -19,6 +19,33 @@ public class MobDbService
     public IReadOnlyList<MobEntry> Mobs => _mobs;
     public string? LastError { get; private set; }
 
+    /// <summary>
+    /// Load monsters from GRF's mobinfo.lub (when no data folder is available).
+    /// </summary>
+    public void LoadFromGrfData(byte[]? mobinfoLubData)
+    {
+        _mobs.Clear();
+        LastError = null;
+
+        if (mobinfoLubData == null || mobinfoLubData.Length == 0)
+        {
+            LastError = "No mobinfo.lub data provided";
+            return;
+        }
+
+        try
+        {
+            var entries = MobInfoLubParser.ParseMobEntriesFromData(mobinfoLubData);
+            _mobs.AddRange(entries);
+            _mobs.Sort((a, b) => a.Id.CompareTo(b.Id));
+            Debug.WriteLine($"[MobDbService] Loaded {_mobs.Count} mobs from GRF mobinfo.lub");
+        }
+        catch (Exception ex)
+        {
+            LastError = $"Failed to parse mobinfo.lub: {ex.Message}";
+        }
+    }
+
     public void LoadFromDataPath(string? dataPath)
     {
         _dataPath = dataPath;
@@ -227,10 +254,21 @@ public class MobDbService
     {
         if (string.IsNullOrEmpty(_dataPath) || string.IsNullOrEmpty(mob.SourceFile)) return;
 
-        var path = Path.Combine(_dataPath, "db", "re", mob.SourceFile);
-        if (!File.Exists(path)) path = Path.Combine(_dataPath, "db", "pre-re", mob.SourceFile);
-        if (!File.Exists(path)) path = Path.Combine(_dataPath, "db", mob.SourceFile);
-        if (!File.Exists(path)) return;
+        // For new mobs (SourceIndex == -1), prefer import file
+        string? path = null;
+        if (mob.SourceIndex < 0)
+        {
+            path = GetImportMobDbPath();
+        }
+
+        if (path == null)
+        {
+            path = Path.Combine(_dataPath, "db", "re", mob.SourceFile);
+            if (!File.Exists(path)) path = Path.Combine(_dataPath, "db", "pre-re", mob.SourceFile);
+            if (!File.Exists(path)) path = Path.Combine(_dataPath, "db", mob.SourceFile);
+            if (!File.Exists(path)) path = Path.Combine(_dataPath, "db", "import", mob.SourceFile);
+            if (!File.Exists(path)) return;
+        }
 
         var deserializer = new DeserializerBuilder()
             .WithNamingConvention(CamelCaseNamingConvention.Instance)
@@ -242,10 +280,19 @@ public class MobDbService
 
         var yaml = File.ReadAllText(path);
         var doc = deserializer.Deserialize<Dictionary<object, object>>(new StringReader(yaml));
-        if (doc == null) return;
+        if (doc == null) doc = new Dictionary<object, object>();
 
-        if (!doc.TryGetValue("Body", out var bodyObj) && !doc.TryGetValue("body", out bodyObj)) return;
-        if (bodyObj is not List<object> body || mob.SourceIndex < 0 || mob.SourceIndex >= body.Count) return;
+        // Get or create Body list
+        List<object> body;
+        if ((doc.TryGetValue("Body", out var bodyObj) || doc.TryGetValue("body", out bodyObj)) && bodyObj is List<object> existingBody)
+        {
+            body = existingBody;
+        }
+        else
+        {
+            body = new List<object>();
+            doc["Body"] = body;
+        }
 
         var entry = new Dictionary<object, object>
         {
@@ -309,8 +356,68 @@ public class MobDbService
             entry["MvpDrops"] = mvpList;
         }
 
-        body[mob.SourceIndex] = entry;
+        if (mob.SourceIndex >= 0 && mob.SourceIndex < body.Count)
+        {
+            // Update existing entry
+            body[mob.SourceIndex] = entry;
+        }
+        else
+        {
+            // Append new entry
+            mob.SourceIndex = body.Count;
+            mob.SourceFile = MobDbFile;
+            body.Add(entry);
+        }
+
+        // Ensure Header exists
+        if (!doc.ContainsKey("Header"))
+        {
+            doc["Header"] = new Dictionary<object, object>
+            {
+                ["Type"] = "MOB_DB",
+                ["Version"] = 3
+            };
+        }
+
         File.WriteAllText(path, serializer.Serialize(doc));
+        Debug.WriteLine($"[MobDbService] Saved mob {mob.Id} ({mob.AegisName}) to {path}");
+    }
+
+    /// <summary>
+    /// Add mob to in-memory list (for newly created mobs).
+    /// </summary>
+    public void AddMob(MobEntry mob)
+    {
+        var existing = _mobs.FindIndex(m => m.Id == mob.Id);
+        if (existing >= 0)
+            _mobs[existing] = mob;
+        else
+            _mobs.Add(mob);
+        _mobs.Sort((a, b) => a.Id.CompareTo(b.Id));
+    }
+
+    /// <summary>
+    /// Get the next available custom mob ID (3000+ range).
+    /// </summary>
+    public int GetNextCustomMobId()
+    {
+        int maxCustom = 2999;
+        foreach (var mob in _mobs)
+        {
+            if (mob.Id >= 3000 && mob.Id > maxCustom)
+                maxCustom = mob.Id;
+        }
+        return maxCustom + 1;
+    }
+
+    /// <summary>
+    /// Get the import mob_db.yml path for custom mobs.
+    /// </summary>
+    public string? GetImportMobDbPath()
+    {
+        if (string.IsNullOrEmpty(_dataPath)) return null;
+        var importPath = Path.Combine(_dataPath, "db", "import", MobDbFile);
+        return File.Exists(importPath) ? importPath : null;
     }
 
     public IEnumerable<MobEntry> Search(string? filter)
