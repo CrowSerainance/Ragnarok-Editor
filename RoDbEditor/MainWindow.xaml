@@ -6,6 +6,7 @@
         xmlns:local="clr-namespace:RoDbEditor"
         xmlns:controls="clr-namespace:RoDbEditor.Core.Controls"
         xmlns:avalon="clr-namespace:ICSharpCode.AvalonEdit;assembly=ICSharpCode.AvalonEdit"
+        xmlns:vm="clr-namespace:RoDbEditor.ViewModels"
         mc:Ignorable="d"
         Title="RoDbEditor (GRF-based) — RateMyServer-style DB Editor" Height="720" Width="1280"
         MinHeight="500" MinWidth="900">
@@ -14,6 +15,7 @@
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
         <!-- Menu -->
@@ -27,6 +29,10 @@
             </MenuItem>
             <MenuItem Header="_View">
                 <MenuItem Header="Asset Browser" IsChecked="True" IsCheckable="True"/>
+            </MenuItem>
+            <MenuItem Header="_Tools">
+                <MenuItem Header="Analyze Workspace" Click="OnAnalyzeClicked"/>
+                <MenuItem Header="Analyze Folder..." Click="OnAnalyzeFolderClicked"/>
             </MenuItem>
             <MenuItem Header="_Help">
                 <MenuItem Header="About RoDbEditor"/>
@@ -141,47 +147,184 @@
                             <Expander x:Name="ItemDiffExpander" Header="What changed" Margin="0,8,0,8" Collapsed="DiffExpander_Collapsed" Expanded="DiffExpander_Expanded">
                                 <TextBox x:Name="ItemDiffTextBox" IsReadOnly="True" TextWrapping="NoWrap" AcceptsReturn="True" MinHeight="80" FontFamily="Consolas" FontSize="11" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"/>
                             </Expander>
+                            <Expander Header="Referenced By (NPCs)" Margin="0,0,0,8">
+                                <ListView x:Name="ItemReferencesListView" MinHeight="100" MaxHeight="200" MouseDoubleClick="ItemReferences_MouseDoubleClick">
+                                    <ListView.View>
+                                        <GridView>
+                                            <GridViewColumn Header="File" Width="200" DisplayMemberBinding="{Binding SourceFileName}"/>
+                                            <GridViewColumn Header="Line" Width="50" DisplayMemberBinding="{Binding LineNumber}"/>
+                                            <GridViewColumn Header="Snippet" Width="300" DisplayMemberBinding="{Binding Snippet}"/>
+                                        </GridView>
+                                    </ListView.View>
+                                </ListView>
+                            </Expander>
                             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                                 <Button x:Name="SaveButton" Content="SAVE" Padding="12,6" Margin="0,0,8,0" Click="SaveButton_Click"/>
                                 <Button x:Name="ItemExportButton" Content="EXPORT" Padding="12,6" Margin="0,0,8,0" Click="ItemExportButton_Click"/>
                                 <Button Content="CANCEL" Padding="12,6" Click="CancelButton_Click"/>
                             </StackPanel>
                         </StackPanel>
-                        <!-- Monster details (MONSTERS tab) -->
-                        <StackPanel x:Name="MonsterDetailsPanel" Visibility="Collapsed">
-                            <TextBlock Text="MONSTER DETAILS" FontWeight="SemiBold" Margin="0,0,0,8"/>
-                            <TextBlock x:Name="MonsterDetailName" Text="NAME: —" Margin="0,0,0,4"/>
-                            <TextBlock x:Name="MonsterDetailId" Text="ID: —" Margin="0,0,0,4"/>
-                            <TextBlock x:Name="MonsterDetailLevelHp" Text="Level / HP: —" Margin="0,0,0,8"/>
-                            <TextBlock Text="DROPS" FontWeight="SemiBold" Margin="0,4,0,4"/>
-                            <DataGrid x:Name="MonsterDropsGrid" AutoGenerateColumns="False" CanUserAddRows="True" CanUserDeleteRows="True"
-                                      MinHeight="80" Margin="0,0,0,8" HeadersVisibility="Column">
-                                <DataGrid.Columns>
-                                    <DataGridTextColumn Header="Item" Binding="{Binding Item}" Width="*"/>
-                                    <DataGridTextColumn Header="Rate" Binding="{Binding Rate}" Width="60"/>
-                                    <DataGridCheckBoxColumn Header="Steal" Binding="{Binding StealProtected}" Width="50"/>
-                                </DataGrid.Columns>
-                            </DataGrid>
-                            <TextBlock Text="MVP DROPS" FontWeight="SemiBold" Margin="0,4,0,4"/>
-                            <DataGrid x:Name="MonsterMvpDropsGrid" AutoGenerateColumns="False" CanUserAddRows="True" CanUserDeleteRows="True"
-                                      MinHeight="60" Margin="0,0,0,8" HeadersVisibility="Column">
-                                <DataGrid.Columns>
-                                    <DataGridTextColumn Header="Item" Binding="{Binding Item}" Width="*"/>
-                                    <DataGridTextColumn Header="Rate" Binding="{Binding Rate}" Width="60"/>
-                                </DataGrid.Columns>
-                            </DataGrid>
-                            <TextBlock Text="SPAWN LOCATIONS (npc/re/mobs/*.txt)" FontWeight="SemiBold" Margin="0,4,0,4"/>
-                            <ListBox x:Name="MonsterSpawnListBox" MinHeight="60" Margin="0,0,0,8"
-                                     DisplayMemberPath="DisplayText"/>
-                            <Expander x:Name="MonsterDiffExpander" Header="What changed" Margin="0,8,0,8" Collapsed="DiffExpander_Collapsed" Expanded="DiffExpander_Expanded">
-                                <TextBox x:Name="MonsterDiffTextBox" IsReadOnly="True" TextWrapping="NoWrap" AcceptsReturn="True" MinHeight="80" FontFamily="Consolas" FontSize="11" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"/>
-                            </Expander>
-                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                                <Button x:Name="MonsterSaveButton" Content="SAVE" Padding="12,6" Margin="0,0,8,0" Click="MonsterSaveButton_Click"/>
-                                <Button x:Name="MonsterExportButton" Content="EXPORT" Padding="12,6" Margin="0,0,8,0" Click="MonsterExportButton_Click"/>
-                                <Button Content="CANCEL" Padding="12,6" Click="MonsterCancelButton_Click"/>
+                        <!-- Monster details (MONSTERS tab) RMS-style -->
+                        <ScrollViewer x:Name="MonsterDetailsPanel" Visibility="Collapsed" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                            <StackPanel Margin="0,0,0,8">
+                                <TextBlock Text="MONSTER DETAILS" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                                <!-- Header: Name, AegisName, Mob ID -->
+                                <Grid Margin="0,0,0,8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0">
+                                        <TextBlock Text="Name" FontSize="10" Foreground="#888"/>
+                                        <TextBox x:Name="MonsterDetailNameBox" Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}" Padding="4,2" Margin="0,0,0,4"/>
+                                        <TextBlock Text="AegisName" FontSize="10" Foreground="#888"/>
+                                        <TextBox x:Name="MonsterDetailAegisBox" Text="{Binding AegisName, UpdateSourceTrigger=PropertyChanged}" Padding="4,2" Margin="0,0,0,4"/>
+                                    </StackPanel>
+                                    <TextBlock Grid.Column="1" x:Name="MonsterDetailIdBlock" Text="{Binding Id, StringFormat=Mob-ID# {0}}" FontWeight="Bold" FontSize="14" VerticalAlignment="Center" Margin="8,0,0,0"/>
+                                </Grid>
+                                <!-- 3-column RMS layout -->
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="8"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="8"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <!-- Column 0: Stats -->
+                                    <StackPanel Grid.Column="0">
+                                        <TextBlock Text="Stats" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                        <Grid>
+                                            <Grid.ColumnDefinitions><ColumnDefinition Width="100"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+                                                <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+                                                <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+                                            </Grid.RowDefinitions>
+                                            <TextBlock Grid.Row="0" Grid.Column="0" Text="HP:" Margin="0,2"/><TextBox Grid.Row="0" Grid.Column="1" Text="{Binding Hp, UpdateSourceTrigger=PropertyChanged}" Padding="2" Margin="0,2"/>
+                                            <TextBlock Grid.Row="1" Grid.Column="0" Text="Level:" Margin="0,2"/><TextBox Grid.Row="1" Grid.Column="1" Text="{Binding Level, UpdateSourceTrigger=PropertyChanged}" Padding="2" Margin="0,2"/>
+                                            <TextBlock Grid.Row="2" Grid.Column="0" Text="Race:" Margin="0,2"/><ComboBox Grid.Row="2" Grid.Column="1" ItemsSource="{Binding RaceOptions}" SelectedItem="{Binding Race, UpdateSourceTrigger=PropertyChanged}" IsEditable="True" Padding="2" Margin="0,2"/>
+                                            <TextBlock Grid.Row="3" Grid.Column="0" Text="Element:" Margin="0,2"/><ComboBox Grid.Row="3" Grid.Column="1" ItemsSource="{Binding ElementOptions}" SelectedItem="{Binding Element, UpdateSourceTrigger=PropertyChanged}" IsEditable="True" Padding="2" Margin="0,2"/>
+                                            <TextBlock Grid.Row="4" Grid.Column="0" Text="Elem Lvl:" Margin="0,2"/><ComboBox Grid.Row="4" Grid.Column="1" ItemsSource="{Binding ElementLevelOptions}" SelectedItem="{Binding ElementLevel, UpdateSourceTrigger=PropertyChanged}" Padding="2" Margin="0,2"/>
+                                            <TextBlock Grid.Row="5" Grid.Column="0" Text="Size:" Margin="0,2"/><ComboBox Grid.Row="5" Grid.Column="1" ItemsSource="{Binding SizeOptions}" SelectedItem="{Binding Size, UpdateSourceTrigger=PropertyChanged}" IsEditable="True" Padding="2" Margin="0,2"/>
+                                            <TextBlock Grid.Row="6" Grid.Column="0" Text="Hit:" Margin="0,2"/><TextBlock Grid.Row="6" Grid.Column="1" Text="{Binding Hit100}" Margin="0,2"/>
+                                            <TextBlock Grid.Row="7" Grid.Column="0" Text="Flee:" Margin="0,2"/><TextBlock Grid.Row="7" Grid.Column="1" Text="{Binding Flee95}" Margin="0,2"/>
+                                            <TextBlock Grid.Row="8" Grid.Column="0" Text="Atk:" Margin="0,2"/><TextBlock Grid.Row="8" Grid.Column="1" Text="{Binding AttackRangeText}" Margin="0,2"/>
+                                            <TextBlock Grid.Row="9" Grid.Column="0" Text="Def:" Margin="0,2"/><TextBox Grid.Row="9" Grid.Column="1" Text="{Binding Defense, UpdateSourceTrigger=PropertyChanged}" Padding="2" Margin="0,2"/>
+                                            <TextBlock Grid.Row="10" Grid.Column="0" Text="MDef:" Margin="0,2"/><TextBox Grid.Row="10" Grid.Column="1" Text="{Binding MagicDefense, UpdateSourceTrigger=PropertyChanged}" Padding="2" Margin="0,2"/>
+                                            <TextBlock Grid.Row="11" Grid.Column="0" Text="BaseExp:" Margin="0,2"/><TextBox Grid.Row="11" Grid.Column="1" Text="{Binding BaseExp, UpdateSourceTrigger=PropertyChanged}" Padding="2" Margin="0,2"/>
+                                            <TextBlock Grid.Row="12" Grid.Column="0" Text="JobExp:" Margin="0,2"/><TextBox Grid.Row="12" Grid.Column="1" Text="{Binding JobExp, UpdateSourceTrigger=PropertyChanged}" Padding="2" Margin="0,2"/>
+                                        </Grid>
+                                    </StackPanel>
+                                    <!-- Column 1: On Maps + Elements -->
+                                    <StackPanel Grid.Column="2">
+                                        <TextBlock Text="On Maps" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                        <ListBox x:Name="MonsterSpawnListBox" MinHeight="80" MaxHeight="150" ItemsSource="{Binding SpawnGroups}" DisplayMemberPath="DisplayText" Margin="0,0,0,8"/>
+                                        <TextBlock Text="Elements" FontWeight="SemiBold" Margin="0,4,0,4"/>
+                                        <ItemsControl x:Name="MonsterElementsList" ItemsSource="{Binding ElementRows}" Margin="0,0,0,8">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Grid Margin="0,1">
+                                                        <Grid.ColumnDefinitions><ColumnDefinition Width="80"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                                        <TextBlock Text="{Binding ElementName}" Grid.Column="0"/>
+                                                        <TextBlock Text="{Binding Percent, StringFormat={}{0}%}" Grid.Column="1"/>
+                                                    </Grid>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </StackPanel>
+                                    <!-- Column 2: Drops -->
+                                    <StackPanel Grid.Column="4">
+                                        <TextBlock Text="Drops" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                        <DataGrid x:Name="MonsterDropsGrid" AutoGenerateColumns="False" CanUserAddRows="True" CanUserDeleteRows="True"
+                                                  MinHeight="80" Margin="0,0,0,8" HeadersVisibility="Column" ItemsSource="{Binding Drops}">
+                                            <DataGrid.Columns>
+                                                <DataGridTextColumn Header="Item" Binding="{Binding Item}" Width="*"/>
+                                                <DataGridTextColumn Header="Rate" Binding="{Binding Rate}" Width="60"/>
+                                                <DataGridCheckBoxColumn Header="Steal" Binding="{Binding StealProtected}" Width="50"/>
+                                            </DataGrid.Columns>
+                                        </DataGrid>
+                                        <TextBlock Text="MVP Drops" FontWeight="SemiBold" Margin="0,4,0,4"/>
+                                        <DataGrid x:Name="MonsterMvpDropsGrid" AutoGenerateColumns="False" CanUserAddRows="True" CanUserDeleteRows="True"
+                                                  MinHeight="60" Margin="0,0,0,8" HeadersVisibility="Column" ItemsSource="{Binding MvpDrops}">
+                                            <DataGrid.Columns>
+                                                <DataGridTextColumn Header="Item" Binding="{Binding Item}" Width="*"/>
+                                                <DataGridTextColumn Header="Rate" Binding="{Binding Rate}" Width="60"/>
+                                            </DataGrid.Columns>
+                                        </DataGrid>
+                                    </StackPanel>
+                                </Grid>
+                                <TextBlock Text="Modes" FontWeight="SemiBold" Margin="0,4,0,4"/>
+                                <ItemsControl ItemsSource="{Binding Modes}" Margin="0,0,0,8">
+                                    <ItemsControl.ItemsPanel>
+                                        <ItemsPanelTemplate>
+                                            <WrapPanel/>
+                                        </ItemsPanelTemplate>
+                                    </ItemsControl.ItemsPanel>
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <CheckBox Content="{Binding Name}" IsChecked="{Binding IsEnabled, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,12,2"/>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                                <Expander x:Name="MonsterDiffExpander" Header="What changed" Margin="0,8,0,8" Collapsed="DiffExpander_Collapsed" Expanded="DiffExpander_Expanded">
+                                    <TextBox x:Name="MonsterDiffTextBox" IsReadOnly="True" TextWrapping="NoWrap" AcceptsReturn="True" MinHeight="80" FontFamily="Consolas" FontSize="11" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"/>
+                                </Expander>
+                                <TextBlock Text="MONSTER SKILLS" FontWeight="Bold" Margin="0,12,0,4"/>
+
+                                <DataGrid x:Name="MonsterSkillsGrid"
+                                          Height="180"
+                                          AutoGenerateColumns="False"
+                                          IsReadOnly="True"
+                                          CanUserAddRows="False"
+                                          HeadersVisibility="Column"
+                                          GridLinesVisibility="Horizontal"
+                                          Margin="0,0,0,10">
+                                    <DataGrid.Columns>
+                                        <DataGridTextColumn Header="Skill" Binding="{Binding Skill}" Width="2*"/>
+                                        <DataGridTextColumn Header="Lv" Binding="{Binding SkillLv}" Width="0.5*"/>
+                                        <DataGridTextColumn Header="Rate" Binding="{Binding Rate}" Width="0.8*"/>
+                                        <DataGridTextColumn Header="Cast" Binding="{Binding Cast}" Width="0.8*"/>
+                                        <DataGridTextColumn Header="Delay" Binding="{Binding Delay}" Width="0.9*"/>
+                                        <DataGridTextColumn Header="State" Binding="{Binding State}" Width="0.9*"/>
+                                        <DataGridTextColumn Header="Target" Binding="{Binding Target}" Width="0.9*"/>
+                                        <DataGridTextColumn Header="Condition" Binding="{Binding Condition}" Width="2*"/>
+                                        <DataGridTextColumn Header="Src" Binding="{Binding Source}" Width="0.9*"/>
+                                    </DataGrid.Columns>
+                                </DataGrid>
+
+                                <StackPanel Orientation="Horizontal" Margin="0,4,0,8">
+                                    <Button Content="Add Skill" Click="MobSkillAdd_Click" Padding="8,4" Margin="0,0,4,0"/>
+                                    <Button Content="Edit Skill" Click="MobSkillEdit_Click" Padding="8,4" Margin="0,0,4,0"/>
+                                    <Button Content="Delete Skill" Click="MobSkillDelete_Click" Padding="8,4" Margin="0,0,4,0"/>
+                                    <Button Content="Open in Editor" Click="MobSkillOpenFile_Click" Padding="8,4" Margin="0,0,0,0"
+                                            ToolTip="Open mob_skill_db.txt at the selected skill's source line"/>
+                                </StackPanel>
+
+                                <TextBlock Text="SLAVES" FontWeight="Bold" Margin="0,0,0,4"/>
+
+                                <DataGrid x:Name="MonsterSlavesGrid"
+                                          Height="120"
+                                          AutoGenerateColumns="False"
+                                          IsReadOnly="True"
+                                          CanUserAddRows="False"
+                                          HeadersVisibility="Column"
+                                          GridLinesVisibility="Horizontal"
+                                          Margin="0,0,0,10">
+                                    <DataGrid.Columns>
+                                        <DataGridTextColumn Header="Count" Binding="{Binding Count}" Width="0.7*"/>
+                                        <DataGridTextColumn Header="Mob" Binding="{Binding MobName}" Width="2.2*"/>
+                                        <DataGridTextColumn Header="When" Binding="{Binding When}" Width="2*"/>
+                                        <DataGridTextColumn Header="Src" Binding="{Binding Source}" Width="1*"/>
+                                    </DataGrid.Columns>
+                                </DataGrid>
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                    <Button x:Name="MonsterSaveButton" Content="SAVE" Padding="12,6" Margin="0,0,8,0" Click="MonsterSaveButton_Click"/>
+                                    <Button x:Name="MonsterExportButton" Content="EXPORT" Padding="12,6" Margin="0,0,8,0" Click="MonsterExportButton_Click"/>
+                                    <Button Content="CANCEL" Padding="12,6" Click="MonsterCancelButton_Click"/>
+                                </StackPanel>
                             </StackPanel>
-                        </StackPanel>
+                        </ScrollViewer>
                         <!-- NPC details (NPCs tab) -->
                         <StackPanel x:Name="NpcDetailsPanel" Visibility="Collapsed">
                             <TextBlock Text="NPC DETAILS" FontWeight="SemiBold" Margin="0,0,0,8"/>
@@ -236,5 +379,20 @@
                 </ScrollViewer>
             </Border>
         </Grid>
+
+        <!-- Diagnostics Panel -->
+        <Expander Grid.Row="3" Header="Unchecked Diagnostics (Click Analyze to populate)" IsExpanded="True" Margin="6">
+            <ListView x:Name="DiagnosticsListView" MaxHeight="200" MinHeight="100" MouseDoubleClick="DiagnosticsListView_MouseDoubleClick">
+                <ListView.View>
+                    <GridView>
+                        <GridViewColumn Header="Severity" DisplayMemberBinding="{Binding Severity}" Width="80"/>
+                        <GridViewColumn Header="Code" DisplayMemberBinding="{Binding Code}" Width="60"/>
+                        <GridViewColumn Header="Message" DisplayMemberBinding="{Binding Message}" Width="400"/>
+                        <GridViewColumn Header="File" DisplayMemberBinding="{Binding FilePath}" Width="250"/>
+                        <GridViewColumn Header="Line" DisplayMemberBinding="{Binding LineNumber}" Width="50"/>
+                    </GridView>
+                </ListView.View>
+            </ListView>
+        </Expander>
     </Grid>
 </Window>

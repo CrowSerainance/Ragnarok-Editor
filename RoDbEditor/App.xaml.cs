@@ -25,6 +25,13 @@ public partial class App : System.Windows.Application
     public static SpawnParser SpawnParser { get; private set; } = null!;
     public static NpcIndexService NpcIndexService { get; private set; } = null!;
     public static ItemPathService ItemPathService { get; private set; } = null!;
+    public static MapIndexService MapIndexService { get; private set; } = null!;
+    public static AttrFixTableService AttrFixTableService { get; private set; } = null!;
+    public static SkillDbService SkillDbService { get; private set; } = null!;
+    public static MobSkillDbService MobSkillDbService { get; private set; } = null!;
+    public static SkillDbMiniService SkillDbMiniService { get; private set; } = null!;
+    public static MobSkillPanelService MobSkillPanelService { get; private set; } = null!;
+    public static MobSkillWriteService? MobSkillWriteService { get; private set; }
     public static IReadOnlyDictionary<int, string> ItemInfoDescriptions { get; set; } = new Dictionary<int, string>();
     public static IHighlightingDefinition? RagnarokScriptHighlighting { get; private set; }
 
@@ -126,11 +133,72 @@ public partial class App : System.Windows.Application
         MobDbService.LoadFromDataPath(dataPath);
         SpawnParser.LoadFromDataPath(dataPath);
         NpcIndexService.LoadFromDataPath(dataPath);
+        MapIndexService.LoadFromDataPath(dataPath);
+        AttrFixTableService.LoadFromDataPath(dataPath);
+        SkillDbService.LoadFromDataPath(dataPath);
+        MobSkillDbService.LoadFromDataPath(dataPath);
+        SkillDbMiniService.LoadFromDataPath(dataPath);
+        MobSkillWriteService = new MobSkillWriteService(dataPath);
 
         var lubPath = Path.Combine(dataPath, "system", "iteminfo.lub");
         if (!File.Exists(lubPath))
             lubPath = Path.Combine(dataPath, "data", "iteminfo.lub");
         ItemInfoDescriptions = ItemInfoLubParser.ParseDescriptions(lubPath);
+    }
+
+    public static async System.Threading.Tasks.Task ReloadDataPathAsync(string dataPath)
+    {
+        var newItemDb = new ItemDbService();
+        var newMobDb = new MobDbService();
+        var newNpcIndex = new NpcIndexService();
+        var newSpawn = new SpawnParser();
+        
+        var newAttrFix = new AttrFixTableService();
+        var newMapIndex = new MapIndexService();
+        var newSkillDb = new SkillDbService();
+        var newMobSkillDb = new MobSkillDbService();
+        var newSkillDbMini = new SkillDbMiniService();
+        await System.Threading.Tasks.Task.Run(() => {
+            newItemDb.LoadFromDataPath(dataPath);
+            newMobDb.LoadFromDataPath(dataPath);
+            newNpcIndex.LoadFromDataPath(dataPath);
+            newSpawn.LoadFromDataPath(dataPath);
+            newMapIndex.LoadFromDataPath(dataPath);
+            newAttrFix.LoadFromDataPath(dataPath);
+            newSkillDb.LoadFromDataPath(dataPath);
+            newMobSkillDb.LoadFromDataPath(dataPath);
+            newSkillDbMini.LoadFromDataPath(dataPath);
+        });
+
+        ItemDbService = newItemDb;
+        MobDbService = newMobDb;
+        NpcIndexService = newNpcIndex;
+        SpawnParser = newSpawn;
+        MapIndexService = newMapIndex;
+        AttrFixTableService = newAttrFix;
+        SkillDbService = newSkillDb;
+        MobSkillDbService = newMobSkillDb;
+        SkillDbMiniService = newSkillDbMini;
+        MobSkillPanelService = new MobSkillPanelService(MobSkillDbService, SkillDbMiniService, MobDbService);
+        MobSkillWriteService = new MobSkillWriteService(dataPath);
+
+        // Re-init dependent services
+        ItemPathService = new ItemPathService(newItemDb, GrfService, SpriteLookupService);
+
+        // Reload GRF items if needed (fallback)
+        if (GrfService != null && GrfService.IsLoaded)
+             ReloadFromGrf();
+             
+         // Reload iteminfo
+        var lubPath = Path.Combine(dataPath, "system", "iteminfo.lub");
+        if (!File.Exists(lubPath))
+            lubPath = Path.Combine(dataPath, "data", "iteminfo.lub");
+        
+        // Parsing iteminfo is fast enough? Or move to Task.Run?
+        // It uses ItemInfoLubParser.
+        await System.Threading.Tasks.Task.Run(() => {
+             ItemInfoDescriptions = ItemInfoLubParser.ParseDescriptions(lubPath);
+        });
     }
 
     protected override void OnStartup(StartupEventArgs e)
@@ -158,6 +226,16 @@ public partial class App : System.Windows.Application
         SpawnParser = new SpawnParser();
         NpcIndexService = new NpcIndexService();
         ItemPathService = new ItemPathService(ItemDbService, GrfService, SpriteLookupService);
+        MapIndexService = new MapIndexService();
+        AttrFixTableService = new AttrFixTableService();
+        SkillDbService = new SkillDbService();
+        MobSkillDbService = new MobSkillDbService();
+        SkillDbMiniService = new SkillDbMiniService();
+        MobSkillPanelService = new MobSkillPanelService(MobSkillDbService, SkillDbMiniService, MobDbService);
+        
+        // Wire up condition text resolvers
+        MobSkillConditionText.SkillNameResolver = id => SkillDbMiniService.ResolveDisplayName(id);
+        
         LoadRagnarokScriptHighlighting();
 
         // If data path is set, load server data (npc, spawns, items/mobs from YAML if present)

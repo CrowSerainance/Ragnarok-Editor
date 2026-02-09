@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using RoDbEditor.Models;
+using RoDbEditor.Services.Analysis;
 using YamlDotNet.Serialization;
 using YamlDotNet.Serialization.NamingConventions;
 
@@ -14,10 +15,12 @@ namespace RoDbEditor.Services;
 public class ItemDbService
 {
     private List<ItemEntry> _items = new();
+    private List<DbOverrideRecord> _overrides = new();
     private bool _loadedFromYaml;
     private string? _dataPath;
 
     public IReadOnlyList<ItemEntry> Items => _items;
+    public IReadOnlyList<DbOverrideRecord> Overrides => _overrides;
     public string? LastError { get; private set; }
     public bool IsLoadedFromYaml => _loadedFromYaml;
 
@@ -27,6 +30,7 @@ public class ItemDbService
     public void LoadFromGrfData(byte[]? iteminfoLubData)
     {
         _items.Clear();
+        _overrides.Clear();
         _loadedFromYaml = false;
         LastError = null;
 
@@ -54,6 +58,7 @@ public class ItemDbService
     public void LoadFromDataPath(string dataPath)
     {
         _items.Clear();
+        _overrides.Clear();
         _loadedFromYaml = false;
         _dataPath = dataPath;
         LastError = null;
@@ -161,7 +166,19 @@ public class ItemDbService
                     var existing = _items.FindIndex(i => i.Id == item.Id);
                     if (existing >= 0)
                     {
-                        _items[existing] = item; // Replace with import version
+                        var oldItem = _items[existing];
+                        var reason = path.Contains("import") ? "Import Override" : "Duplicate ID";
+                        
+                        _overrides.Add(new DbOverrideRecord(
+                            EntityKind.Item, 
+                            item.Id, 
+                            oldItem.SourceFile, 
+                            path, 
+                            oldItem.Name, 
+                            item.Name, 
+                            reason));
+
+                        _items[existing] = item; // Replace with new version
                     }
                     else
                     {

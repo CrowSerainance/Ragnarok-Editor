@@ -4,6 +4,7 @@ using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using GRF.FileFormats.ActFormat;
 using GRF.FileFormats.SprFormat;
@@ -12,6 +13,8 @@ using Microsoft.Win32;
 using RoDbEditor.Core;
 using RoDbEditor.Models;
 using RoDbEditor.Services;
+using RoDbEditor.Services.Analysis;
+using RoDbEditor.UI;
 
 namespace RoDbEditor;
 
@@ -24,6 +27,10 @@ public partial class MainWindow : Window
     private string _originalItemScript = "";
     private string _originalMonsterDropsText = "";
     private string _originalNpcScript = "";
+    private MobEntry? _currentMob;
+    private MobEntry? _currentMobSnapshot;
+    private TextMarkerService? _markerService;
+    private WorkspaceIndex? _lastWorkspaceIndex;
 
     public MainWindow()
     {
@@ -33,6 +40,16 @@ public partial class MainWindow : Window
             RefreshList();
             UpdateListLabel();
             UpdateSourceIndicators();
+            if (!string.IsNullOrEmpty(App.Config?.DataPath))
+                 SetupFileWatcher(App.Config.DataPath);
+            
+            // Initialize TextMarkerService for NpcScriptEditor
+            if (NpcScriptEditor?.Document != null)
+            {
+                _markerService = new TextMarkerService(NpcScriptEditor.Document);
+                NpcScriptEditor.TextArea.TextView.BackgroundRenderers.Add(_markerService);
+                NpcScriptEditor.TextArea.TextView.LineTransformers.Add(_markerService);
+            }
         };
     }
 
@@ -366,20 +383,69 @@ public partial class MainWindow : Window
             ShowNpcDetails(npc);
     }
 
+    private static MobEntry CloneMob(MobEntry source)
+    {
+        var copy = new MobEntry
+        {
+            Id = source.Id,
+            AegisName = source.AegisName ?? "",
+            Name = source.Name ?? "",
+            Level = source.Level,
+            Hp = source.Hp,
+            Sp = source.Sp,
+            BaseExp = source.BaseExp,
+            JobExp = source.JobExp,
+            MvpExp = source.MvpExp,
+            Attack = source.Attack,
+            Attack2 = source.Attack2,
+            Defense = source.Defense,
+            MagicDefense = source.MagicDefense,
+            Str = source.Str,
+            Agi = source.Agi,
+            Vit = source.Vit,
+            Int = source.Int,
+            Dex = source.Dex,
+            Luk = source.Luk,
+            AttackRange = source.AttackRange,
+            SkillRange = source.SkillRange,
+            ChaseRange = source.ChaseRange,
+            Size = source.Size ?? "Medium",
+            Race = source.Race ?? "Formless",
+            Element = source.Element ?? "Neutral",
+            ElementLevel = source.ElementLevel,
+            WalkSpeed = source.WalkSpeed,
+            AttackDelay = source.AttackDelay,
+            AttackMotion = source.AttackMotion,
+            DamageMotion = source.DamageMotion,
+            Ai = source.Ai ?? "06",
+            Class = source.Class ?? "Normal",
+            SourceFile = source.SourceFile,
+            SourceIndex = source.SourceIndex
+        };
+        foreach (var d in source.Drops)
+            copy.Drops.Add(new MobDropEntry { Item = d.Item, Rate = d.Rate, StealProtected = d.StealProtected, Index = d.Index });
+        foreach (var d in source.MvpDrops)
+            copy.MvpDrops.Add(new MobDropEntry { Item = d.Item, Rate = d.Rate, StealProtected = d.StealProtected, Index = d.Index });
+        copy.Modes = new Dictionary<string, bool>(source.Modes ?? new Dictionary<string, bool>(), StringComparer.OrdinalIgnoreCase);
+        return copy;
+    }
+
     private void ShowMonsterDetails(MobEntry mob)
     {
-        MonsterDetailName.Text = "NAME: " + mob.DisplayName;
-        MonsterDetailId.Text = "ID: " + mob.Id + " (" + mob.AegisName + ")";
-        MonsterDetailLevelHp.Text = "Level: " + mob.Level + "  HP: " + mob.Hp;
-        MonsterDropsGrid.ItemsSource = null;
-        MonsterDropsGrid.ItemsSource = mob.Drops;
-        MonsterMvpDropsGrid.ItemsSource = null;
-        MonsterMvpDropsGrid.ItemsSource = mob.MvpDrops;
+        _currentMob = mob;
+        _currentMobSnapshot = CloneMob(mob);
+        var vm = new ViewModels.MobDetailsViewModel(
+            mob,
+            App.AttrFixTableService,
+            App.SpawnParser,
+            App.MapIndexService,
+            App.MobSkillDbService,
+            App.SkillDbService,
+            App.MobDbService);
+        MonsterDetailsPanel.DataContext = vm;
         _originalMonsterDropsText = SerializeMobDrops(mob);
         MonsterDiffExpander.Visibility = Visibility.Visible;
         MonsterDiffTextBox.Text = "";
-        var spawns = App.SpawnParser.GetSpawnsForMob(mob.Id).ToList();
-        MonsterSpawnListBox.ItemsSource = spawns;
 
         SetPreviewMode(PreviewMode.Sprite);
 
@@ -402,7 +468,309 @@ public partial class MainWindow : Window
 
         SpriteViewer.LoadFromData(actData, sprData);
         SpriteViewer.Play();
+
+        PopulateMonsterSkillsAndSlaves(mob);
     }
+
+    private void PopulateMonsterSkillsAndSlaves(MobEntry mob)
+    {
+        try
+        {
+            if (MonsterSkillsGrid == null || MonsterSlavesGrid == null)
+                return;
+
+            if (App.MobSkillPanelService == null)
+            {
+                MonsterSkillsGrid.ItemsSource = null;
+                MonsterSlavesGrid.ItemsSource = null;
+                return;
+            }
+
+            MonsterSkillsGrid.ItemsSource = App.MobSkillPanelService.BuildMonsterSkills(mob);
+            MonsterSlavesGrid.ItemsSource = App.MobSkillPanelService.BuildSlaves(mob);
+        }
+        catch
+        {
+            // UI should never crash due to db parsing issues
+        }
+    }
+
+    // ── Mob Skill Editor Handlers ──────────────────────────────────────
+
+    private void MobSkillAdd_Click(object sender, RoutedEventArgs e)
+    {
+        if (_currentMob == null || App.MobSkillWriteService == null) return;
+
+        var dlg = new Dialogs.MobSkillEditDialog();
+        dlg.SetMobContext(_currentMob.Id, _currentMob.Name);
+        dlg.Owner = this;
+
+        if (dlg.ShowDialog() == true && dlg.Result != null)
+        {
+            App.MobSkillWriteService.AppendSkillRow(dlg.Result);
+            ReloadMobSkillsAndRefreshDisplay();
+        }
+    }
+
+    private void MobSkillEdit_Click(object sender, RoutedEventArgs e)
+    {
+        if (_currentMob == null || App.MobSkillWriteService == null) return;
+
+        var uiRow = MonsterSkillsGrid.SelectedItem as MonsterSkillRow;
+        if (uiRow == null)
+        {
+            System.Windows.MessageBox.Show("Select a skill row to edit.", "Edit Skill", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        var dbRow = FindMobSkillDbRow(uiRow);
+        if (dbRow == null)
+        {
+            System.Windows.MessageBox.Show("Could not find the underlying database row.", "Edit Skill", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        var dlg = new Dialogs.MobSkillEditDialog();
+        dlg.SetMobContext(_currentMob.Id, _currentMob.Name);
+        dlg.LoadFromRow(dbRow);
+        dlg.Owner = this;
+
+        if (dlg.ShowDialog() == true && dlg.Result != null)
+        {
+            App.MobSkillWriteService.UpdateSkillRow(dbRow, dlg.Result);
+            ReloadMobSkillsAndRefreshDisplay();
+        }
+    }
+
+    private void MobSkillDelete_Click(object sender, RoutedEventArgs e)
+    {
+        if (_currentMob == null || App.MobSkillWriteService == null) return;
+
+        var uiRow = MonsterSkillsGrid.SelectedItem as MonsterSkillRow;
+        if (uiRow == null)
+        {
+            System.Windows.MessageBox.Show("Select a skill row to delete.", "Delete Skill", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        var dbRow = FindMobSkillDbRow(uiRow);
+        if (dbRow == null)
+        {
+            System.Windows.MessageBox.Show("Could not find the underlying database row.", "Delete Skill", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        var result = System.Windows.MessageBox.Show(
+            $"Delete skill {uiRow.Skill} (Lv{uiRow.SkillLv}) in state '{uiRow.State}'?\n\nSource: {uiRow.Source}",
+            "Confirm Delete",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Question);
+
+        if (result == MessageBoxResult.Yes)
+        {
+            App.MobSkillWriteService.DeleteSkillRow(dbRow);
+            ReloadMobSkillsAndRefreshDisplay();
+        }
+    }
+
+    private void MobSkillOpenFile_Click(object sender, RoutedEventArgs e)
+    {
+        // 1) Acquire selected row.
+        if (MonsterSkillsGrid.SelectedItem is not RoDbEditor.Models.MonsterSkillRow uiRow)
+        {
+            MessageBox.Show("Select a Monster Skill row first.", "Open Source", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        // 2) Resolve backing MobSkillDbRow if you have it
+        var dbRow = FindMobSkillDbRow(uiRow);
+        
+        string path;
+        int line;
+
+        if (dbRow != null && !string.IsNullOrWhiteSpace(dbRow.SourceFile))
+        {
+            path = dbRow.SourceFile;
+            line = dbRow.SourceLine;
+        }
+        else
+        {
+            // Fallback: parse uiRow.Source
+            // Expected uiRow.Source format: "mob_skill_db.txt:123" or fullpath:line
+            var parsed = TryParseSource(uiRow.Source);
+            path = parsed.path;
+            line = parsed.line;
+        }
+
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            MessageBox.Show($"No valid source info on this row: {uiRow.Source}", "Open Source", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        // 3) Normalize path relative to DataPath if needed
+        path = ResolveMobSkillPath(path);
+
+        if (!File.Exists(path))
+        {
+            MessageBox.Show($"Source file not found:\n{path}", "Open Source", MessageBoxButton.OK, MessageBoxImage.Error);
+            return;
+        }
+
+        // 4) Try VS Code goto first (best UX)
+        if (TryOpenVsCodeGoto(path, line))
+            return;
+
+        // 5) Fallback: Notepad (no goto) + clipboard hint
+        try
+        {
+            Clipboard.SetText($"{path}:{line}");
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = "notepad.exe",
+                Arguments = $"\"{path}\"",
+                UseShellExecute = true
+            });
+
+            MessageBox.Show("Opened in Notepad (cannot jump to line). Path:Line copied to clipboard for VS Code goto.",
+                "Open Source", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (System.Exception ex)
+        {
+            MessageBox.Show($"Failed to open source:\n{ex.Message}", "Open Source", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private static (string path, int line) TryParseSource(string? source)
+    {
+        if (string.IsNullOrWhiteSpace(source)) return ("", 0);
+
+        // Common format: "mob_skill_db.txt:123" OR "C:\...\mob_skill_db.txt:123"
+        var s = source.Trim();
+
+        // If there are multiple ':' (Windows drive), split from the end.
+        var lastColon = s.LastIndexOf(':');
+        if (lastColon < 0) return (s, 0);
+
+        var left = s.Substring(0, lastColon);
+        var right = s.Substring(lastColon + 1);
+
+        if (!int.TryParse(right, out var line) || line <= 0) return (left, 0);
+        return (left, line);
+    }
+
+    private string ResolveMobSkillPath(string raw)
+    {
+        // If raw already absolute, return.
+        if (Path.IsPathRooted(raw)) return raw;
+
+        // Otherwise interpret as relative under DataPath (rAthena).
+        var dataPath = App.Config?.DataPath;
+        if (string.IsNullOrWhiteSpace(dataPath)) return raw;
+
+        // Try common mob skill locations:
+        // - db/import/mob_skill_db.txt
+        // - db/re/mob_skill_db.txt
+        // - db/pre-re/mob_skill_db.txt
+        // - db/mob_skill_db.txt
+        var candidates = new[]
+        {
+            Path.Combine(dataPath, "db", "import", raw),
+            Path.Combine(dataPath, "db", "re", raw),
+            Path.Combine(dataPath, "db", "pre-re", raw),
+            Path.Combine(dataPath, "db", raw)
+        };
+
+        foreach (var c in candidates)
+            if (File.Exists(c)) return c;
+
+        // fallback: just combine with dataPath
+        return Path.Combine(dataPath, raw);
+    }
+
+    private static bool TryOpenVsCodeGoto(string path, int line)
+    {
+        try
+        {
+            // "code --goto file:line"
+            // Use cmd to avoid ProcessStart quirks if code is a shim.
+            var args = $"/c code --goto \"{path}:{line}\"";
+            var psi = new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = "cmd.exe",
+                Arguments = args,
+                CreateNoWindow = true,
+                UseShellExecute = false
+            };
+            System.Diagnostics.Process.Start(psi);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Find the underlying MobSkillDbRow that matches a UI MonsterSkillRow.
+    /// Matches by SkillId and Source (filename:line).
+    /// </summary>
+    private MobSkillDbRow? FindMobSkillDbRow(MonsterSkillRow uiRow)
+    {
+        if (_currentMob == null || App.MobSkillDbService == null) return null;
+
+        // Parse source "mob_skill_db.txt:123" → line number
+        int sourceLine = 0;
+        string sourceFileName = "";
+        if (!string.IsNullOrEmpty(uiRow.Source))
+        {
+            var colonIdx = uiRow.Source.LastIndexOf(':');
+            if (colonIdx > 0)
+            {
+                sourceFileName = uiRow.Source.Substring(0, colonIdx);
+                int.TryParse(uiRow.Source.Substring(colonIdx + 1), out sourceLine);
+            }
+        }
+
+        // Search across all applicable rows (mob-specific + globals)
+        var candidates = new List<MobSkillDbRow>();
+        candidates.AddRange(App.MobSkillDbService.GetRowsForMob(_currentMob.Id));
+        candidates.AddRange(App.MobSkillDbService.GetRowsForMob(-3));
+        candidates.AddRange(App.MobSkillDbService.GetRowsForMob(-1));
+        candidates.AddRange(App.MobSkillDbService.GetRowsForMob(-2));
+
+        // Best match: same SkillId, same source line
+        return candidates.FirstOrDefault(r =>
+            r.SkillId == uiRow.SkillId &&
+            r.SourceLine == sourceLine &&
+            System.IO.Path.GetFileName(r.SourceFile) == sourceFileName)
+            ?? candidates.FirstOrDefault(r => r.SkillId == uiRow.SkillId && r.SourceLine == sourceLine);
+    }
+
+    /// <summary>
+    /// Reload mob_skill_db from disk and refresh the current monster's skill/slave display.
+    /// </summary>
+    private void ReloadMobSkillsAndRefreshDisplay()
+    {
+        if (_currentMob == null) return;
+
+        // Reload the mob skill database from disk
+        if (!string.IsNullOrEmpty(App.Config?.DataPath))
+        {
+            App.MobSkillDbService?.LoadFromDataPath(App.Config.DataPath);
+
+            // Rebuild the panel service (it holds references to the refreshed data)
+            if (App.MobSkillDbService != null && App.SkillDbMiniService != null && App.MobDbService != null)
+            {
+                // MobSkillPanelService reads from MobSkillDbService on each call,
+                // so we just need to refresh the display
+            }
+        }
+
+        PopulateMonsterSkillsAndSlaves(_currentMob);
+    }
+
+    // ── End Mob Skill Editor ────────────────────────────────────────────
 
     private static string SerializeMobDrops(MobEntry mob)
     {
@@ -416,22 +784,67 @@ public partial class MainWindow : Window
 
     private void MonsterSaveButton_Click(object sender, RoutedEventArgs e)
     {
-        if (AssetListBox.SelectedItem is not MobEntry mob) return;
-        mob.Drops = MonsterDropsGrid.Items.Cast<MobDropEntry>().ToList();
-        mob.MvpDrops = MonsterMvpDropsGrid.Items.Cast<MobDropEntry>().ToList();
-        App.MobDbService.SaveMob(mob);
+        if (_currentMob == null) return;
+        if (MonsterDetailsPanel.DataContext is ViewModels.MobDetailsViewModel vm)
+        {
+            vm.PushTo(_currentMob);
+        }
+        App.MobDbService.SaveMob(_currentMob);
+        _currentMobSnapshot = CloneMob(_currentMob);
+        _originalMonsterDropsText = SerializeMobDrops(_currentMob);
         System.Windows.MessageBox.Show(this, "Monster saved.", "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Information);
     }
 
     private void MonsterCancelButton_Click(object sender, RoutedEventArgs e)
     {
-        if (AssetListBox.SelectedItem is MobEntry mob)
-        {
-            MonsterDropsGrid.ItemsSource = null;
-            MonsterDropsGrid.ItemsSource = mob.Drops;
-            MonsterMvpDropsGrid.ItemsSource = null;
-            MonsterMvpDropsGrid.ItemsSource = mob.MvpDrops;
-        }
+        if (_currentMob == null || _currentMobSnapshot == null) return;
+        CloneMobInto(_currentMobSnapshot, _currentMob);
+        ShowMonsterDetails(_currentMob);
+    }
+
+    private static void CloneMobInto(MobEntry source, MobEntry target)
+    {
+        target.AegisName = source.AegisName ?? "";
+        target.Name = source.Name ?? "";
+        target.Level = source.Level;
+        target.Hp = source.Hp;
+        target.Sp = source.Sp;
+        target.BaseExp = source.BaseExp;
+        target.JobExp = source.JobExp;
+        target.MvpExp = source.MvpExp;
+        target.Attack = source.Attack;
+        target.Attack2 = source.Attack2;
+        target.Defense = source.Defense;
+        target.MagicDefense = source.MagicDefense;
+        target.Str = source.Str;
+        target.Agi = source.Agi;
+        target.Vit = source.Vit;
+        target.Int = source.Int;
+        target.Dex = source.Dex;
+        target.Luk = source.Luk;
+        target.AttackRange = source.AttackRange;
+        target.SkillRange = source.SkillRange;
+        target.ChaseRange = source.ChaseRange;
+        target.Size = source.Size ?? "Medium";
+        target.Race = source.Race ?? "Formless";
+        target.Element = source.Element ?? "Neutral";
+        target.ElementLevel = source.ElementLevel;
+        target.WalkSpeed = source.WalkSpeed;
+        target.AttackDelay = source.AttackDelay;
+        target.AttackMotion = source.AttackMotion;
+        target.DamageMotion = source.DamageMotion;
+        target.Ai = source.Ai ?? "06";
+        target.Class = source.Class ?? "Normal";
+        target.Drops.Clear();
+        foreach (var d in source.Drops)
+            target.Drops.Add(new MobDropEntry { Item = d.Item, Rate = d.Rate, StealProtected = d.StealProtected, Index = d.Index });
+        target.MvpDrops.Clear();
+        foreach (var d in source.MvpDrops)
+            target.MvpDrops.Add(new MobDropEntry { Item = d.Item, Rate = d.Rate, StealProtected = d.StealProtected, Index = d.Index });
+        target.Modes.Clear();
+        if (source.Modes != null)
+            foreach (var kv in source.Modes)
+                target.Modes[kv.Key] = kv.Value;
     }
 
     private void ShowItemDetails(ItemEntry item)
@@ -486,6 +899,9 @@ public partial class MainWindow : Window
             ItemRelatedFilesListBox.ItemsSource = related.Select(r => $"{r.Label}: {r.Path}").ToList();
             ItemRelatedFilesExpander.Visibility = related.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
         }
+
+        // Populate "Referenced By" list
+        PopulateItemReferences(item.Id, item.AegisName);
     }
 
     private BitmapSource? LoadItemIcon(ItemEntry item)
@@ -757,6 +1173,7 @@ public partial class MainWindow : Window
         App.ReloadDataPath(path);
         RefreshList();
         UpdateSourceIndicators();
+        SetupFileWatcher(path);
         System.Windows.MessageBox.Show(this, $"Data folder set.\nItems: {App.ItemDbService?.Items?.Count ?? 0}, Mobs: {App.MobDbService?.Mobs?.Count ?? 0}, NPCs: {App.NpcIndexService?.All?.Count ?? 0}.", "RoDbEditor", MessageBoxButton.OK);
     }
 
@@ -949,6 +1366,367 @@ public partial class MainWindow : Window
         var content = NpcScriptEditor.Text ?? (npc.Type == NpcScriptType.Script ? npc.ScriptBody : npc.RawLine);
         File.WriteAllText(dlg.FileName, content);
         System.Windows.MessageBox.Show(this, "Exported.", "RoDbEditor", MessageBoxButton.OK);
+    }
+
+    private void OnAnalyzeClicked(object sender, RoutedEventArgs e)
+    {
+        if (App.ItemDbService == null || App.MobDbService == null || App.NpcIndexService == null)
+        {
+             System.Windows.MessageBox.Show(this, "Services not initialized.", "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Warning);
+             return;
+        }
+
+        var builder = new WorkspaceIndexBuilder(
+            App.ItemDbService,
+            App.MobDbService,
+            App.NpcIndexService
+        );
+
+        var engine = new AnalysisEngine(
+            builder,
+            App.GrfService,
+            App.SpriteLookupService,
+            App.FileSystemSpriteSource,
+            App.NpcIndexService,
+            App.MapIndexService
+        );
+        var (diagnostics, index) = engine.Analyze();
+        _lastWorkspaceIndex = index;
+
+        DiagnosticsListView.ItemsSource = diagnostics;
+        
+        System.Windows.MessageBox.Show(this, $"Analysis complete. Found {diagnostics.Count} issues.", "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Information);
+    }
+
+    private void OnAnalyzeFolderClicked(object sender, RoutedEventArgs e)
+    {
+        var dialog = new System.Windows.Forms.FolderBrowserDialog
+        {
+            Description = "Select folder to analyze (must contain db/ and/or npc/ subdirectories)",
+            ShowNewFolderButton = false
+        };
+
+        if (dialog.ShowDialog() != System.Windows.Forms.DialogResult.OK)
+            return;
+
+        var folderPath = dialog.SelectedPath;
+
+        try
+        {
+            // Create temporary services for this folder
+            var tempItemDb = new ItemDbService();
+            var tempMobDb = new MobDbService();
+            var tempNpcIndex = new NpcIndexService();
+            var tempMapIndex = new MapIndexService();
+
+            tempItemDb.LoadFromDataPath(folderPath);
+            tempMobDb.LoadFromDataPath(folderPath);
+            tempNpcIndex.LoadFromDataPath(folderPath);
+            tempMapIndex.LoadFromDataPath(folderPath);
+
+            var builder = new WorkspaceIndexBuilder(tempItemDb, tempMobDb, tempNpcIndex);
+
+            // Use current GRF/sprite services if available, otherwise null
+            var engine = new AnalysisEngine(
+                builder,
+                App.GrfService,
+                App.SpriteLookupService,
+                App.FileSystemSpriteSource,
+                tempNpcIndex,
+                tempMapIndex
+            );
+
+            var (diagnostics, _) = engine.Analyze();
+
+            // Sort diagnostics by Code, FilePath, LineNumber
+            var sorted = diagnostics
+                .OrderBy(d => d.Code)
+                .ThenBy(d => d.FilePath)
+                .ThenBy(d => d.LineNumber)
+                .ToList();
+
+            // Serialize to JSON
+            var json = System.Text.Json.JsonSerializer.Serialize(sorted, new System.Text.Json.JsonSerializerOptions
+            {
+                WriteIndented = true,
+                PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase
+            });
+
+            // Write to analysis_out.json in the analyzed folder
+            var outputPath = Path.Combine(folderPath, "analysis_out.json");
+            File.WriteAllText(outputPath, json);
+
+            System.Windows.MessageBox.Show(this,
+                $"Analysis complete.\nFound {diagnostics.Count} issues.\nOutput written to:\n{outputPath}",
+                "RoDbEditor",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            System.Windows.MessageBox.Show(this,
+                $"Analysis failed:\n{ex.Message}",
+                "RoDbEditor",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+        }
+    }
+
+    private FileSystemWatcher? _watcher;
+    private System.Threading.Timer? _debounceTimer;
+    private bool _isAnalyzing = false;
+    private bool _analysisDirty = false;
+    private readonly object _analysisGate = new();
+
+    private void SetupFileWatcher(string path)
+    {
+        if (_watcher != null) return;
+        if (string.IsNullOrEmpty(path) || !Directory.Exists(path)) return;
+
+        try
+        {
+            _watcher = new FileSystemWatcher(path);
+            _watcher.IncludeSubdirectories = true;
+            _watcher.NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName;
+            _watcher.InternalBufferSize = 64 * 1024;
+            _watcher.Changed += OnFileSystemChanged;
+            _watcher.Created += OnFileSystemChanged;
+            _watcher.Deleted += OnFileSystemChanged;
+            _watcher.Renamed += OnFileSystemRenamed;
+            _watcher.Error += (_, e) => System.Diagnostics.Debug.WriteLine($"[Watcher] Error: {e.GetException()}");
+            _watcher.EnableRaisingEvents = true;
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[MainWindow] Failed to setup watcher: {ex.Message}");
+        }
+    }
+
+    private void OnFileSystemRenamed(object sender, RenamedEventArgs e) => OnFileSystemChanged(sender, e);
+
+    private void OnFileSystemChanged(object sender, FileSystemEventArgs e)
+    {
+        // Filter: Only care about .yml (DB) and .txt (NPC)
+        var ext = Path.GetExtension(e.Name)?.ToLowerInvariant();
+        if (ext != ".yml" && ext != ".txt")
+            return;
+
+        // Debounce: Reset timer to fire in 500ms
+        _debounceTimer?.Dispose();
+        _debounceTimer = new System.Threading.Timer(OnDebounceTick, null, 500, System.Threading.Timeout.Infinite);
+    }
+
+    private void OnDebounceTick(object? state)
+    {
+        Dispatcher.BeginInvoke(new System.Action(() =>
+        {
+            _ = ReloadAndAnalyzeAsync();
+        }));
+    }
+
+    private async System.Threading.Tasks.Task ReloadAndAnalyzeAsync()
+    {
+        lock (_analysisGate)
+        {
+            if (_isAnalyzing)
+            {
+                _analysisDirty = true;
+                return;
+            }
+            _isAnalyzing = true;
+            _analysisDirty = false;
+        }
+
+        try
+        {
+            var dataPath = App.Config?.DataPath;
+            if (string.IsNullOrEmpty(dataPath)) return;
+
+            // Heavy work in background: reload + analyze
+            var diagnostics = await System.Threading.Tasks.Task.Run(async () =>
+            {
+                await App.ReloadDataPathAsync(dataPath);
+                var builder = new WorkspaceIndexBuilder(
+                    App.ItemDbService,
+                    App.MobDbService,
+                    App.NpcIndexService
+                );
+
+                var engine = new AnalysisEngine(
+                    builder,
+                    App.GrfService,
+                    App.SpriteLookupService,
+                    App.FileSystemSpriteSource,
+                    App.NpcIndexService,
+                    App.MapIndexService
+                );
+
+                return engine.Analyze();
+            });
+
+            // UI updates only on dispatcher
+            await Dispatcher.InvokeAsync(() =>
+            {
+                RefreshList();
+                UpdateSourceIndicators();
+                DiagnosticsListView.ItemsSource = diagnostics.Diagnostics;
+                _lastWorkspaceIndex = diagnostics.Index;
+            });
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[ReloadAndAnalyze] Error: {ex}");
+        }
+        finally
+        {
+            bool rerun;
+            lock (_analysisGate)
+            {
+                _isAnalyzing = false;
+                rerun = _analysisDirty;
+                _analysisDirty = false;
+            }
+
+            if (rerun)
+            {
+                await ReloadAndAnalyzeAsync(); // one rerun pass
+            }
+        }
+    }
+
+    private void DiagnosticsListView_MouseDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        if (DiagnosticsListView.SelectedItem is not DiagnosticRecord diag) return;
+        if (string.IsNullOrEmpty(diag.FilePath) || !File.Exists(diag.FilePath)) return;
+
+        // Force open NpcDetailsPanel and load file
+        ItemDetailsPanel.Visibility = Visibility.Collapsed;
+        MonsterDetailsPanel.Visibility = Visibility.Collapsed;
+        NpcDetailsPanel.Visibility = Visibility.Visible;
+        
+        // Clear previous context
+        NpcShopPanel.Visibility = Visibility.Collapsed;
+        NpcWarpPanel.Visibility = Visibility.Collapsed;
+        NpcDiffExpander.Visibility = Visibility.Collapsed;
+        
+        // Setup editor
+        if (App.RagnarokScriptHighlighting != null)
+            NpcScriptEditor.SyntaxHighlighting = App.RagnarokScriptHighlighting;
+            
+        NpcDetailName.Text = "FILE: " + System.IO.Path.GetFileName(diag.FilePath);
+        NpcDetailMapPos.Text = diag.FilePath;
+        NpcDetailType.Text = "TYPE: File View";
+
+        try 
+        {
+             // Clear previous markers
+             _markerService?.Clear();
+             
+             NpcScriptEditor.Text = File.ReadAllText(diag.FilePath);
+             
+             if (diag.LineNumber > 0 && diag.LineNumber <= NpcScriptEditor.LineCount)
+             {
+                 var line = NpcScriptEditor.Document.GetLineByNumber(diag.LineNumber);
+                 NpcScriptEditor.ScrollToLine(diag.LineNumber);
+                 
+                 // Create yellow highlight marker
+                 if (_markerService != null)
+                 {
+                     var marker = _markerService.Create(line.Offset, line.Length);
+                     marker.BackgroundColor = Colors.Yellow;
+                 }
+                 
+                 NpcScriptEditor.CaretOffset = line.Offset;
+             }
+        }
+        catch (Exception ex)
+        {
+            System.Windows.MessageBox.Show(this, "Error reading file: " + ex.Message, "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private void PopulateItemReferences(int itemId, string aegisName)
+    {
+        if (_lastWorkspaceIndex == null)
+        {
+            ItemReferencesListView.ItemsSource = null;
+            return;
+        }
+
+        var references = _lastWorkspaceIndex.References
+            .Where(r => r.RefKind == "Item" &&
+                       (r.To.Id == itemId || (r.To.Name != null && r.To.Name.Equals(aegisName, StringComparison.OrdinalIgnoreCase))))
+            .Select(r => new
+            {
+                SourceFileName = Path.GetFileName(r.SourceFilePath),
+                LineNumber = r.LineNumber,
+                Snippet = r.Snippet,
+                FullPath = r.SourceFilePath
+            })
+            .ToList();
+
+        ItemReferencesListView.ItemsSource = references;
+    }
+
+    private void ItemReferences_MouseDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        if (ItemReferencesListView.SelectedItem == null) return;
+
+        dynamic selected = ItemReferencesListView.SelectedItem;
+        string filePath = selected.FullPath;
+        int lineNumber = selected.LineNumber;
+
+        NavigateToFile(filePath, lineNumber);
+    }
+
+    private void NavigateToFile(string filePath, int lineNumber)
+    {
+        if (string.IsNullOrEmpty(filePath) || !File.Exists(filePath)) return;
+
+        // Force open NpcDetailsPanel and load file
+        ItemDetailsPanel.Visibility = Visibility.Collapsed;
+        MonsterDetailsPanel.Visibility = Visibility.Collapsed;
+        NpcDetailsPanel.Visibility = Visibility.Visible;
+
+        // Clear previous context
+        NpcShopPanel.Visibility = Visibility.Collapsed;
+        NpcWarpPanel.Visibility = Visibility.Collapsed;
+        NpcDiffExpander.Visibility = Visibility.Collapsed;
+
+        // Setup editor
+        if (App.RagnarokScriptHighlighting != null)
+            NpcScriptEditor.SyntaxHighlighting = App.RagnarokScriptHighlighting;
+
+        NpcDetailName.Text = "FILE: " + Path.GetFileName(filePath);
+        NpcDetailMapPos.Text = filePath;
+        NpcDetailType.Text = "TYPE: File View";
+
+        try
+        {
+            // Clear previous markers
+            _markerService?.Clear();
+
+            NpcScriptEditor.Text = File.ReadAllText(filePath);
+
+            if (lineNumber > 0 && lineNumber <= NpcScriptEditor.LineCount)
+            {
+                var line = NpcScriptEditor.Document.GetLineByNumber(lineNumber);
+                NpcScriptEditor.ScrollToLine(lineNumber);
+
+                // Create yellow highlight marker
+                if (_markerService != null)
+                {
+                    var marker = _markerService.Create(line.Offset, line.Length);
+                    marker.BackgroundColor = Colors.Yellow;
+                }
+
+                NpcScriptEditor.CaretOffset = line.Offset;
+            }
+        }
+        catch (Exception ex)
+        {
+            System.Windows.MessageBox.Show(this, "Error reading file: " + ex.Message, "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
     }
 }
 

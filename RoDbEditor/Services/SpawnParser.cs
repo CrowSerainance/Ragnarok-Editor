@@ -46,7 +46,10 @@ public class SpawnParser
                     var mobIdAmount = mobIdPart.Split(',');
                     if (mobIdAmount.Length < 1) continue;
                     if (!int.TryParse(mobIdAmount[0].Trim(), out var mobId)) continue;
-                    _spawns.Add(new SpawnEntry { Map = mapCoords[0].Trim(), X = x, Y = y, MobId = mobId });
+                    var amount = mobIdAmount.Length >= 2 && int.TryParse(mobIdAmount[1].Trim(), out var a) ? a : 1;
+                    int? delayMs = mobIdAmount.Length >= 3 && int.TryParse(mobIdAmount[2].Trim(), out var d) ? d : null;
+                    int? varianceMs = mobIdAmount.Length >= 4 && int.TryParse(mobIdAmount[3].Trim(), out var v) ? v : null;
+                    _spawns.Add(new SpawnEntry { Map = mapCoords[0].Trim(), X = x, Y = y, MobId = mobId, Amount = amount, DelayMs = delayMs, VarianceMs = varianceMs });
                 }
             }
             catch { }

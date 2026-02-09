@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using RoDbEditor.Models;
+using RoDbEditor.Services.Analysis;
 using YamlDotNet.Serialization;
 using YamlDotNet.Serialization.NamingConventions;
 
@@ -14,9 +15,11 @@ public class MobDbService
     public const string MobDbFile = "mob_db.yml";
 
     private readonly List<MobEntry> _mobs = new();
+    private List<DbOverrideRecord> _overrides = new();
     private string? _dataPath;
 
     public IReadOnlyList<MobEntry> Mobs => _mobs;
+    public IReadOnlyList<DbOverrideRecord> Overrides => _overrides;
     public string? LastError { get; private set; }
 
     /// <summary>
@@ -25,6 +28,7 @@ public class MobDbService
     public void LoadFromGrfData(byte[]? mobinfoLubData)
     {
         _mobs.Clear();
+        _overrides.Clear();
         LastError = null;
 
         if (mobinfoLubData == null || mobinfoLubData.Length == 0)
@@ -50,6 +54,7 @@ public class MobDbService
     {
         _dataPath = dataPath;
         _mobs.Clear();
+        _overrides.Clear();
         LastError = null;
 
         if (string.IsNullOrWhiteSpace(dataPath))
@@ -140,8 +145,32 @@ public class MobDbService
                 if (mob == null) continue;
                 mob.SourceFile = MobDbFile;
                 mob.SourceIndex = i;
-                _mobs.Add(mob);
-                loadedCount++;
+
+                // Check for duplicate in current list
+                var existing = _mobs.FindIndex(m => m.Id == mob.Id);
+                if (existing >= 0)
+                {
+                    var oldMob = _mobs[existing];
+                    var itemPath = path ?? MobDbFile;
+                    var reason = itemPath.Contains("import") ? "Import Override" : "Duplicate ID";
+                        
+                    _overrides.Add(new DbOverrideRecord(
+                        EntityKind.Mob, 
+                        mob.Id, 
+                        oldMob.SourceFile, 
+                        itemPath, 
+                        oldMob.Name, 
+                        mob.Name, 
+                        reason));
+                    
+                    // Replace existing
+                    _mobs[existing] = mob;
+                }
+                else
+                {
+                    _mobs.Add(mob);
+                    loadedCount++;
+                }
             }
 
             _mobs.Sort((a, b) => a.Id.CompareTo(b.Id));
@@ -198,11 +227,42 @@ public class MobDbService
             DamageMotion = GetInt(entry, "DamageMotion") ?? GetInt(entry, "damageMotion") ?? 0,
             Ai = GetStr(entry, "Ai") ?? GetStr(entry, "ai") ?? "06",
             Class = GetStr(entry, "Class") ?? GetStr(entry, "class") ?? "Normal",
+            Modes = ParseModes(entry),
             Drops = ParseDrops(entry, "Drops", "drops"),
             MvpDrops = ParseDrops(entry, "MvpDrops", "mvpDrops")
         };
 
         return mob;
+    }
+
+    private static Dictionary<string, bool> ParseModes(Dictionary<object, object> entry)
+    {
+        var modes = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+        if (!entry.TryGetValue("Modes", out var modesObj) && !entry.TryGetValue("modes", out modesObj))
+            return modes;
+
+        if (modesObj is List<object> list)
+        {
+            foreach (var item in list)
+            {
+                var s = item?.ToString()?.Trim();
+                if (!string.IsNullOrEmpty(s))
+                    modes[s] = true;
+            }
+        }
+        else if (modesObj is Dictionary<object, object> map)
+        {
+            foreach (var kv in map)
+            {
+                var key = kv.Key?.ToString()?.Trim();
+                if (string.IsNullOrEmpty(key)) continue;
+                var val = kv.Value;
+                var enabled = val is bool b ? b : (val?.ToString()?.Equals("true", StringComparison.OrdinalIgnoreCase) ?? false);
+                if (enabled)
+                    modes[key] = true;
+            }
+        }
+        return modes;
     }
 
     private static List<MobDropEntry> ParseDrops(Dictionary<object, object> entry, string keyPascal, string keyCamel)
@@ -331,6 +391,12 @@ public class MobDbService
 
         if (mob.MvpExp > 0) entry["MvpExp"] = mob.MvpExp;
 
+        var enabledModes = mob.Modes != null
+            ? mob.Modes.Where(kv => kv.Value).Select(kv => (object)kv.Key).ToList()
+            : new List<object>();
+        if (enabledModes.Count > 0)
+            entry["Modes"] = enabledModes;
+
         if (mob.Drops.Count > 0)
         {
             var dropsList = new List<object>();
@@ -418,6 +484,14 @@ public class MobDbService
         if (string.IsNullOrEmpty(_dataPath)) return null;
         var importPath = Path.Combine(_dataPath, "db", "import", MobDbFile);
         return File.Exists(importPath) ? importPath : null;
+    }
+
+    /// <summary>
+    /// Get a mob by ID, or null if not found.
+    /// </summary>
+    public MobEntry? GetMobById(int mobId)
+    {
+        return _mobs.FirstOrDefault(m => m.Id == mobId);
     }
 
     public IEnumerable<MobEntry> Search(string? filter)
