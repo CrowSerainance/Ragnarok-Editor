@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Text;
 using RoDbEditor.Models;
 using RoDbEditor.Services.Analysis;
 using YamlDotNet.Serialization;
@@ -13,6 +14,7 @@ namespace RoDbEditor.Services;
 public class MobDbService
 {
     public const string MobDbFile = "mob_db.yml";
+    private static readonly UTF8Encoding Utf8NoBom = new UTF8Encoding(false);
 
     private readonly List<MobEntry> _mobs = new();
     private List<DbOverrideRecord> _overrides = new();
@@ -312,23 +314,13 @@ public class MobDbService
 
     public void SaveMob(MobEntry mob)
     {
-        if (string.IsNullOrEmpty(_dataPath) || string.IsNullOrEmpty(mob.SourceFile)) return;
+        // Always write edits and new mobs into the import overlay file
+        // (db/import/mob_db.yml) so that the official db/re/pre-re mob_db.yml
+        // files remain untouched. rAthena will merge the import file on load.
+        if (string.IsNullOrEmpty(_dataPath)) return;
 
-        // For new mobs (SourceIndex == -1), prefer import file
-        string? path = null;
-        if (mob.SourceIndex < 0)
-        {
-            path = GetImportMobDbPath();
-        }
-
-        if (path == null)
-        {
-            path = Path.Combine(_dataPath, "db", "re", mob.SourceFile);
-            if (!File.Exists(path)) path = Path.Combine(_dataPath, "db", "pre-re", mob.SourceFile);
-            if (!File.Exists(path)) path = Path.Combine(_dataPath, "db", mob.SourceFile);
-            if (!File.Exists(path)) path = Path.Combine(_dataPath, "db", "import", mob.SourceFile);
-            if (!File.Exists(path)) return;
-        }
+        var path = EnsureImportMobDbPath();
+        if (path == null) return;
 
         var deserializer = new DeserializerBuilder()
             .WithNamingConvention(CamelCaseNamingConvention.Instance)
@@ -422,31 +414,40 @@ public class MobDbService
             entry["MvpDrops"] = mvpList;
         }
 
-        if (mob.SourceIndex >= 0 && mob.SourceIndex < body.Count)
+        // Find existing entry for this mob ID in the Body list (if any)
+        var existingIndex = -1;
+        for (int i = 0; i < body.Count; i++)
         {
-            // Update existing entry
-            body[mob.SourceIndex] = entry;
+            if (body[i] is not Dictionary<object, object> existing) continue;
+            if (!existing.TryGetValue("Id", out var idObj) && !existing.TryGetValue("id", out idObj))
+                continue;
+
+            if (Convert.ToInt32(idObj) == mob.Id)
+            {
+                existingIndex = i;
+                break;
+            }
+        }
+
+        if (existingIndex >= 0)
+        {
+            // Override existing custom/import entry
+            body[existingIndex] = entry;
+            mob.SourceIndex = existingIndex;
         }
         else
         {
-            // Append new entry
+            // Append new custom/import entry
             mob.SourceIndex = body.Count;
-            mob.SourceFile = MobDbFile;
             body.Add(entry);
         }
 
-        // Ensure Header exists
-        if (!doc.ContainsKey("Header"))
-        {
-            doc["Header"] = new Dictionary<object, object>
-            {
-                ["Type"] = "MOB_DB",
-                ["Version"] = 3
-            };
-        }
+        EnsureMobDbHeader(doc);
 
-        File.WriteAllText(path, serializer.Serialize(doc));
-        Debug.WriteLine($"[MobDbService] Saved mob {mob.Id} ({mob.AegisName}) to {path}");
+        mob.SourceFile = MobDbFile;
+
+        File.WriteAllText(path, serializer.Serialize(doc), Utf8NoBom);
+        Debug.WriteLine($"[MobDbService] Saved mob {mob.Id} ({mob.AegisName}) to import overlay {path}");
     }
 
     /// <summary>
@@ -484,6 +485,90 @@ public class MobDbService
         if (string.IsNullOrEmpty(_dataPath)) return null;
         var importPath = Path.Combine(_dataPath, "db", "import", MobDbFile);
         return File.Exists(importPath) ? importPath : null;
+    }
+
+    /// <summary>
+    /// Ensure db/import/mob_db.yml exists and has a minimal valid structure.
+    /// Returns the absolute path, or null on failure.
+    /// </summary>
+    private string? EnsureImportMobDbPath()
+    {
+        if (string.IsNullOrEmpty(_dataPath)) return null;
+
+        var importPath = Path.Combine(_dataPath, "db", "import", MobDbFile);
+        var dir = Path.GetDirectoryName(importPath);
+        if (string.IsNullOrEmpty(dir)) return null;
+
+        if (!Directory.Exists(dir))
+            Directory.CreateDirectory(dir);
+
+        if (!File.Exists(importPath))
+        {
+            var serializer = new SerializerBuilder()
+                .WithNamingConvention(CamelCaseNamingConvention.Instance)
+                .Build();
+
+            var doc = new Dictionary<object, object>
+            {
+                ["Header"] = new Dictionary<object, object>
+                {
+                    ["Type"] = "MOB_DB",
+                    ["Version"] = 5
+                },
+                ["Body"] = new List<object>()
+            };
+
+            File.WriteAllText(importPath, serializer.Serialize(doc), Utf8NoBom);
+            return importPath;
+        }
+        else
+        {
+            try
+            {
+                // Normalize existing import file to current schema header/version and UTF-8 (no BOM).
+                var yaml = File.ReadAllText(importPath);
+                var deserializer = new DeserializerBuilder()
+                    .WithNamingConvention(CamelCaseNamingConvention.Instance)
+                    .IgnoreUnmatchedProperties()
+                    .Build();
+                var serializer = new SerializerBuilder()
+                    .WithNamingConvention(CamelCaseNamingConvention.Instance)
+                    .Build();
+
+                var doc = deserializer.Deserialize<Dictionary<object, object>>(new StringReader(yaml))
+                          ?? new Dictionary<object, object>();
+
+                if (!doc.TryGetValue("Body", out var bodyObj) || bodyObj is not List<object>)
+                    doc["Body"] = new List<object>();
+
+                EnsureMobDbHeader(doc);
+                File.WriteAllText(importPath, serializer.Serialize(doc), Utf8NoBom);
+            }
+            catch
+            {
+                // Keep existing file untouched if normalization fails; SaveMob will handle failures later.
+            }
+        }
+
+        return importPath;
+    }
+
+    private static void EnsureMobDbHeader(Dictionary<object, object> doc)
+    {
+        Dictionary<object, object> header;
+        if (!doc.TryGetValue("Header", out var headerObj) || headerObj is not Dictionary<object, object> existingHeader)
+        {
+            header = new Dictionary<object, object>();
+            doc["Header"] = header;
+        }
+        else
+        {
+            header = existingHeader;
+        }
+
+        // rAthena expects MOB_DB v5 for current Renewal schema.
+        header["Type"] = "MOB_DB";
+        header["Version"] = 5;
     }
 
     /// <summary>

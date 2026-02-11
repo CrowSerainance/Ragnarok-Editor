@@ -56,6 +56,11 @@ public sealed class SkillDbMiniService
 
     public int Count => _byId.Count;
 
+    /// <summary>
+    /// Returns all loaded skill entries for populating dropdowns.
+    /// </summary>
+    public IReadOnlyDictionary<int, SkillMiniEntry> GetAll() => _byId;
+
     private void TryParseSkillDbYaml(string filePath)
     {
         try

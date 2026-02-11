@@ -42,7 +42,8 @@ public sealed class MobSkillPanelService
                 Cast = FormatMs(r.CastTimeMs),
                 Delay = FormatMs(r.DelayMs),
                 Condition = FormatCondition(r.ConditionType, r.ConditionValue, r.Val1),
-                Source = $"{System.IO.Path.GetFileName(r.SourceFile)}:{r.SourceLine}"
+                Source = $"{System.IO.Path.GetFileName(r.SourceFile)}:{r.SourceLine}",
+                SourceRow = r
             };
         }).ToList();
     }
@@ -53,38 +54,60 @@ public sealed class MobSkillPanelService
 
         var rows = ResolveApplicableRows(mob);
 
-        // "NPC_SUMMONSLAVE": Val1..Val5 are slave mob IDs; SkillLv is count per slave type.
-        // If we can't resolve the skill name, we still try a best-effort match by string.
+        // "NPC_SUMMONSLAVE"/"NPC_CALLSLAVE*": Val1..Val5 are slave mob IDs; SkillLv is count per slave type.
+        // If we can't resolve the skill name, we still try a best-effort match by string/id.
         var slaves = new List<MonsterSlaveRow>();
 
         foreach (var r in rows)
         {
             var skillName = _skills.ResolveName(r.SkillId);
 
-            // Check by resolved name AND by known skill IDs as fallback
-            bool isSummonSlave =
-                skillName.Equals("NPC_SUMMONSLAVE", StringComparison.OrdinalIgnoreCase) ||
-                skillName.Equals("NPC_SUMMONSLAVE2", StringComparison.OrdinalIgnoreCase) ||
-                r.SkillId == 196 ||  // NPC_SUMMONSLAVE
-                r.SkillId == 197;    // NPC_SUMMONSLAVE2
-            if (!isSummonSlave) continue;
+            // rAthena slave-summon skills are NPC_SUMMONSLAVE* and NPC_CALLSLAVE* (recall slaves).
+            // We prefer name-based detection (via skill_db.yml), with a fallback on known IDs.
+            bool isSummonOrCallByName =
+                skillName.StartsWith("NPC_SUMMONSLAVE", StringComparison.OrdinalIgnoreCase) ||
+                skillName.StartsWith("NPC_CALLSLAVE", StringComparison.OrdinalIgnoreCase);
+
+            // Known IDs in official skill_db: 196 = NPC_SUMMONSLAVE. Some forks also alias 197.
+            bool isSummonOrCallById = r.SkillId == 196 || r.SkillId == 197;
+
+            if (!isSummonOrCallByName && !isSummonOrCallById)
+                continue;
 
             var ids = new[] { r.Val1, r.Val2, r.Val3, r.Val4, r.Val5 }
                 .Where(x => x > 0)
                 .ToArray();
 
-            foreach (var slaveId in ids)
+            if (ids.Length == 0)
+                continue;
+
+            // rAthena summons `amount` (SkillLv) slaves total in round-robin across
+            // the slave type array. E.g. amount=16, ids=[A,B,C] → 6A, 5B, 5C.
+            int totalAmount = Math.Max(1, r.SkillLv);
+            for (int i = 0; i < ids.Length; i++)
             {
+                var slaveId = ids[i];
                 var slave = _mobs.GetMobById(slaveId);
                 var slaveName = slave != null ? slave.Name : $"Mob#{slaveId}";
+
+                // Round-robin count: total/types + 1 for the first (total%types) slots
+                int countForThis = totalAmount / ids.Length + (i < totalAmount % ids.Length ? 1 : 0);
+
+                // Condition text (\"When\") should include both the mob_skill_db condition
+                // and the state (idle/walk/chase/attack) so it reads RMS-style:
+                //   \"On spawn/respawn (chase)\", \"When rude attacked (attack)\", etc.
+                var whenText = FormatCondition(r.ConditionType, r.ConditionValue, r.Val1);
+                if (!string.IsNullOrWhiteSpace(r.State))
+                    whenText = $"{whenText} ({r.State})";
 
                 slaves.Add(new MonsterSlaveRow
                 {
                     MobId = slaveId,
                     MobName = slaveName,
-                    Count = Math.Max(1, r.SkillLv),
-                    When = FormatCondition(r.ConditionType, r.ConditionValue, r.Val1),
-                    Source = $"{System.IO.Path.GetFileName(r.SourceFile)}:{r.SourceLine}"
+                    Count = countForThis,
+                    When = whenText,
+                    Source = $"{System.IO.Path.GetFileName(r.SourceFile)}:{r.SourceLine}",
+                    SourceRow = r
                 });
             }
         }
@@ -101,7 +124,8 @@ public sealed class MobSkillPanelService
                     MobName = first.MobName,
                     Count = g.Max(x => x.Count), // typical: same count per type
                     When = string.Join(" | ", g.Select(x => x.When).Distinct()),
-                    Source = string.Join(", ", g.Select(x => x.Source).Distinct())
+                    Source = string.Join(", ", g.Select(x => x.Source).Distinct()),
+                    SourceRow = first.SourceRow
                 };
             })
             .OrderByDescending(x => x.Count)

@@ -15,6 +15,9 @@ public sealed class MonsterSkillRow
 
     public string Condition { get; set; } = ""; // human readable
     public string Source { get; set; } = "";    // "mob_skill_db.txt:123"
+
+    /// <summary>Back-reference to the raw mob_skill_db row for editing.</summary>
+    public MobSkillDbRow? SourceRow { get; set; }
 }
 
 public sealed class MonsterSlaveRow
@@ -25,4 +28,7 @@ public sealed class MonsterSlaveRow
 
     public string When { get; set; } = "";      // condition summary
     public string Source { get; set; } = "";
+
+    /// <summary>Back-reference to the raw mob_skill_db row for editing.</summary>
+    public MobSkillDbRow? SourceRow { get; set; }
 }

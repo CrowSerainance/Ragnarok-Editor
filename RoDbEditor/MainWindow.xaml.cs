@@ -523,7 +523,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        var dbRow = FindMobSkillDbRow(uiRow);
+        var dbRow = uiRow.SourceRow;
         if (dbRow == null)
         {
             System.Windows.MessageBox.Show("Could not find the underlying database row.", "Edit Skill", MessageBoxButton.OK, MessageBoxImage.Warning);
@@ -553,7 +553,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        var dbRow = FindMobSkillDbRow(uiRow);
+        var dbRow = uiRow.SourceRow;
         if (dbRow == null)
         {
             System.Windows.MessageBox.Show("Could not find the underlying database row.", "Delete Skill", MessageBoxButton.OK, MessageBoxImage.Warning);
@@ -578,25 +578,22 @@ public partial class MainWindow : Window
         // 1) Acquire selected row.
         if (MonsterSkillsGrid.SelectedItem is not RoDbEditor.Models.MonsterSkillRow uiRow)
         {
-            MessageBox.Show("Select a Monster Skill row first.", "Open Source", MessageBoxButton.OK, MessageBoxImage.Information);
+            System.Windows.MessageBox.Show("Select a Monster Skill row first.", "Open Source", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
 
-        // 2) Resolve backing MobSkillDbRow if you have it
-        var dbRow = FindMobSkillDbRow(uiRow);
-        
+        // 2) Resolve backing MobSkillDbRow via SourceRow
         string path;
         int line;
 
-        if (dbRow != null && !string.IsNullOrWhiteSpace(dbRow.SourceFile))
+        if (uiRow.SourceRow != null && !string.IsNullOrWhiteSpace(uiRow.SourceRow.SourceFile))
         {
-            path = dbRow.SourceFile;
-            line = dbRow.SourceLine;
+            path = uiRow.SourceRow.SourceFile;
+            line = uiRow.SourceRow.SourceLine;
         }
         else
         {
             // Fallback: parse uiRow.Source
-            // Expected uiRow.Source format: "mob_skill_db.txt:123" or fullpath:line
             var parsed = TryParseSource(uiRow.Source);
             path = parsed.path;
             line = parsed.line;
@@ -604,7 +601,7 @@ public partial class MainWindow : Window
 
         if (string.IsNullOrWhiteSpace(path))
         {
-            MessageBox.Show($"No valid source info on this row: {uiRow.Source}", "Open Source", MessageBoxButton.OK, MessageBoxImage.Warning);
+            System.Windows.MessageBox.Show($"No valid source info on this row: {uiRow.Source}", "Open Source", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
 
@@ -613,7 +610,7 @@ public partial class MainWindow : Window
 
         if (!File.Exists(path))
         {
-            MessageBox.Show($"Source file not found:\n{path}", "Open Source", MessageBoxButton.OK, MessageBoxImage.Error);
+            System.Windows.MessageBox.Show($"Source file not found:\n{path}", "Open Source", MessageBoxButton.OK, MessageBoxImage.Error);
             return;
         }
 
@@ -624,7 +621,7 @@ public partial class MainWindow : Window
         // 5) Fallback: Notepad (no goto) + clipboard hint
         try
         {
-            Clipboard.SetText($"{path}:{line}");
+            System.Windows.Clipboard.SetText($"{path}:{line}");
             System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
             {
                 FileName = "notepad.exe",
@@ -632,12 +629,12 @@ public partial class MainWindow : Window
                 UseShellExecute = true
             });
 
-            MessageBox.Show("Opened in Notepad (cannot jump to line). Path:Line copied to clipboard for VS Code goto.",
+            System.Windows.MessageBox.Show("Opened in Notepad (cannot jump to line). Path:Line copied to clipboard for VS Code goto.",
                 "Open Source", MessageBoxButton.OK, MessageBoxImage.Information);
         }
         catch (System.Exception ex)
         {
-            MessageBox.Show($"Failed to open source:\n{ex.Message}", "Open Source", MessageBoxButton.OK, MessageBoxImage.Error);
+            System.Windows.MessageBox.Show($"Failed to open source:\n{ex.Message}", "Open Source", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
 
@@ -692,13 +689,12 @@ public partial class MainWindow : Window
     {
         try
         {
-            // "code --goto file:line"
-            // Use cmd to avoid ProcessStart quirks if code is a shim.
-            var args = $"/c code --goto \"{path}:{line}\"";
+            // Launch VS Code directly; if "code" is not on PATH,
+            // Process.Start throws Win32Exception → catch returns false → Notepad fallback.
             var psi = new System.Diagnostics.ProcessStartInfo
             {
-                FileName = "cmd.exe",
-                Arguments = args,
+                FileName = "code",
+                Arguments = $"--goto \"{path}:{line}\"",
                 CreateNoWindow = true,
                 UseShellExecute = false
             };
@@ -709,42 +705,6 @@ public partial class MainWindow : Window
         {
             return false;
         }
-    }
-
-    /// <summary>
-    /// Find the underlying MobSkillDbRow that matches a UI MonsterSkillRow.
-    /// Matches by SkillId and Source (filename:line).
-    /// </summary>
-    private MobSkillDbRow? FindMobSkillDbRow(MonsterSkillRow uiRow)
-    {
-        if (_currentMob == null || App.MobSkillDbService == null) return null;
-
-        // Parse source "mob_skill_db.txt:123" → line number
-        int sourceLine = 0;
-        string sourceFileName = "";
-        if (!string.IsNullOrEmpty(uiRow.Source))
-        {
-            var colonIdx = uiRow.Source.LastIndexOf(':');
-            if (colonIdx > 0)
-            {
-                sourceFileName = uiRow.Source.Substring(0, colonIdx);
-                int.TryParse(uiRow.Source.Substring(colonIdx + 1), out sourceLine);
-            }
-        }
-
-        // Search across all applicable rows (mob-specific + globals)
-        var candidates = new List<MobSkillDbRow>();
-        candidates.AddRange(App.MobSkillDbService.GetRowsForMob(_currentMob.Id));
-        candidates.AddRange(App.MobSkillDbService.GetRowsForMob(-3));
-        candidates.AddRange(App.MobSkillDbService.GetRowsForMob(-1));
-        candidates.AddRange(App.MobSkillDbService.GetRowsForMob(-2));
-
-        // Best match: same SkillId, same source line
-        return candidates.FirstOrDefault(r =>
-            r.SkillId == uiRow.SkillId &&
-            r.SourceLine == sourceLine &&
-            System.IO.Path.GetFileName(r.SourceFile) == sourceFileName)
-            ?? candidates.FirstOrDefault(r => r.SkillId == uiRow.SkillId && r.SourceLine == sourceLine);
     }
 
     /// <summary>
@@ -770,7 +730,252 @@ public partial class MainWindow : Window
         PopulateMonsterSkillsAndSlaves(_currentMob);
     }
 
-    // ── End Mob Skill Editor ────────────────────────────────────────────
+    // ── Mob Slave Editor Handlers ───────────────────────────────────────
+
+    private void MobSlaveAdd_Click(object sender, RoutedEventArgs e)
+    {
+        if (_currentMob == null || App.MobSkillWriteService == null) return;
+
+        // Pre-fill a new NPC_SUMMONSLAVE row
+        var newRow = new MobSkillDbRow
+        {
+            MobId = _currentMob.Id,
+            SkillId = 196, // NPC_SUMMONSLAVE
+            SkillLv = 1,
+            State = "idle",
+            Dummy = $"{_currentMob.Name}@NPC_SUMMONSLAVE",
+            Rate = 10000,
+            Target = "self",
+            ConditionType = "slavele",
+            ConditionValue = 1
+        };
+
+        var dlg = new Dialogs.MobSlaveEditDialog();
+        dlg.SetMobContext(_currentMob.Id, _currentMob.Name);
+        dlg.LoadFromRow(newRow);
+        dlg.Owner = this;
+
+        if (dlg.ShowDialog() == true && dlg.Result != null)
+        {
+            App.MobSkillWriteService.AppendSkillRow(dlg.Result);
+            EnsureSlaveSupportSkills(dlg.Result);
+            ReloadMobSkillsAndRefreshDisplay();
+        }
+    }
+
+    private void MobSlaveEdit_Click(object sender, RoutedEventArgs e)
+    {
+        if (_currentMob == null || App.MobSkillWriteService == null) return;
+
+        var slaveRow = MonsterSlavesGrid.SelectedItem as MonsterSlaveRow;
+        if (slaveRow == null)
+        {
+            System.Windows.MessageBox.Show("Select a slave row to edit.", "Edit Slave", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        var sourceRow = slaveRow.SourceRow;
+        if (sourceRow == null)
+        {
+            System.Windows.MessageBox.Show("Could not find the underlying database row.", "Edit Slave", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        var dlg = new Dialogs.MobSlaveEditDialog();
+        dlg.SetMobContext(_currentMob.Id, _currentMob.Name);
+        dlg.LoadFromRow(sourceRow);
+        dlg.Owner = this;
+
+        if (dlg.ShowDialog() == true && dlg.Result != null)
+        {
+            App.MobSkillWriteService.UpdateSkillRow(sourceRow, dlg.Result);
+            EnsureSlaveSupportSkills(dlg.Result);
+            ReloadMobSkillsAndRefreshDisplay();
+        }
+    }
+
+    private void EnsureSlaveSupportSkills(MobSkillDbRow seedRow)
+    {
+        if (App.MobSkillWriteService == null || App.MobSkillDbService == null || string.IsNullOrWhiteSpace(App.Config?.DataPath))
+            return;
+
+        App.MobSkillDbService.LoadFromDataPath(App.Config.DataPath);
+        var existing = App.MobSkillDbService.GetRowsForMob(seedRow.MobId).ToList();
+
+        foreach (var state in new[] { "idle", "attack", "chase" })
+        {
+            var hasState = existing.Any(r =>
+                r.SkillId == 196 &&
+                string.Equals(r.State, state, StringComparison.OrdinalIgnoreCase) &&
+                SameSlaveSet(r, seedRow));
+
+            if (hasState)
+                continue;
+
+            var summonRow = BuildDerivedSlaveRow(seedRow, 196, state);
+            App.MobSkillWriteService.AppendSkillRow(summonRow, $"Auto-added missing NPC_SUMMONSLAVE state '{state}'");
+            existing.Add(summonRow);
+        }
+
+        var hasCallSlave = existing.Any(r => r.SkillId == 352);
+        if (!hasCallSlave)
+        {
+            var recallRow = BuildDerivedSlaveRow(seedRow, 352, "chase");
+            recallRow.Dummy = $"{_currentMob?.Name ?? ("Mob" + seedRow.MobId)}@NPC_CALLSLAVE";
+            recallRow.Val1 = 0;
+            recallRow.Val2 = 0;
+            recallRow.Val3 = 0;
+            recallRow.Val4 = 0;
+            recallRow.Val5 = 0;
+            recallRow.ConditionType = "always";
+            recallRow.ConditionValue = 0;
+            recallRow.SkillLv = 1;
+            App.MobSkillWriteService.AppendSkillRow(recallRow, "Auto-added NPC_CALLSLAVE recall support");
+        }
+    }
+
+    private static bool SameSlaveSet(MobSkillDbRow a, MobSkillDbRow b)
+    {
+        return a.Val1 == b.Val1 &&
+               a.Val2 == b.Val2 &&
+               a.Val3 == b.Val3 &&
+               a.Val4 == b.Val4 &&
+               a.Val5 == b.Val5;
+    }
+
+    private MobSkillDbRow BuildDerivedSlaveRow(MobSkillDbRow seed, int skillId, string state)
+    {
+        var mobName = _currentMob?.Name ?? $"Mob{seed.MobId}";
+        var skillName = skillId == 196 ? "NPC_SUMMONSLAVE" : "NPC_CALLSLAVE";
+        return new MobSkillDbRow
+        {
+            MobId = seed.MobId,
+            Dummy = $"{mobName}@{skillName}",
+            SkillId = skillId,
+            SkillLv = Math.Max(1, seed.SkillLv),
+            State = state,
+            Rate = seed.Rate > 0 ? seed.Rate : 10000,
+            CastTimeMs = 0,
+            DelayMs = 0,
+            Cancelable = 0,
+            Target = "self",
+            ConditionType = seed.ConditionType,
+            ConditionValue = seed.ConditionValue,
+            Val1 = seed.Val1,
+            Val2 = seed.Val2,
+            Val3 = seed.Val3,
+            Val4 = seed.Val4,
+            Val5 = seed.Val5,
+            Emotion = 0,
+            Chat = ""
+        };
+    }
+
+    private void MobSlaveDelete_Click(object sender, RoutedEventArgs e)
+    {
+        if (_currentMob == null || App.MobSkillWriteService == null || App.MobSkillDbService == null) return;
+
+        var slaveRow = MonsterSlavesGrid.SelectedItem as MonsterSlaveRow;
+        if (slaveRow == null)
+        {
+            System.Windows.MessageBox.Show("Select a slave row to delete.", "Delete Slave", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        var sourceRow = slaveRow.SourceRow;
+        if (sourceRow == null)
+        {
+            System.Windows.MessageBox.Show("Could not find the underlying database row.", "Delete Slave", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        // Collect ALL related rows: NPC_SUMMONSLAVE (idle/attack/chase) for this slave set.
+        // Also delete NPC_CALLSLAVE (recall) only if this is the last slave set for the mob.
+        var allForMob = App.MobSkillDbService.GetRowsForMob(_currentMob.Id).ToList();
+        var toDelete = new List<MobSkillDbRow>();
+
+        foreach (var r in allForMob)
+        {
+            if (r.SkillId == 196 && SameSlaveSet(r, sourceRow))
+                toDelete.Add(r);
+        }
+
+        var otherSummons = allForMob.Count(r =>
+            r.SkillId == 196 && !SameSlaveSet(r, sourceRow));
+        if (otherSummons == 0)
+        {
+            foreach (var r in allForMob)
+            {
+                if (r.SkillId == 352)
+                    toDelete.Add(r);
+            }
+        }
+
+        var result = System.Windows.MessageBox.Show(
+            $"Delete slave {slaveRow.MobName} (x{slaveRow.Count}) and its recall skill?\n\n" +
+            $"This will remove {toDelete.Count} mob_skill_db row(s):\n" +
+            $"• All NPC_SUMMONSLAVE states (idle/attack/chase) for this slave set\n" +
+            $"• NPC_CALLSLAVE recall support",
+            "Confirm Delete",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Question);
+
+        if (result == MessageBoxResult.Yes)
+        {
+            var deleted = App.MobSkillWriteService.DeleteSkillRows(toDelete);
+            ReloadMobSkillsAndRefreshDisplay();
+            if (deleted > 0)
+                System.Windows.MessageBox.Show($"Removed {deleted} mob skill row(s).", "Delete Slave", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+    }
+
+    private void MobSlaveOpenFile_Click(object sender, RoutedEventArgs e)
+    {
+        var slaveRow = MonsterSlavesGrid.SelectedItem as MonsterSlaveRow;
+        if (slaveRow == null)
+        {
+            System.Windows.MessageBox.Show("Select a slave row first.", "Open Source", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        var sourceRow = slaveRow.SourceRow;
+        if (sourceRow == null || string.IsNullOrWhiteSpace(sourceRow.SourceFile))
+        {
+            System.Windows.MessageBox.Show("Source file info not available for this row.", "Open Source", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        var path = ResolveMobSkillPath(sourceRow.SourceFile);
+        var line = sourceRow.SourceLine;
+
+        if (!File.Exists(path))
+        {
+            System.Windows.MessageBox.Show($"Source file not found:\n{path}", "Open Source", MessageBoxButton.OK, MessageBoxImage.Error);
+            return;
+        }
+
+        if (TryOpenVsCodeGoto(path, line))
+            return;
+
+        try
+        {
+            System.Windows.Clipboard.SetText($"{path}:{line}");
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = "notepad.exe",
+                Arguments = $"\"{path}\"",
+                UseShellExecute = true
+            });
+            System.Windows.MessageBox.Show("Opened in Notepad (cannot jump to line). Path:Line copied to clipboard.",
+                "Open Source", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (System.Exception ex)
+        {
+            System.Windows.MessageBox.Show($"Failed to open source:\n{ex.Message}", "Open Source", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    // ── End Mob Skill / Slave Editor ────────────────────────────────────
 
     private static string SerializeMobDrops(MobEntry mob)
     {
@@ -1157,6 +1362,23 @@ public partial class MainWindow : Window
         System.Windows.MessageBox.Show(this,
             $"Extracted assets loaded.\nSprites indexed: {App.FileSystemSpriteSource.CachedCount}",
             "RoDbEditor", MessageBoxButton.OK);
+    }
+
+    private void MenuSpriteDiagnostic_Click(object sender, RoutedEventArgs e)
+    {
+        var report = App.SpriteLookupService?.BuildSpriteDiagnosticReport() ?? "SpriteLookupService not available.";
+        var path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "RoDbEditor_SpriteDiagnostic.txt");
+        try
+        {
+            System.IO.File.WriteAllText(path, report);
+        }
+        catch { }
+
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine(report);
+        sb.AppendLine();
+        sb.AppendLine($"Report also saved to: {path}");
+        System.Windows.MessageBox.Show(this, sb.ToString(), "Sprite Diagnostic", MessageBoxButton.OK);
     }
 
     private void MenuOpenDataFolder_Click(object sender, RoutedEventArgs e)
@@ -1592,6 +1814,52 @@ public partial class MainWindow : Window
                 await ReloadAndAnalyzeAsync(); // one rerun pass
             }
         }
+    }
+
+    private void CopySelectedDiagnostics_Click(object sender, RoutedEventArgs e)
+    {
+        if (DiagnosticsListView?.SelectedItem is not DiagnosticRecord selected)
+        {
+            System.Windows.MessageBox.Show(this, "Select a diagnostic row first.", "Copy Diagnostics",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        CopyDiagnosticsToClipboard(new[] { selected });
+    }
+
+    private void CopyAllDiagnostics_Click(object sender, RoutedEventArgs e)
+    {
+        var items = DiagnosticsListView?.Items?.Cast<object>()
+            .OfType<DiagnosticRecord>()
+            .ToList();
+
+        if (items == null || items.Count == 0)
+        {
+            System.Windows.MessageBox.Show(this, "No diagnostics to copy.", "Copy Diagnostics",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        CopyDiagnosticsToClipboard(items);
+    }
+
+    private void CopyDiagnosticsToClipboard(IEnumerable<DiagnosticRecord> diagnostics)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("Severity\tCode\tMessage\tFile\tLine");
+
+        foreach (var d in diagnostics)
+        {
+            var severity = d.Severity.ToString();
+            var code = d.Code ?? "";
+            var message = (d.Message ?? "").Replace("\r", " ").Replace("\n", " ");
+            var file = d.FilePath ?? "";
+            var line = d.LineNumber.ToString();
+            sb.AppendLine($"{severity}\t{code}\t{message}\t{file}\t{line}");
+        }
+
+        System.Windows.Clipboard.SetText(sb.ToString());
     }
 
     private void DiagnosticsListView_MouseDoubleClick(object sender, MouseButtonEventArgs e)

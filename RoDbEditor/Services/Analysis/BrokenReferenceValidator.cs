@@ -10,6 +10,10 @@ public class BrokenReferenceValidator : IValidator
 
         foreach (var reference in index.References)
         {
+            // Ignore empty/sentinel IDs (0 or negative) to avoid false positives.
+            if (reference.To.Id.HasValue && reference.To.Id.Value <= 0)
+                continue;
+
             var result = resolver.Resolve(reference.To);
             
             if (result.Status == ValidateStatus.NotFound)

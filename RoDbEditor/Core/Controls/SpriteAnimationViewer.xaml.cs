@@ -102,11 +102,15 @@ public partial class SpriteAnimationViewer : System.Windows.Controls.UserControl
             }
 
             RenderCurrentFrame();
+
+            // Auto-play when we have animation data
+            if (_act != null && _act.NumberOfActions > 0)
+                Play();
         }
         catch (Exception ex)
         {
             System.Diagnostics.Debug.WriteLine($"[SpriteAnimationViewer] Failed to load sprite: {ex.Message}\n{ex.StackTrace}");
-            ClearDisplay();
+            ClearDisplay($"Load error: {ex.Message}");
         }
     }
 
@@ -118,10 +122,11 @@ public partial class SpriteAnimationViewer : System.Windows.Controls.UserControl
         LoadFromData(null, sprData);
     }
 
-    private void ClearDisplay()
+    private void ClearDisplay(string? message = null)
     {
         SpriteImage.Source = null;
-        TxtInfo.Text = "No sprite";
+        TxtNoSprite.Text = message ?? "No sprite";
+        TxtNoSprite.Visibility = Visibility.Visible;
     }
 
     private void RenderCurrentFrame()
@@ -145,7 +150,7 @@ public partial class SpriteAnimationViewer : System.Windows.Controls.UserControl
                     CenterImage(firstSprite);
                 }
             }
-            TxtInfo.Text = $"Sprite 0/{_spriteCache.Count}";
+            TxtNoSprite.Visibility = Visibility.Collapsed;
             return;
         }
 
@@ -169,7 +174,7 @@ public partial class SpriteAnimationViewer : System.Windows.Controls.UserControl
         if (composited != null)
             CenterImage(composited);
 
-        TxtInfo.Text = $"Action {_currentAction}/{_act.NumberOfActions} Frame {_currentFrame}/{action.Frames.Count}";
+        TxtNoSprite.Visibility = Visibility.Collapsed;
 
         // Update timer interval based on action's animation speed
         if (_timer != null)
@@ -319,59 +324,11 @@ public partial class SpriteAnimationViewer : System.Windows.Controls.UserControl
     {
         _isPlaying = true;
         _timer?.Start();
-        BtnPlayPause.Content = "⏸";
     }
 
     public void Stop()
     {
         _isPlaying = false;
         _timer?.Stop();
-        BtnPlayPause.Content = "▶";
-    }
-
-    private void BtnPlayPause_Click(object sender, RoutedEventArgs e)
-    {
-        if (_isPlaying) Stop();
-        else Play();
-    }
-
-    private void BtnPrevFrame_Click(object sender, RoutedEventArgs e)
-    {
-        Stop();
-        _currentFrame--;
-        if (_currentFrame < 0 && _act != null)
-            _currentFrame = _act[_currentAction].Frames.Count - 1;
-        if (_currentFrame < 0) _currentFrame = 0;
-        RenderCurrentFrame();
-    }
-
-    private void BtnNextFrame_Click(object sender, RoutedEventArgs e)
-    {
-        Stop();
-        _currentFrame++;
-        if (_act != null && _currentFrame >= _act[_currentAction].Frames.Count)
-            _currentFrame = 0;
-        RenderCurrentFrame();
-    }
-
-    private void BtnPrevAction_Click(object sender, RoutedEventArgs e)
-    {
-        Stop();
-        _currentAction--;
-        if (_currentAction < 0 && _act != null)
-            _currentAction = _act.NumberOfActions - 1;
-        if (_currentAction < 0) _currentAction = 0;
-        _currentFrame = 0;
-        RenderCurrentFrame();
-    }
-
-    private void BtnNextAction_Click(object sender, RoutedEventArgs e)
-    {
-        Stop();
-        _currentAction++;
-        if (_act != null && _currentAction >= _act.NumberOfActions)
-            _currentAction = 0;
-        _currentFrame = 0;
-        RenderCurrentFrame();
     }
 }

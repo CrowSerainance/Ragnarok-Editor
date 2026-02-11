@@ -1,6 +1,10 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
 using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Input;
 using RoDbEditor.Models;
 
 namespace RoDbEditor.Dialogs;
@@ -28,26 +32,30 @@ public partial class MobSkillEditDialog : Window
     {
         "always", "onspawn", "myhpltmaxrate", "myhpinrate",
         "mystatuson", "mystatusoff", "friendhpltmaxrate", "friendhpinrate",
-        "friendstatuson", "friendstatusoff", "attackpcgt", "attackpcge",
         "slavelt", "slavele", "closedattacked", "longrangeattacked",
-        "skillused", "afterskill", "casttargeted", "rudeattacked",
+        "skillused", "afterskill", "casttargeted", "rudeattacked", "masterhpltmaxrate", "masterattacked",
         "mobnearbygt", "groundattacked", "damagedgt", "alchemist", "trickcasting"
     };
 
-    /// <summary>
-    /// The resulting MobSkillDbRow after user clicks OK.
-    /// </summary>
+    /// <summary>The resulting MobSkillDbRow after user clicks OK.</summary>
     public MobSkillDbRow? Result { get; private set; }
 
-    /// <summary>
-    /// Mob ID for this entry (set before showing).
-    /// </summary>
+    /// <summary>Mob ID for this entry (set before showing).</summary>
     public int MobId { get; set; }
 
-    /// <summary>
-    /// Mob name for display.
-    /// </summary>
+    /// <summary>Mob name for display.</summary>
     public string MobName { get; set; } = "";
+
+    // Skill dropdown data
+    private sealed class SkillDropdownItem
+    {
+        public int Id { get; set; }
+        public string Display { get; set; } = "";
+        public override string ToString() => Display;
+    }
+
+    private List<SkillDropdownItem> _allSkillItems = new();
+    private bool _isUpdatingSkillCombo;
 
     public MobSkillEditDialog()
     {
@@ -61,16 +69,41 @@ public partial class MobSkillEditDialog : Window
         CmbState.SelectedItem = "attack";
         CmbTarget.SelectedItem = "target";
         CmbConditionType.SelectedItem = "always";
+
+        // Populate skill dropdown
+        PopulateSkillDropdown();
     }
 
-    /// <summary>
-    /// Pre-fill the dialog with an existing row for editing.
-    /// </summary>
+    private void PopulateSkillDropdown()
+    {
+        if (App.SkillDbMiniService == null) return;
+
+        var all = App.SkillDbMiniService.GetAll();
+        _allSkillItems = all
+            .OrderBy(kv => kv.Key)
+            .Select(kv => new SkillDropdownItem
+            {
+                Id = kv.Key,
+                Display = $"{kv.Key} - {kv.Value.Name}" +
+                          (!string.IsNullOrWhiteSpace(kv.Value.Description) ? $" ({kv.Value.Description})" : "")
+            })
+            .ToList();
+
+        CmbSkillId.ItemsSource = _allSkillItems;
+    }
+
+    /// <summary>Pre-fill the dialog with an existing row for editing.</summary>
     public void LoadFromRow(MobSkillDbRow row)
     {
         MobId = row.MobId;
         TxtMobId.Text = row.MobId.ToString(CultureInfo.InvariantCulture);
-        TxtSkillId.Text = row.SkillId.ToString(CultureInfo.InvariantCulture);
+
+        // Set skill via text (works for both known and unknown skill IDs)
+        _isUpdatingSkillCombo = true;
+        CmbSkillId.Text = row.SkillId.ToString(CultureInfo.InvariantCulture);
+        _isUpdatingSkillCombo = false;
+        UpdateSkillDisplay(row.SkillId);
+
         TxtSkillLv.Text = row.SkillLv.ToString(CultureInfo.InvariantCulture);
         CmbState.Text = row.State;
         TxtRate.Text = row.Rate.ToString(CultureInfo.InvariantCulture);
@@ -89,9 +122,7 @@ public partial class MobSkillEditDialog : Window
         TxtChat.Text = row.Chat;
     }
 
-    /// <summary>
-    /// Set the mob context (ID + name) for a new entry.
-    /// </summary>
+    /// <summary>Set the mob context (ID + name) for a new entry.</summary>
     public void SetMobContext(int mobId, string mobName)
     {
         MobId = mobId;
@@ -100,23 +131,105 @@ public partial class MobSkillEditDialog : Window
         LblMobName.Text = mobName;
     }
 
-    private void TxtSkillId_TextChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)
+    // ── Skill ComboBox events ──────────────────────────────────────
+
+    private void CmbSkillId_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (int.TryParse(TxtSkillId.Text.Trim(), out var skillId) && App.SkillDbMiniService != null)
+        if (_isUpdatingSkillCombo) return;
+
+        if (CmbSkillId.SelectedItem is SkillDropdownItem item)
         {
-            LblSkillName.Text = App.SkillDbMiniService.ResolveDisplayName(skillId);
-        }
-        else
-        {
-            LblSkillName.Text = "";
+            _isUpdatingSkillCombo = true;
+            CmbSkillId.Text = item.Id.ToString(CultureInfo.InvariantCulture);
+            _isUpdatingSkillCombo = false;
+            UpdateSkillDisplay(item.Id);
         }
     }
 
+    /// <summary>
+    /// Called on PreviewKeyUp so we can filter the dropdown as the user types,
+    /// without fighting WPF's built-in text search.
+    /// </summary>
+    protected override void OnPreviewKeyUp(System.Windows.Input.KeyEventArgs e)
+    {
+        base.OnPreviewKeyUp(e);
+
+        // Only react when the ComboBox edit textbox has focus
+        if (!CmbSkillId.IsKeyboardFocusWithin) return;
+        if (e.Key == Key.Enter || e.Key == Key.Escape || e.Key == Key.Tab) return;
+        if (e.Key == Key.Up || e.Key == Key.Down) return;
+
+        var text = CmbSkillId.Text?.Trim() ?? "";
+
+        // If purely numeric, try to resolve skill and filter by ID prefix
+        if (int.TryParse(text, out var numId))
+        {
+            UpdateSkillDisplay(numId);
+            _isUpdatingSkillCombo = true;
+            CmbSkillId.ItemsSource = _allSkillItems
+                .Where(s => s.Id.ToString().StartsWith(text, StringComparison.Ordinal))
+                .Take(50)
+                .ToList();
+            CmbSkillId.IsDropDownOpen = true;
+            _isUpdatingSkillCombo = false;
+        }
+        else if (text.Length >= 2)
+        {
+            // Text search by name
+            _isUpdatingSkillCombo = true;
+            CmbSkillId.ItemsSource = _allSkillItems
+                .Where(s => s.Display.Contains(text, StringComparison.OrdinalIgnoreCase))
+                .Take(50)
+                .ToList();
+            CmbSkillId.IsDropDownOpen = true;
+            _isUpdatingSkillCombo = false;
+
+            LblSkillName.Text = "";
+            LblValHint.Text = "";
+        }
+        else if (text.Length == 0)
+        {
+            _isUpdatingSkillCombo = true;
+            CmbSkillId.ItemsSource = _allSkillItems;
+            _isUpdatingSkillCombo = false;
+            LblSkillName.Text = "";
+            LblValHint.Text = "";
+        }
+    }
+
+    private void UpdateSkillDisplay(int skillId)
+    {
+        if (App.SkillDbMiniService != null)
+            LblSkillName.Text = App.SkillDbMiniService.ResolveDisplayName(skillId);
+        else
+            LblSkillName.Text = "";
+
+        LblValHint.Text = GetValHint(skillId);
+    }
+
+    private static string GetValHint(int skillId) => skillId switch
+    {
+        196 => "Val1-Val5 = Slave Mob IDs to summon  (use 'Edit Slave' dialog for easier editing)",
+        197 => "Val1 = Emotion ID (e.g. 0=Normal, 1=!, 2=?, 28=Lv.99 Aura, 29=Casting)",
+        198 or 681 => "Val1 = Transform into Mob ID",
+        352 => "NPC_CALLSLAVE: recalls existing slaves (no Val needed)",
+        _ => "Skill-specific parameters (usually 0)"
+    };
+
+    // ── OK / Cancel ────────────────────────────────────────────────
+
     private void BtnOk_Click(object sender, RoutedEventArgs e)
     {
-        if (!int.TryParse(TxtSkillId.Text.Trim(), out var skillId) || skillId <= 0)
+        // Resolve skill ID from ComboBox: either from selection or from typed text
+        int skillId;
+        if (CmbSkillId.SelectedItem is SkillDropdownItem selected)
         {
-            System.Windows.MessageBox.Show("Please enter a valid Skill ID.", "Validation", MessageBoxButton.OK, MessageBoxImage.Warning);
+            skillId = selected.Id;
+        }
+        else if (!int.TryParse(CmbSkillId.Text?.Trim(), out skillId) || skillId <= 0)
+        {
+            System.Windows.MessageBox.Show("Please enter a valid Skill ID.", "Validation",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
 

@@ -20,12 +20,17 @@ public class SpriteLookupService
     private HashSet<string>? _allSpriteFolders;
 
     // Monster sprite folder paths to probe (in priority order)
-    // Korean folder "몬스터" may appear in different encodings in the GRF
+    // Some clients (e.g. iRO) put monster sprites in data\sprite\ directly (poring.spr)
+    // Korean folder "몬스터" may appear in different encodings in other clients
     private static readonly string[] MonsterFolderVariants = new[]
     {
+        @"data\sprite",                  // Root sprite folder (iRO: poring.spr here)
+        @"data/sprite",
         @"data\sprite\몬스터",           // Korean UTF-8 (display)
+        @"data/sprite/몬스터",            // Forward slashes (GRF often uses these)
         @"data\sprite\¸ó½ºÅÍ",           // Korean CP949 as Latin-1
         @"data\sprite\monster",          // English alternative
+        @"data/sprite/monster",
         @"data\sprite\mob",              // Another English alternative
         @"data\sprite\npc",              // Some mobs are in NPC folder
     };
@@ -372,5 +377,86 @@ public class SpriteLookupService
         _spriteCache = null;
         _allSpriteFolders = null;
         _fileSystemSource?.ClearCache();
+    }
+
+    /// <summary>
+    /// Build a diagnostic report for sprite lookup debugging.
+    /// Traces GRF contents, monster folder paths, and tests PORING lookup.
+    /// </summary>
+    public string BuildSpriteDiagnosticReport()
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("=== Sprite Lookup Diagnostic ===");
+        sb.AppendLine();
+        sb.AppendLine($"GRF loaded: {_grfService.IsLoaded}");
+        sb.AppendLine($"FileSystemSpriteSource: {(_fileSystemSource != null ? "Yes" : "No")}");
+        sb.AppendLine($"FS cached count: {_fileSystemSource?.CachedCount ?? 0}");
+        sb.AppendLine();
+
+        BuildCacheIfNeeded();
+
+        sb.AppendLine($"Sprite cache count: {_spriteCache?.Count ?? 0}");
+        sb.AppendLine($"Sprite folders found: {_allSpriteFolders?.Count ?? 0}");
+        sb.AppendLine();
+
+        // Sample monster folder paths (as stored in GRF)
+        if (_allSpriteFolders != null && _allSpriteFolders.Count > 0)
+        {
+            sb.AppendLine("--- Sample sprite folder paths (from GRF) ---");
+            var monsterFolders = _allSpriteFolders
+                .Where(f => f.Contains("sprite", StringComparison.OrdinalIgnoreCase))
+                .OrderBy(f => f)
+                .Take(20);
+            foreach (var f in monsterFolders)
+            {
+                var bytes = System.Text.Encoding.UTF8.GetBytes(f);
+                sb.AppendLine($"  [{f}] (len={f.Length})");
+            }
+            sb.AppendLine();
+        }
+
+        // Sample sprite names (PORING and nearby)
+        if (_spriteCache != null && _spriteCache.Count > 0)
+        {
+            sb.AppendLine("--- Sample sprite names (PORING and nearby) ---");
+            var poring = _spriteCache.Keys.Where(k => k.Contains("poring", StringComparison.OrdinalIgnoreCase)).ToList();
+            foreach (var k in poring.Take(10))
+                sb.AppendLine($"  {k} -> {_spriteCache[k]}.spr");
+            if (poring.Count == 0)
+            {
+                foreach (var kvp in _spriteCache.Take(15))
+                    sb.AppendLine($"  {kvp.Key} -> {kvp.Value}.spr");
+            }
+            sb.AppendLine();
+        }
+
+        // Test PORING lookup
+        sb.AppendLine("--- PORING lookup test ---");
+        var (actPath, sprPath) = FindMonsterSprite("PORING");
+        sb.AppendLine($"  FindMonsterSprite: ACT={actPath ?? "NULL"}, SPR={sprPath ?? "NULL"}");
+        if (actPath != null)
+        {
+            var (actData, sprData) = GetSpriteData(actPath, sprPath);
+            sb.AppendLine($"  GetData: ACT={actData?.Length ?? 0} bytes, SPR={sprData?.Length ?? 0} bytes");
+        }
+
+        // Try direct probing with known paths (from RO client structure)
+        sb.AppendLine();
+        sb.AppendLine("--- Direct GRF probe (data\\sprite\\...\\PORING.act) ---");
+        var probePaths = new[]
+        {
+            @"data\sprite\몬스터\PORING.act",
+            @"data/sprite/몬스터/PORING.act",
+            @"data\sprite\monster\PORING.act",
+            @"data/sprite/monster/PORING.act",
+            @"data\sprite\mob\PORING.act",
+        };
+        foreach (var p in probePaths)
+        {
+            var d = _grfService.GetData(p);
+            sb.AppendLine($"  {p}: {(d != null && d.Length > 0 ? "FOUND" : "missing")}");
+        }
+
+        return sb.ToString();
     }
 }

@@ -7,33 +7,23 @@
              d:DesignHeight="256" d:DesignWidth="256"
              Background="#1E1E1E">
     <Grid>
-        <Grid.RowDefinitions>
-            <RowDefinition Height="*"/>
-            <RowDefinition Height="Auto"/>
-        </Grid.RowDefinitions>
-        
         <!-- Sprite Canvas -->
-        <Border Grid.Row="0" Background="#2D2D30" BorderBrush="#3F3F46" BorderThickness="1"
+        <Border Background="#2D2D30" BorderBrush="#3F3F46" BorderThickness="1"
                 UseLayoutRounding="True" SnapsToDevicePixels="True">
-            <Canvas x:Name="SpriteCanvas" ClipToBounds="True"
-                    RenderOptions.EdgeMode="Aliased"
-                    UseLayoutRounding="True" SnapsToDevicePixels="True">
-                <Image x:Name="SpriteImage" 
-                       RenderOptions.BitmapScalingMode="NearestNeighbor"
-                       RenderOptions.EdgeMode="Aliased"
-                       UseLayoutRounding="True" SnapsToDevicePixels="True"
-                       Canvas.Left="0" Canvas.Top="0"/>
-            </Canvas>
+            <Grid>
+                <Canvas x:Name="SpriteCanvas" ClipToBounds="True"
+                        RenderOptions.EdgeMode="Aliased"
+                        UseLayoutRounding="True" SnapsToDevicePixels="True">
+                    <Image x:Name="SpriteImage" 
+                           RenderOptions.BitmapScalingMode="NearestNeighbor"
+                           RenderOptions.EdgeMode="Aliased"
+                           UseLayoutRounding="True" SnapsToDevicePixels="True"
+                           Canvas.Left="0" Canvas.Top="0"/>
+                </Canvas>
+                <TextBlock x:Name="TxtNoSprite" Text="No sprite" Foreground="#808080" FontSize="14"
+                           HorizontalAlignment="Center" VerticalAlignment="Center"
+                           Visibility="Visible" TextWrapping="Wrap" MaxWidth="200" TextAlignment="Center"/>
+            </Grid>
         </Border>
-        
-        <!-- Playback Controls -->
-        <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Center" Margin="4">
-            <Button x:Name="BtnPrevAction" Content="◀◀" Width="30" Margin="2" Click="BtnPrevAction_Click" ToolTip="Previous Action"/>
-            <Button x:Name="BtnPrevFrame" Content="◀" Width="30" Margin="2" Click="BtnPrevFrame_Click" ToolTip="Previous Frame"/>
-            <Button x:Name="BtnPlayPause" Content="▶" Width="30" Margin="2" Click="BtnPlayPause_Click" ToolTip="Play/Pause"/>
-            <Button x:Name="BtnNextFrame" Content="▶" Width="30" Margin="2" Click="BtnNextFrame_Click" ToolTip="Next Frame"/>
-            <Button x:Name="BtnNextAction" Content="▶▶" Width="30" Margin="2" Click="BtnNextAction_Click" ToolTip="Next Action"/>
-            <TextBlock x:Name="TxtInfo" VerticalAlignment="Center" Foreground="White" Margin="8,0,0,0" Text="Action 0 / Frame 0"/>
-        </StackPanel>
     </Grid>
 </UserControl>

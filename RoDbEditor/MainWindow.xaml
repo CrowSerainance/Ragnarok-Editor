@@ -35,6 +35,7 @@
                 <MenuItem Header="Analyze Folder..." Click="OnAnalyzeFolderClicked"/>
             </MenuItem>
             <MenuItem Header="_Help">
+                <MenuItem Header="Sprite Diagnostic..." Click="MenuSpriteDiagnostic_Click"/>
                 <MenuItem Header="About RoDbEditor"/>
             </MenuItem>
         </Menu>
@@ -270,7 +271,11 @@
                                 <Expander x:Name="MonsterDiffExpander" Header="What changed" Margin="0,8,0,8" Collapsed="DiffExpander_Collapsed" Expanded="DiffExpander_Expanded">
                                     <TextBox x:Name="MonsterDiffTextBox" IsReadOnly="True" TextWrapping="NoWrap" AcceptsReturn="True" MinHeight="80" FontFamily="Consolas" FontSize="11" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"/>
                                 </Expander>
-                                <TextBlock Text="MONSTER SKILLS" FontWeight="Bold" Margin="0,12,0,4"/>
+                                <StackPanel Orientation="Horizontal" Margin="0,12,0,4">
+                                    <TextBlock Text="MONSTER SKILLS" FontWeight="Bold"/>
+                                    <TextBlock Text=" ⓘ" FontSize="12" Foreground="#89B4FA" Cursor="Help"
+                                               ToolTipService.ToolTip="Import overlay: db/import/mob_skill_db.txt only. Mob overrides: Drops merge (max 10). See doc-map-server-drop-limit-analysis.md"/>
+                                </StackPanel>
 
                                 <DataGrid x:Name="MonsterSkillsGrid"
                                           Height="180"
@@ -301,7 +306,11 @@
                                             ToolTip="Open mob_skill_db.txt at the selected skill's source line"/>
                                 </StackPanel>
 
-                                <TextBlock Text="SLAVES" FontWeight="Bold" Margin="0,0,0,4"/>
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                                    <TextBlock Text="SLAVES" FontWeight="Bold"/>
+                                    <TextBlock Text=" ⓘ" FontSize="12" Foreground="#89B4FA" Cursor="Help"
+                                               ToolTipService.ToolTip="Import overlay: db/import/mob_skill_db.txt only. Mob overrides: Drops merge (max 10). See doc-map-server-drop-limit-analysis.md"/>
+                                </StackPanel>
 
                                 <DataGrid x:Name="MonsterSlavesGrid"
                                           Height="120"
@@ -318,6 +327,14 @@
                                         <DataGridTextColumn Header="Src" Binding="{Binding Source}" Width="1*"/>
                                     </DataGrid.Columns>
                                 </DataGrid>
+                                <StackPanel Orientation="Horizontal" Margin="0,4,0,8">
+                                    <Button Content="Add Slave" Click="MobSlaveAdd_Click" Padding="8,4" Margin="0,0,4,0"
+                                            ToolTip="Add a new NPC_SUMMONSLAVE entry for this mob"/>
+                                    <Button Content="Edit Slave" Click="MobSlaveEdit_Click" Padding="8,4" Margin="0,0,4,0"
+                                            ToolTip="Edit the underlying mob_skill_db row"/>
+                                    <Button Content="Delete Slave" Click="MobSlaveDelete_Click" Padding="8,4" Margin="0,0,4,0"/>
+                                    <Button Content="Open in Editor" Click="MobSlaveOpenFile_Click" Padding="8,4"/>
+                                </StackPanel>
                                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                                     <Button x:Name="MonsterSaveButton" Content="SAVE" Padding="12,6" Margin="0,0,8,0" Click="MonsterSaveButton_Click"/>
                                     <Button x:Name="MonsterExportButton" Content="EXPORT" Padding="12,6" Margin="0,0,8,0" Click="MonsterExportButton_Click"/>
@@ -382,17 +399,29 @@
 
         <!-- Diagnostics Panel -->
         <Expander Grid.Row="3" Header="Unchecked Diagnostics (Click Analyze to populate)" IsExpanded="True" Margin="6">
-            <ListView x:Name="DiagnosticsListView" MaxHeight="200" MinHeight="100" MouseDoubleClick="DiagnosticsListView_MouseDoubleClick">
-                <ListView.View>
-                    <GridView>
-                        <GridViewColumn Header="Severity" DisplayMemberBinding="{Binding Severity}" Width="80"/>
-                        <GridViewColumn Header="Code" DisplayMemberBinding="{Binding Code}" Width="60"/>
-                        <GridViewColumn Header="Message" DisplayMemberBinding="{Binding Message}" Width="400"/>
-                        <GridViewColumn Header="File" DisplayMemberBinding="{Binding FilePath}" Width="250"/>
-                        <GridViewColumn Header="Line" DisplayMemberBinding="{Binding LineNumber}" Width="50"/>
-                    </GridView>
-                </ListView.View>
-            </ListView>
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+
+                <StackPanel Grid.Row="0" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,0,0,6">
+                    <Button Content="Copy Selected" Click="CopySelectedDiagnostics_Click" Padding="8,3" Margin="0,0,6,0"/>
+                    <Button Content="Copy All" Click="CopyAllDiagnostics_Click" Padding="8,3"/>
+                </StackPanel>
+
+                <ListView Grid.Row="1" x:Name="DiagnosticsListView" MaxHeight="200" MinHeight="100" MouseDoubleClick="DiagnosticsListView_MouseDoubleClick">
+                    <ListView.View>
+                        <GridView>
+                            <GridViewColumn Header="Severity" DisplayMemberBinding="{Binding Severity}" Width="80"/>
+                            <GridViewColumn Header="Code" DisplayMemberBinding="{Binding Code}" Width="60"/>
+                            <GridViewColumn Header="Message" DisplayMemberBinding="{Binding Message}" Width="400"/>
+                            <GridViewColumn Header="File" DisplayMemberBinding="{Binding FilePath}" Width="250"/>
+                            <GridViewColumn Header="Line" DisplayMemberBinding="{Binding LineNumber}" Width="50"/>
+                        </GridView>
+                    </ListView.View>
+                </ListView>
+            </Grid>
         </Expander>
     </Grid>
 </Window>

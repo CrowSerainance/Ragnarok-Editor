@@ -12,6 +12,18 @@ public class RoDbEditorConfig
     public const string ConfigFileName = "RoDbEditor.ini";
     public const string SectionGrf = "GRF";
 
+    // User-specific default rAthena data path.
+    // This makes F:\MMORPG\RAGNAROK ONLINE\rathena-master the priority
+    // source for db (mob, item, skills, spawns, etc.) regardless of any
+    // DataPath value present in RoDbEditor.ini.
+    private const string DefaultDataPath = @"F:\MMORPG\RAGNAROK ONLINE\rathena-master";
+
+    /// <summary>
+    /// Default client folder for GRF files (matches DATA.ini load order).
+    /// When no GRF paths are configured, we auto-add these if they exist.
+    /// </summary>
+    private static readonly string DefaultClientPath = @"F:\MMORPG\RAGNAROK ONLINE\client";
+
     public List<string> GrfPaths { get; } = new();
     public string? DataPath { get; set; }
     public string? ExtractedAssetsPath { get; set; }
@@ -57,11 +69,31 @@ public class RoDbEditorConfig
                             config.ExtractedAssetsPath = value;
                     }
                 }
+
+                // After reading the INI, force the configured DataPath to the
+                // new rAthena folder when it exists so it is always used as
+                // the primary server database source.
+                if (Directory.Exists(DefaultDataPath))
+                {
+                    config.DataPath = DefaultDataPath;
+                }
             }
         }
         catch
         {
             // Keep default empty config
+        }
+
+        // When no GRF paths configured, auto-add client GRFs (same order as DATA.ini)
+        if (config.GrfPaths.Count == 0 && Directory.Exists(DefaultClientPath))
+        {
+            var grfOrder = new[] { "custom.grf", "en.grf", "official_data.grf", "data.grf" };
+            foreach (var grf in grfOrder)
+            {
+                var full = Path.Combine(DefaultClientPath, grf);
+                if (File.Exists(full))
+                    config.GrfPaths.Add(full);
+            }
         }
 
         return config;
