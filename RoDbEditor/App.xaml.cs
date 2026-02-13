@@ -32,6 +32,9 @@ public partial class App : System.Windows.Application
     public static SkillDbMiniService SkillDbMiniService { get; private set; } = null!;
     public static MobSkillPanelService MobSkillPanelService { get; private set; } = null!;
     public static MobSkillWriteService? MobSkillWriteService { get; private set; }
+    public static ExtractedAssetService ExtractedAssetService { get; private set; } = null!;
+    public static SpriteAssignmentService SpriteAssignmentService { get; private set; } = null!;
+    public static EntityDesignationService EntityDesignationService { get; private set; } = null!;
     public static IReadOnlyDictionary<int, string> ItemInfoDescriptions { get; set; } = new Dictionary<int, string>();
     public static IHighlightingDefinition? RagnarokScriptHighlighting { get; private set; }
 
@@ -139,6 +142,7 @@ public partial class App : System.Windows.Application
         MobSkillDbService.LoadFromDataPath(dataPath);
         SkillDbMiniService.LoadFromDataPath(dataPath);
         MobSkillWriteService = new MobSkillWriteService(dataPath);
+        EntityDesignationService = new EntityDesignationService(NpcIndexService, MobDbService);
 
         var lubPath = Path.Combine(dataPath, "system", "iteminfo.lub");
         if (!File.Exists(lubPath))
@@ -184,6 +188,7 @@ public partial class App : System.Windows.Application
 
         // Re-init dependent services
         ItemPathService = new ItemPathService(newItemDb, GrfService, SpriteLookupService);
+        EntityDesignationService = new EntityDesignationService(newNpcIndex, newMobDb);
 
         // Reload GRF items if needed (fallback)
         if (GrfService != null && GrfService.IsLoaded)
@@ -232,6 +237,9 @@ public partial class App : System.Windows.Application
         MobSkillDbService = new MobSkillDbService();
         SkillDbMiniService = new SkillDbMiniService();
         MobSkillPanelService = new MobSkillPanelService(MobSkillDbService, SkillDbMiniService, MobDbService);
+        ExtractedAssetService = new ExtractedAssetService(() => FileSystemSpriteSource?.RootPath);
+        SpriteAssignmentService = new SpriteAssignmentService();
+        EntityDesignationService = new EntityDesignationService(NpcIndexService, MobDbService);
         
         // Wire up condition text resolvers
         MobSkillConditionText.SkillNameResolver = id => SkillDbMiniService.ResolveDisplayName(id);
@@ -249,6 +257,7 @@ public partial class App : System.Windows.Application
         if (GrfService.IsLoaded)
         {
             ReloadFromGrf();
+            ExtractedAssetService?.ClearCache();
         }
     }
 

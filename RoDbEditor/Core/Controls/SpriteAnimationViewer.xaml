@@ -4,16 +4,52 @@
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" 
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              mc:Ignorable="d" 
-             d:DesignHeight="256" d:DesignWidth="256"
-             Background="#1E1E1E">
+             d:DesignHeight="320" d:DesignWidth="400"
+             Background="Transparent">
     <Grid>
-        <!-- Sprite Canvas -->
-        <Border Background="#2D2D30" BorderBrush="#3F3F46" BorderThickness="1"
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+        <!-- Toolbar: tabs + animation controls -->
+        <Border Grid.Row="0" Background="#252526" BorderBrush="#3F3F46" BorderThickness="0,0,0,1" Padding="4,2">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+                <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,4">
+                    <RadioButton x:Name="TabImagePreview" Content="Image preview" GroupName="ViewMode" IsChecked="True"
+                                Margin="0,0,12,0" Foreground="#CCCCCC" FontSize="12" Checked="TabImagePreview_Checked"/>
+                    <RadioButton x:Name="TabAnimationPreview" Content="Animation preview" GroupName="ViewMode"
+                                Foreground="#CCCCCC" FontSize="12" Checked="TabAnimationPreview_Checked"/>
+                </StackPanel>
+                <WrapPanel Grid.Row="1" Orientation="Horizontal">
+                    <TextBlock Text="Animation" VerticalAlignment="Center" Margin="0,0,4,0" Foreground="#808080" FontSize="11"/>
+                    <ComboBox x:Name="ComboAnimation" Width="100" Height="22" Margin="0,0,12,0" SelectionChanged="ComboAnimation_SelectionChanged"/>
+                    <TextBlock Text="Action" VerticalAlignment="Center" Margin="0,0,4,0" Foreground="#808080" FontSize="11"/>
+                    <ComboBox x:Name="ComboAction" Width="80" Height="22" Margin="0,0,12,0" SelectionChanged="ComboAction_SelectionChanged"/>
+                    <Button x:Name="BtnPlay" Content="▶" Width="24" Height="22" Margin="0,0,2,0" ToolTip="Play" Click="BtnPlay_Click"/>
+                    <Button x:Name="BtnStop" Content="■" Width="24" Height="22" Margin="0,0,2,0" ToolTip="Stop" Click="BtnStop_Click"/>
+                    <TextBlock x:Name="TxtZoom" Text="Zoom:" VerticalAlignment="Center" Margin="8,0,4,0" Foreground="#808080" FontSize="11"/>
+                    <TextBox x:Name="TxtZoomValue" Text="1.00" Width="40" Height="20" VerticalContentAlignment="Center" FontSize="11"/>
+                </WrapPanel>
+            </Grid>
+        </Border>
+        <!-- Content -->
+        <Border Grid.Row="1" x:Name="SpriteHostBorder" Background="#2D2D30" BorderBrush="#3F3F46" BorderThickness="1"
                 UseLayoutRounding="True" SnapsToDevicePixels="True">
             <Grid>
-                <Canvas x:Name="SpriteCanvas" ClipToBounds="True"
-                        RenderOptions.EdgeMode="Aliased"
-                        UseLayoutRounding="True" SnapsToDevicePixels="True">
+                <!-- Image preview: frame strip (scrollable) -->
+                <ScrollViewer x:Name="FrameStripScroll" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto"
+                              Visibility="Visible">
+                    <Image x:Name="FrameStripImage" Stretch="None" HorizontalAlignment="Left" VerticalAlignment="Top"
+                           RenderOptions.BitmapScalingMode="NearestNeighbor" RenderOptions.EdgeMode="Aliased"
+                           Margin="4"/>
+                </ScrollViewer>
+                <!-- Animation preview: single frame canvas -->
+                <Canvas x:Name="SpriteCanvas" ClipToBounds="True" Visibility="Collapsed"
+                        RenderOptions.EdgeMode="Aliased" UseLayoutRounding="True" SnapsToDevicePixels="True">
                     <Image x:Name="SpriteImage" 
                            RenderOptions.BitmapScalingMode="NearestNeighbor"
                            RenderOptions.EdgeMode="Aliased"

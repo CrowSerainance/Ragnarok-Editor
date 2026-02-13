@@ -47,6 +47,7 @@
             <TabItem Header="NPCs"/>
             <TabItem Header="MAPS"/>
             <TabItem Header="QUESTS"/>
+            <TabItem Header="EXTRACTED ASSETS"/>
         </TabControl>
 
         <!-- List | Preview | Details (RateMyServer-style 3-panel) -->
@@ -81,6 +82,15 @@
                     </Grid>
                 </StackPanel>
                 <StackPanel Grid.Row="1">
+                    <StackPanel x:Name="ExtractedAssetSubCategoryPanel" Visibility="Collapsed" Orientation="Horizontal" Margin="0,0,0,8">
+                        <TextBlock Text="Sort File Type:" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                        <ComboBox x:Name="ExtractedPairingModeCombo" Width="260" SelectedIndex="0" SelectionChanged="ExtractedPairingModeCombo_SelectionChanged">
+                            <ComboBoxItem Content="SORT_FILE_TYPE (.act+.spr together, .pal separate, others by ext)"/>
+                            <ComboBoxItem Content="ACT_SPR_ONLY (.act+.spr)"/>
+                            <ComboBoxItem Content="PAL_ONLY (.pal)"/>
+                            <ComboBoxItem Content="ALL_RELATED"/>
+                        </ComboBox>
+                    </StackPanel>
                     <StackPanel x:Name="NpcMapFilterPanel" Visibility="Collapsed">
                         <TextBlock Text="MAP:" Margin="0,0,0,4"/>
                         <ComboBox x:Name="NpcMapCombo" Margin="0,0,0,8" SelectionChanged="NpcMapCombo_SelectionChanged"/>
@@ -101,18 +111,27 @@
             <GridSplitter Grid.Column="1" Width="6" HorizontalAlignment="Stretch" Background="#c0c0c0"
                           ResizeDirection="Columns" ShowsPreview="False" DragIncrement="1"/>
 
-            <!-- Center: Preview (icon / sprite / map) - collapse/expand by selection -->
+            <!-- Center: Preview (static + ACT/SPR environment) -->
             <Expander Grid.Column="2" Header="PREVIEW" IsExpanded="True" Margin="0">
                 <GroupBox BorderThickness="0" Padding="0" Margin="0">
-                    <Border Background="#2a2a2a" CornerRadius="6" Margin="8">
-                        <Viewbox Stretch="Uniform" StretchDirection="DownOnly" Margin="8">
-                            <Grid>
+                    <Grid Margin="8">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="*"/>
+                            <RowDefinition Height="8"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+
+                        <Border x:Name="StaticPreviewPanel" Grid.Row="0" Background="#2a2a2a" CornerRadius="6">
+                            <Viewbox Stretch="Uniform" StretchDirection="DownOnly" Margin="8">
                                 <Image x:Name="CenterPreviewImage" Stretch="None" SnapsToDevicePixels="True"
                                        RenderOptions.BitmapScalingMode="NearestNeighbor"/>
-                                <controls:SpriteAnimationViewer x:Name="SpriteViewer" Visibility="Collapsed"/>
-                            </Grid>
-                        </Viewbox>
-                    </Border>
+                            </Viewbox>
+                        </Border>
+
+                        <Border x:Name="SpritePreviewPanel" Grid.Row="2" Background="#2a2a2a" CornerRadius="6" Visibility="Collapsed">
+                            <controls:SpriteAnimationViewer x:Name="SpriteViewer"/>
+                        </Border>
+                    </Grid>
                 </GroupBox>
             </Expander>
 
@@ -139,8 +158,38 @@
                             <TextBlock x:Name="DetailType" Text="TYPE: —" Margin="0,0,0,4"/>
                             <Expander x:Name="ItemRelatedFilesExpander" Header="Related files" Margin="0,4,0,4" IsExpanded="False">
                                 <ListBox x:Name="ItemRelatedFilesListBox" MinHeight="40" MaxHeight="120" FontFamily="Consolas" FontSize="11"
+                                         SelectionChanged="ItemRelatedFilesListBox_SelectionChanged"
+                                         MouseDoubleClick="ItemRelatedFilesListBox_MouseDoubleClick"
                                          ScrollViewer.HorizontalScrollBarVisibility="Auto" ScrollViewer.VerticalScrollBarVisibility="Auto"/>
                             </Expander>
+                            <Border x:Name="ExtractedAssignmentPanel" Visibility="Collapsed" BorderBrush="#ddd" BorderThickness="1" Padding="8" Margin="0,0,0,8" CornerRadius="4">
+                                <StackPanel>
+                                    <TextBlock Text="ACT/SPR ASSIGNMENT" FontWeight="SemiBold" Margin="0,0,0,6"/>
+                                    <Grid Margin="0,0,0,4">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="80"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="Entity:" VerticalAlignment="Center"/>
+                                        <ComboBox x:Name="AssignEntityTypeCombo" Grid.Column="1" SelectionChanged="AssignEntityTypeCombo_SelectionChanged">
+                                            <ComboBoxItem Content="NPC"/>
+                                            <ComboBoxItem Content="MONSTER"/>
+                                            <ComboBoxItem Content="ITEM"/>
+                                        </ComboBox>
+                                    </Grid>
+                                    <Grid Margin="0,0,0,4">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="80"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="Target:" VerticalAlignment="Center"/>
+                                        <ComboBox x:Name="AssignTargetCombo" Grid.Column="1" IsEditable="True"/>
+                                    </Grid>
+                                    <CheckBox x:Name="AssignIncludeRelatedCheckBox" Content="Install related files (.wav/.bmp/.pal)" IsChecked="True" Margin="0,0,0,4"/>
+                                    <TextBlock x:Name="AssignDestinationHint" Text="Destination: data\\sprite\\..." FontSize="11" Foreground="#666" Margin="0,0,0,6"/>
+                                    <Button x:Name="AssignSpriteButton" Content="ASSIGN SPRITE" Click="AssignSpriteButton_Click"/>
+                                </StackPanel>
+                            </Border>
                             <TextBlock Text="DESCRIPTION:" Margin="0,8,0,4"/>
                             <TextBox x:Name="DetailDescription" TextWrapping="Wrap" AcceptsReturn="True" MinHeight="60" IsReadOnly="True" Margin="0,0,0,8"/>
                             <TextBlock Text="SCRIPT" Margin="0,4,0,4"/>
@@ -161,6 +210,8 @@
                             </Expander>
                             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                                 <Button x:Name="SaveButton" Content="SAVE" Padding="12,6" Margin="0,0,8,0" Click="SaveButton_Click"/>
+                                <Button x:Name="ExtractAllRelatedButton" Content="EXTRACT ALL RELATED" Padding="12,6" Margin="0,0,8,0" Click="ExtractAllRelatedButton_Click" Visibility="Collapsed"/>
+                                <Button x:Name="OpenInGrfEditorButton" Content="OPEN IN GRF EDITOR" Padding="12,6" Margin="0,0,8,0" Click="OpenInGrfEditorButton_Click" Visibility="Collapsed"/>
                                 <Button x:Name="ItemExportButton" Content="EXPORT" Padding="12,6" Margin="0,0,8,0" Click="ItemExportButton_Click"/>
                                 <Button Content="CANCEL" Padding="12,6" Click="CancelButton_Click"/>
                             </StackPanel>

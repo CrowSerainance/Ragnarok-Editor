@@ -26,6 +26,8 @@ public class SpriteLookupService
     {
         @"data\sprite",                  // Root sprite folder (iRO: poring.spr here)
         @"data/sprite",
+        "data\\sprite\\\uBAAC\uC2A4\uD130", // Korean "몬스터"
+        "data/sprite/\uBAAC\uC2A4\uD130",
         @"data\sprite\몬스터",           // Korean UTF-8 (display)
         @"data/sprite/몬스터",            // Forward slashes (GRF often uses these)
         @"data\sprite\¸ó½ºÅÍ",           // Korean CP949 as Latin-1
@@ -39,6 +41,7 @@ public class SpriteLookupService
     private static readonly string[] NpcFolderVariants = new[]
     {
         @"data\sprite\npc",
+        @"data/sprite/npc",
         @"data\sprite\NPC",
         @"data\sprite\Npc",
     };

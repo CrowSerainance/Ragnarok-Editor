@@ -21,7 +21,16 @@ public class FileSystemSpriteSource
         _rootPath = rootPath;
     }
 
-    public int CachedCount => _spriteCache?.Count ?? 0;
+    public string RootPath => _rootPath;
+
+    public int CachedCount
+    {
+        get
+        {
+            BuildCacheIfNeeded();
+            return _spriteCache?.Count ?? 0;
+        }
+    }
 
     public void BuildCache()
     {
@@ -33,12 +42,8 @@ public class FileSystemSpriteSource
 
         System.Diagnostics.Debug.WriteLine($"[FileSystemSpriteSource] Building cache from: {_rootPath}");
 
-        foreach (var serverDir in Directory.GetDirectories(_rootPath))
+        foreach (var dataPath in EnumerateDataRoots(_rootPath))
         {
-            var dataPath = Path.Combine(serverDir, "CUSTOM_CONTENT", "data");
-            if (!Directory.Exists(dataPath))
-                continue;
-
             // Index sprites
             var spritePath = Path.Combine(dataPath, "sprite");
             if (Directory.Exists(spritePath))
@@ -84,6 +89,59 @@ public class FileSystemSpriteSource
         }
 
         System.Diagnostics.Debug.WriteLine($"[FileSystemSpriteSource] Cached {_spriteCache.Count} sprites, {_textureCache.Count} textures");
+    }
+
+    private static IEnumerable<string> EnumerateDataRoots(string rootPath)
+    {
+        var yielded = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        // Case 1: root itself points to a data folder.
+        if (Directory.Exists(Path.Combine(rootPath, "sprite")) ||
+            Directory.Exists(Path.Combine(rootPath, "texture")))
+        {
+            yielded.Add(rootPath);
+            yield return rootPath;
+        }
+
+        // Case 2: root is a server folder containing CUSTOM_CONTENT\data.
+        var directServerData = Path.Combine(rootPath, "CUSTOM_CONTENT", "data");
+        if (Directory.Exists(directServerData) && yielded.Add(directServerData))
+        {
+            yield return directServerData;
+        }
+
+        // Case 3: root contains multiple server variants:
+        // {root}\{server}\CUSTOM_CONTENT\data
+        foreach (var serverDir in Directory.GetDirectories(rootPath))
+        {
+            var dataPath = Path.Combine(serverDir, "CUSTOM_CONTENT", "data");
+            if (Directory.Exists(dataPath) && yielded.Add(dataPath))
+            {
+                yield return dataPath;
+            }
+        }
+
+        // Case 4: generic fallback for deeper nested structures:
+        // find any ...\CUSTOM_CONTENT\data subtree under root.
+        IEnumerable<string> dataDirs;
+        try
+        {
+            dataDirs = Directory.EnumerateDirectories(rootPath, "data", SearchOption.AllDirectories);
+        }
+        catch
+        {
+            yield break;
+        }
+
+        foreach (var dataDir in dataDirs)
+        {
+            var parent = Directory.GetParent(dataDir);
+            if (!string.Equals(parent?.Name, "CUSTOM_CONTENT", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            if (yielded.Add(dataDir))
+                yield return dataDir;
+        }
     }
 
     public void ClearCache()

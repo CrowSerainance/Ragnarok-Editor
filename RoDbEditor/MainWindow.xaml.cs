@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -22,6 +23,14 @@ public enum PreviewMode { None, Image, Sprite }
 
 public partial class MainWindow : Window
 {
+    private sealed class AssignmentTargetOption
+    {
+        public object? Payload { get; init; }
+        public string Key { get; init; } = "";
+        public string Display { get; init; } = "";
+        public override string ToString() => Display;
+    }
+
     private readonly List<AssetEntry> _allAssets = new();
     private string _currentCategory = "ITEMS";
     private string _originalItemScript = "";
@@ -29,6 +38,7 @@ public partial class MainWindow : Window
     private string _originalNpcScript = "";
     private MobEntry? _currentMob;
     private MobEntry? _currentMobSnapshot;
+    private Models.ExtractedAssetEntry? _currentExtractedAsset;
     private TextMarkerService? _markerService;
     private WorkspaceIndex? _lastWorkspaceIndex;
 
@@ -40,6 +50,9 @@ public partial class MainWindow : Window
             RefreshList();
             UpdateListLabel();
             UpdateSourceIndicators();
+            if (AssignEntityTypeCombo != null)
+                AssignEntityTypeCombo.SelectedIndex = 0;
+            SpriteViewer.SetBackgroundMode(Core.Controls.SpriteAnimationViewer.ViewerBackgroundMode.Checkered);
             if (!string.IsNullOrEmpty(App.Config?.DataPath))
                  SetupFileWatcher(App.Config.DataPath);
             
@@ -96,17 +109,25 @@ public partial class MainWindow : Window
             // optionally log or defer the update
             return;
         }
-        CurrentListLabel.Text = $"CURRENT LIST: {_currentCategory}";
+        if (_currentCategory == "EXTRACTED_ASSETS")
+            CurrentListLabel.Text = "CURRENT LIST: Extracted Assets";
+        else
+            CurrentListLabel.Text = $"CURRENT LIST: {_currentCategory}";
     }
 
     private void CategoryTabs_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (CategoryTabs == null || CategoryTabs.SelectedIndex < 0 || CategoryTabs.SelectedIndex > 4) return;
-        var headers = new[] { "ITEMS", "MONSTERS", "NPCs", "MAPS", "QUESTS" };
+        if (CategoryTabs == null || CategoryTabs.SelectedIndex < 0 || CategoryTabs.SelectedIndex > 5) return;
+        var headers = new[] { "ITEMS", "MONSTERS", "NPCs", "MAPS", "QUESTS", "EXTRACTED_ASSETS" };
         _currentCategory = headers[CategoryTabs.SelectedIndex];
 
         if (NpcMapFilterPanel != null)
             NpcMapFilterPanel.Visibility = _currentCategory == "NPCs" ? Visibility.Visible : Visibility.Collapsed;
+
+        if (ExtractedAssetSubCategoryPanel != null)
+            ExtractedAssetSubCategoryPanel.Visibility = _currentCategory == "EXTRACTED_ASSETS" ? Visibility.Visible : Visibility.Collapsed;
+        if (ExtractedAssignmentPanel != null)
+            ExtractedAssignmentPanel.Visibility = _currentCategory == "EXTRACTED_ASSETS" ? Visibility.Visible : Visibility.Collapsed;
 
         if (_currentCategory == "NPCs")
         {
@@ -132,6 +153,7 @@ public partial class MainWindow : Window
         }
 
         UpdateListLabel();
+        UpdateExtractedPreviewPanels();
         RefreshList();
     }
 
@@ -139,6 +161,18 @@ public partial class MainWindow : Window
         {
             if (SearchBox == null || AssetListBox == null)
                 return;
+
+            if (_currentCategory == "EXTRACTED_ASSETS")
+            {
+                var filter = SearchBox.Text?.Trim();
+                var assets = App.ExtractedAssetService?.Search("", filter)
+                    ?? (IReadOnlyList<Models.ExtractedAssetEntry>)Array.Empty<Models.ExtractedAssetEntry>();
+                assets = ApplyExtractedModeFilter(assets).ToList();
+                AssetListBox.ItemsSource = null;
+                AssetListBox.ItemsSource = assets;
+                AssetListBox.DisplayMemberPath = "DisplayName";
+                return;
+            }
 
             if (_currentCategory == "ITEMS")
             {
@@ -250,13 +284,22 @@ public partial class MainWindow : Window
         }
 
         if (AssetListBox.SelectedItem is AssetEntry entry)
-        {
-            ItemDetailsPanel.Visibility = Visibility.Visible;
-            MonsterDetailsPanel.Visibility = Visibility.Collapsed;
-            NpcDetailsPanel.Visibility = Visibility.Collapsed;
-            ShowAssetDetails(entry);
-            return;
-        }
+    {
+        ItemDetailsPanel.Visibility = Visibility.Visible;
+        MonsterDetailsPanel.Visibility = Visibility.Collapsed;
+        NpcDetailsPanel.Visibility = Visibility.Collapsed;
+        ShowAssetDetails(entry);
+        return;
+    }
+
+    if (AssetListBox.SelectedItem is Models.ExtractedAssetEntry extractedEntry)
+    {
+        ItemDetailsPanel.Visibility = Visibility.Visible;
+        MonsterDetailsPanel.Visibility = Visibility.Collapsed;
+        NpcDetailsPanel.Visibility = Visibility.Collapsed;
+        ShowExtractedAssetDetails(extractedEntry);
+        return;
+    }
 
         // No selection: show the correct detail panel for current tab
         NpcDetailsPanel.Visibility = Visibility.Collapsed;
@@ -273,23 +316,64 @@ public partial class MainWindow : Window
         ClearDetails();
     }
 
+    private void UpdateExtractedPreviewPanels()
+    {
+        if (StaticPreviewPanel == null || SpritePreviewPanel == null)
+            return;
+
+        if (_currentCategory == "EXTRACTED_ASSETS")
+        {
+            StaticPreviewPanel.Visibility = Visibility.Visible;
+            SpritePreviewPanel.Visibility = Visibility.Visible;
+        }
+        else
+        {
+            StaticPreviewPanel.Visibility = Visibility.Visible;
+            SpritePreviewPanel.Visibility = Visibility.Collapsed;
+        }
+    }
+
     private void SetPreviewMode(PreviewMode mode)
     {
+        if (SpriteViewer == null || CenterPreviewImage == null)
+            return;
+
         SpriteViewer.Stop();
+        if (_currentCategory == "EXTRACTED_ASSETS")
+        {
+            if (StaticPreviewPanel == null || SpritePreviewPanel == null)
+                return;
+
+            switch (mode)
+            {
+                case PreviewMode.Sprite:
+                    SpritePreviewPanel.Visibility = Visibility.Visible;
+                    break;
+                case PreviewMode.Image:
+                    StaticPreviewPanel.Visibility = Visibility.Visible;
+                    break;
+                default:
+                    CenterPreviewImage.Source = null;
+                    SpriteViewer.LoadFromData(null, null);
+                    break;
+            }
+            return;
+        }
+
         switch (mode)
         {
             case PreviewMode.Sprite:
-                CenterPreviewImage.Visibility = Visibility.Collapsed;
-                SpriteViewer.Visibility = Visibility.Visible;
+                StaticPreviewPanel.Visibility = Visibility.Collapsed;
+                SpritePreviewPanel.Visibility = Visibility.Visible;
                 CenterPreviewImage.Source = null;
                 break;
             case PreviewMode.Image:
-                CenterPreviewImage.Visibility = Visibility.Visible;
-                SpriteViewer.Visibility = Visibility.Collapsed;
+                StaticPreviewPanel.Visibility = Visibility.Visible;
+                SpritePreviewPanel.Visibility = Visibility.Collapsed;
                 break;
             default:
-                CenterPreviewImage.Visibility = Visibility.Visible;
-                SpriteViewer.Visibility = Visibility.Collapsed;
+                StaticPreviewPanel.Visibility = Visibility.Visible;
+                SpritePreviewPanel.Visibility = Visibility.Collapsed;
                 CenterPreviewImage.Source = null;
                 break;
         }
@@ -297,6 +381,8 @@ public partial class MainWindow : Window
 
     private void ShowNpcDetails(NpcScriptEntry npc)
     {
+        if (ExtractedAssignmentPanel != null)
+            ExtractedAssignmentPanel.Visibility = Visibility.Collapsed;
         NpcDetailName.Text = "NAME: " + npc.DisplayName;
         NpcDetailMapPos.Text = "Map (X,Y): " + npc.Map + " (" + npc.X + ", " + npc.Y + ")";
         NpcDetailType.Text = "TYPE: " + npc.Type;
@@ -432,6 +518,8 @@ public partial class MainWindow : Window
 
     private void ShowMonsterDetails(MobEntry mob)
     {
+        if (ExtractedAssignmentPanel != null)
+            ExtractedAssignmentPanel.Visibility = Visibility.Collapsed;
         _currentMob = mob;
         _currentMobSnapshot = CloneMob(mob);
         var vm = new ViewModels.MobDetailsViewModel(
@@ -1054,6 +1142,8 @@ public partial class MainWindow : Window
 
     private void ShowItemDetails(ItemEntry item)
     {
+        if (ExtractedAssignmentPanel != null)
+            ExtractedAssignmentPanel.Visibility = Visibility.Collapsed;
         DetailName.Text = "NAME: " + item.DisplayName;
         DetailId.Text = "ID: " + item.Id;
         DetailType.Text = "TYPE: " + item.Type;
@@ -1063,6 +1153,11 @@ public partial class MainWindow : Window
         DetailScript.Text = _originalItemScript;
         DetailScript.IsReadOnly = false;
         SaveButton.Visibility = Visibility.Visible;
+        SaveButton.Content = "SAVE";
+        if (ExtractAllRelatedButton != null)
+            ExtractAllRelatedButton.Visibility = Visibility.Collapsed;
+        if (OpenInGrfEditorButton != null)
+            OpenInGrfEditorButton.Visibility = Visibility.Collapsed;
         ItemDiffExpander.Visibility = Visibility.Visible;
         ItemDiffTextBox.Text = "";
         ItemDiffTextBox.Text = "";
@@ -1178,6 +1273,11 @@ public partial class MainWindow : Window
         DetailScript.Text = "{},{},{}";
         DetailScript.IsReadOnly = true;
         SaveButton.Visibility = Visibility.Collapsed;
+        SaveButton.Content = "SAVE";
+        if (ExtractAllRelatedButton != null)
+            ExtractAllRelatedButton.Visibility = Visibility.Collapsed;
+        if (OpenInGrfEditorButton != null)
+            OpenInGrfEditorButton.Visibility = Visibility.Collapsed;
         ItemDiffExpander.Visibility = Visibility.Collapsed;
 
 
@@ -1237,8 +1337,251 @@ public partial class MainWindow : Window
         CenterPreviewImage.Source = preview;
     }
 
+    private void ShowExtractedAssetDetails(Models.ExtractedAssetEntry entry)
+    {
+        _currentExtractedAsset = entry;
+        DetailName.Text = "NAME: " + entry.BaseName;
+        DetailId.Text = "ID: —";
+        DetailType.Text = "TYPE: Suggested = " + entry.SuggestedCategory;
+        DetailDescription.Text =
+            "Folder: " + entry.FolderPath + Environment.NewLine +
+            "Data folder: " + entry.DataRelativeFolder + Environment.NewLine +
+            "Variant: " + entry.VariantName + Environment.NewLine +
+            "Paired: " + entry.ExtensionsSummary;
+        DetailDescription.IsReadOnly = true;
+        DetailScript.Text = BuildExtractedTextPreview(entry);
+        DetailScript.IsReadOnly = true;
+        SaveButton.Visibility = Visibility.Visible;
+        SaveButton.Content = "SAVE TO LOCATION";
+        if (ExtractAllRelatedButton != null)
+            ExtractAllRelatedButton.Visibility = Visibility.Visible;
+        if (OpenInGrfEditorButton != null)
+            OpenInGrfEditorButton.Visibility = Visibility.Visible;
+        if (ExtractedAssignmentPanel != null)
+            ExtractedAssignmentPanel.Visibility = Visibility.Visible;
+        ItemDiffExpander.Visibility = Visibility.Collapsed;
+        if (ItemRelatedFilesListBox != null && ItemRelatedFilesExpander != null)
+        {
+            var sourceList = (entry.SourcePaths ?? new List<string>())
+                .Where(p => !string.IsNullOrWhiteSpace(p))
+                .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            ItemRelatedFilesListBox.ItemsSource = sourceList;
+            ItemRelatedFilesExpander.Header = $"Related files ({sourceList.Count})";
+            ItemRelatedFilesExpander.Visibility = sourceList.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+            ItemRelatedFilesExpander.IsExpanded = sourceList.Count > 0;
+        }
+
+        CenterPreviewImage.Source = null;
+        SpriteViewer.LoadFromData(null, null);
+
+        var hasSprite = TryPreviewRelatedFile(entry.SprPath);
+        var hasStatic = TryPreviewRelatedFile(entry.PreviewPath);
+        if (!hasSprite && !hasStatic)
+            SetPreviewMode(PreviewMode.None);
+
+        PopulateAssignmentTargets();
+        UpdateAssignmentDestinationHint();
+    }
+
+    private static string BuildExtractedTextPreview(Models.ExtractedAssetEntry entry)
+    {
+        var textExts = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ".txt", ".lua", ".lub", ".json", ".xml", ".csv", ".log", ".ini", ".conf", ".yml", ".yaml"
+        };
+
+        foreach (var path in entry.SourcePaths ?? new List<string>())
+        {
+            if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+                continue;
+
+            var ext = Path.GetExtension(path);
+            if (!textExts.Contains(ext))
+                continue;
+
+            try
+            {
+                var bytes = File.ReadAllBytes(path);
+                if (bytes.Length == 0)
+                    continue;
+
+                // If it looks binary, just show metadata for now.
+                if (bytes.Take(Math.Min(bytes.Length, 256)).Any(b => b == 0))
+                    return $"Binary-like file: {Path.GetFileName(path)} ({bytes.Length} bytes)";
+
+                var text = File.ReadAllText(path);
+                if (text.Length > 4000)
+                    text = text[..4000] + Environment.NewLine + "... (truncated)";
+                return text;
+            }
+            catch
+            {
+                // Try next candidate.
+            }
+        }
+
+        return "";
+    }
+
+    private BitmapSource? LoadBitmapFromFile(string filePath)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(filePath) || !File.Exists(filePath))
+                return null;
+
+            var bytes = File.ReadAllBytes(filePath);
+            if (bytes.Length == 0)
+                return null;
+
+            var ext = Path.GetExtension(filePath)?.ToLowerInvariant() ?? ".bmp";
+            var image = ImageProvider.GetImage(bytes, ext);
+            return image?.Cast<BitmapSource>();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private bool TryPreviewRelatedFile(string? filePath)
+    {
+        if (string.IsNullOrWhiteSpace(filePath) || !File.Exists(filePath))
+            return false;
+
+        var splitExtracted = _currentCategory == "EXTRACTED_ASSETS";
+        var ext = Path.GetExtension(filePath)?.ToLowerInvariant() ?? "";
+        if (ext == ".spr" || ext == ".act")
+        {
+            var actPath = ext == ".act" ? filePath : Path.ChangeExtension(filePath, ".act");
+            var sprPath = ext == ".spr" ? filePath : Path.ChangeExtension(filePath, ".spr");
+
+            if (AssetListBox.SelectedItem is Models.ExtractedAssetEntry selected)
+            {
+                actPath = !string.IsNullOrWhiteSpace(selected.ActPath) ? selected.ActPath : actPath;
+                sprPath = !string.IsNullOrWhiteSpace(selected.SprPath) ? selected.SprPath : sprPath;
+            }
+
+            var (actData, sprData) = App.SpriteLookupService.GetSpriteData(actPath, sprPath);
+            if (sprData == null || sprData.Length == 0)
+                return false;
+
+            SetPreviewMode(PreviewMode.Sprite);
+            SpriteViewer.LoadFromData(actData, sprData);
+            SpriteViewer.Play();
+            if (!SpriteViewer.LastLoadSucceeded)
+                return false;
+            if (splitExtracted)
+                SpritePreviewPanel.Visibility = Visibility.Visible;
+            return true;
+        }
+
+        if (ext == ".pal")
+        {
+            var swatch = LoadPalettePreviewFromFile(filePath);
+            if (swatch == null)
+                return false;
+            SetPreviewMode(PreviewMode.Image);
+            CenterPreviewImage.Source = swatch;
+            if (splitExtracted)
+                StaticPreviewPanel.Visibility = Visibility.Visible;
+            return true;
+        }
+
+        var preview = LoadBitmapFromFile(filePath);
+        if (preview == null)
+            return false;
+        SetPreviewMode(PreviewMode.Image);
+        CenterPreviewImage.Source = preview;
+        if (splitExtracted)
+            StaticPreviewPanel.Visibility = Visibility.Visible;
+        return true;
+    }
+
+    private BitmapSource? LoadPalettePreviewFromFile(string filePath)
+    {
+        try
+        {
+            var bytes = File.ReadAllBytes(filePath);
+            if (bytes == null || bytes.Length == 0)
+                return null;
+            return BuildPaletteSwatchBitmap(bytes);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static BitmapSource? BuildPaletteSwatchBitmap(byte[] paletteBytes)
+    {
+        if (paletteBytes == null || paletteBytes.Length == 0)
+            return null;
+
+        const int cols = 16;
+        const int rows = 16;
+        const int cell = 10;
+        var width = cols * cell;
+        var height = rows * cell;
+        var stride = width * 4;
+        var pixels = new byte[height * stride];
+
+        for (int i = 0; i < cols * rows; i++)
+        {
+            byte r;
+            byte g;
+            byte b;
+            byte a = 255;
+
+            if (paletteBytes.Length >= 1024)
+            {
+                var o = i * 4;
+                b = paletteBytes[o];
+                g = paletteBytes[o + 1];
+                r = paletteBytes[o + 2];
+                a = paletteBytes[o + 3];
+            }
+            else if (paletteBytes.Length >= 768)
+            {
+                var o = i * 3;
+                r = paletteBytes[o];
+                g = paletteBytes[o + 1];
+                b = paletteBytes[o + 2];
+            }
+            else
+            {
+                break;
+            }
+
+            var col = i % cols;
+            var row = i / cols;
+            var startX = col * cell;
+            var startY = row * cell;
+
+            for (var y = 0; y < cell; y++)
+            {
+                var py = startY + y;
+                for (var x = 0; x < cell; x++)
+                {
+                    var px = startX + x;
+                    var idx = py * stride + (px * 4);
+                    pixels[idx] = b;
+                    pixels[idx + 1] = g;
+                    pixels[idx + 2] = r;
+                    pixels[idx + 3] = a;
+                }
+            }
+        }
+
+        var bitmap = BitmapSource.Create(width, height, 96, 96, PixelFormats.Bgra32, null, pixels, stride);
+        bitmap.Freeze();
+        return bitmap;
+    }
+
     private void ClearDetails()
     {
+        _currentExtractedAsset = null;
         SetPreviewMode(PreviewMode.None);
         if (ItemRelatedFilesListBox != null)
             ItemRelatedFilesListBox.ItemsSource = null;
@@ -1253,15 +1596,480 @@ public partial class MainWindow : Window
         DetailDescription.IsReadOnly = true;
         DetailScript.IsReadOnly = true;
         SaveButton.Visibility = Visibility.Collapsed;
+        SaveButton.Content = "SAVE";
+        if (ExtractAllRelatedButton != null)
+            ExtractAllRelatedButton.Visibility = Visibility.Collapsed;
+        if (OpenInGrfEditorButton != null)
+            OpenInGrfEditorButton.Visibility = Visibility.Collapsed;
+        if (ExtractedAssignmentPanel != null)
+            ExtractedAssignmentPanel.Visibility = Visibility.Collapsed;
         ItemDiffExpander.Visibility = Visibility.Collapsed;
     }
 
     private void SaveButton_Click(object sender, RoutedEventArgs e)
     {
-        if (AssetListBox.SelectedItem is not ItemEntry item) return;
-        item.Script = DetailScript.Text?.Trim();
-        App.ItemDbService.SaveItem(item);
-        System.Windows.MessageBox.Show(this, "Item saved.", "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Information);
+        if (AssetListBox.SelectedItem is ItemEntry item)
+        {
+            item.Script = DetailScript.Text?.Trim();
+            App.ItemDbService.SaveItem(item);
+            System.Windows.MessageBox.Show(this, "Item saved.", "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        if (AssetListBox.SelectedItem is Models.ExtractedAssetEntry extracted)
+        {
+            SaveExtractedAssetSelection(extracted);
+        }
+    }
+
+    private void SaveExtractedAssetSelection(Models.ExtractedAssetEntry entry)
+    {
+        using var dlg = new System.Windows.Forms.FolderBrowserDialog
+        {
+            Description = "Select destination root folder",
+            UseDescriptionForTitle = true,
+            SelectedPath = @"F:\MMORPG\RAGNAROK ONLINE\client"
+        };
+        if (dlg.ShowDialog() != System.Windows.Forms.DialogResult.OK)
+            return;
+
+        var destinationRoot = dlg.SelectedPath;
+        if (string.IsNullOrWhiteSpace(destinationRoot))
+            return;
+
+        var pairingMode = GetSelectedExtractedPairingMode();
+        try
+        {
+            var batch = (AssetListBox.ItemsSource as IEnumerable<Models.ExtractedAssetEntry>)?.ToList()
+                        ?? new List<Models.ExtractedAssetEntry>();
+            if (batch.Count == 0)
+                batch.Add(entry);
+
+            var totalCopied = 0;
+            var manifests = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var asset in batch)
+            {
+                var result = App.ExtractedAssetService.SavePairedFilesPreserveLayout(asset, destinationRoot, pairingMode);
+                totalCopied += result.CopiedCount;
+                if (!string.IsNullOrWhiteSpace(result.ManifestPath))
+                    manifests.Add(result.ManifestPath);
+            }
+
+            System.Windows.MessageBox.Show(this,
+                $"Saved {totalCopied} file(s).{Environment.NewLine}" +
+                $"Entries processed: {batch.Count}{Environment.NewLine}" +
+                $"Mode: {pairingMode}{Environment.NewLine}" +
+                $"Root: {destinationRoot}{Environment.NewLine}" +
+                $"Manifest: {manifests.FirstOrDefault() ?? "(none)"}",
+                "RoDbEditor",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            System.Windows.MessageBox.Show(this,
+                "Failed to save paired files:" + Environment.NewLine + ex.Message,
+                "RoDbEditor",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+        }
+    }
+
+    private string GetSelectedExtractedPairingMode()
+    {
+        if (ExtractedPairingModeCombo?.SelectedItem is ComboBoxItem item &&
+            item.Content is string s && !string.IsNullOrWhiteSpace(s))
+        {
+            return s.Trim();
+        }
+
+        return "SORT_FILE_TYPE";
+    }
+
+    private IEnumerable<Models.ExtractedAssetEntry> ApplyExtractedModeFilter(IEnumerable<Models.ExtractedAssetEntry> assets)
+    {
+        var mode = GetSelectedExtractedPairingMode();
+        var key = (mode ?? "").Trim().ToUpperInvariant();
+        if (key.Contains("ACT_SPR_ONLY"))
+        {
+            return assets.Where(a => (a.SourcePaths ?? new List<string>())
+                .Any(p =>
+                {
+                    var e = Path.GetExtension(p);
+                    return e.Equals(".act", StringComparison.OrdinalIgnoreCase) ||
+                           e.Equals(".spr", StringComparison.OrdinalIgnoreCase);
+                }));
+        }
+
+        if (key.Contains("PAL_ONLY"))
+        {
+            return assets.Where(a => (a.SourcePaths ?? new List<string>())
+                .Any(p => Path.GetExtension(p).Equals(".pal", StringComparison.OrdinalIgnoreCase)));
+        }
+
+        return assets;
+    }
+
+    private void ExtractedPairingModeCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_currentCategory == "EXTRACTED_ASSETS")
+            RefreshList();
+    }
+
+    private void ItemRelatedFilesListBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        var path = TryGetSelectedRelatedFilePath();
+        if (!string.IsNullOrWhiteSpace(path))
+            TryPreviewRelatedFile(path);
+    }
+
+    private void ItemRelatedFilesListBox_MouseDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        var path = TryGetSelectedRelatedFilePath();
+        if (!string.IsNullOrWhiteSpace(path))
+            TryPreviewRelatedFile(path);
+    }
+
+    private string? TryGetSelectedRelatedFilePath()
+    {
+        if (ItemRelatedFilesListBox?.SelectedItem is not string selected)
+            return null;
+
+        if (File.Exists(selected))
+            return selected;
+
+        var marker = ": ";
+        var index = selected.IndexOf(marker, StringComparison.Ordinal);
+        if (index <= 0 || index + marker.Length >= selected.Length)
+            return null;
+
+        var candidate = selected[(index + marker.Length)..].Trim();
+        if (File.Exists(candidate))
+            return candidate;
+
+        return null;
+    }
+
+    private void AssignEntityTypeCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        PopulateAssignmentTargets();
+        UpdateAssignmentDestinationHint();
+    }
+
+    private void PopulateAssignmentTargets()
+    {
+        if (AssignTargetCombo == null)
+            return;
+
+        var options = new List<AssignmentTargetOption>();
+        var selectedType = GetSelectedAssignmentEntityType();
+        switch (selectedType)
+        {
+            case SpriteAssignmentEntityType.Npc:
+                options.AddRange(App.NpcIndexService.All.Select(n => new AssignmentTargetOption
+                {
+                    Payload = n,
+                    Key = string.IsNullOrWhiteSpace(n.SpriteId) ? n.Name : n.SpriteId,
+                    Display = $"{n.Name} [{n.SpriteId}] ({Path.GetFileName(n.FilePath)})"
+                }));
+                break;
+            case SpriteAssignmentEntityType.Monster:
+                options.AddRange(App.MobDbService.Mobs.Select(m => new AssignmentTargetOption
+                {
+                    Payload = m,
+                    Key = m.AegisName,
+                    Display = $"{m.Id} - {m.DisplayName} [{m.AegisName}]"
+                }));
+                break;
+            default:
+                options.AddRange(App.ItemDbService.Items.Select(i => new AssignmentTargetOption
+                {
+                    Payload = i,
+                    Key = i.AegisName,
+                    Display = $"{i.Id} - {i.DisplayName} [{i.AegisName}]"
+                }));
+                break;
+        }
+
+        AssignTargetCombo.ItemsSource = options.OrderBy(o => o.Display, StringComparer.OrdinalIgnoreCase).Take(2000).ToList();
+        AssignTargetCombo.DisplayMemberPath = nameof(AssignmentTargetOption.Display);
+        AssignTargetCombo.SelectedValuePath = nameof(AssignmentTargetOption.Key);
+        if (AssignTargetCombo.Items.Count > 0 && AssignTargetCombo.SelectedIndex < 0)
+            AssignTargetCombo.SelectedIndex = 0;
+    }
+
+    private void UpdateAssignmentDestinationHint()
+    {
+        if (AssignDestinationHint == null)
+            return;
+
+        var selectedType = GetSelectedAssignmentEntityType();
+        var folder = selectedType switch
+        {
+            SpriteAssignmentEntityType.Npc => @"data\sprite\npc",
+            SpriteAssignmentEntityType.Monster => @"data\sprite\monster",
+            _ => @"data\sprite\item"
+        };
+        AssignDestinationHint.Text = $"Destination: {folder}";
+    }
+
+    private SpriteAssignmentEntityType GetSelectedAssignmentEntityType()
+    {
+        if (AssignEntityTypeCombo?.SelectedItem is ComboBoxItem item &&
+            item.Content is string raw)
+        {
+            var key = raw.Trim().ToUpperInvariant();
+            if (key.Contains("NPC")) return SpriteAssignmentEntityType.Npc;
+            if (key.Contains("MONSTER")) return SpriteAssignmentEntityType.Monster;
+            return SpriteAssignmentEntityType.Item;
+        }
+
+        return SpriteAssignmentEntityType.Npc;
+    }
+
+    private static string BuildSpriteKeyFromAssetBase(string? baseName)
+    {
+        if (string.IsNullOrWhiteSpace(baseName))
+            return "CUSTOM_SPRITE";
+
+        var chars = baseName
+            .Select(c => char.IsLetterOrDigit(c) || c == '_' ? c : '_')
+            .ToArray();
+        var normalized = new string(chars).Trim('_');
+        if (string.IsNullOrWhiteSpace(normalized))
+            normalized = "CUSTOM_SPRITE";
+        return normalized.ToUpperInvariant();
+    }
+
+    private string BuildUniqueMonsterAegis(string baseKey)
+    {
+        var key = baseKey;
+        var i = 1;
+        while (App.MobDbService.Mobs.Any(m => string.Equals(m.AegisName, key, StringComparison.OrdinalIgnoreCase)))
+        {
+            key = $"{baseKey}_{i}";
+            i++;
+        }
+        return key;
+    }
+
+    private void AssignSpriteButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_currentExtractedAsset == null)
+        {
+            System.Windows.MessageBox.Show(this, "Select an extracted asset first.", "RoDbEditor",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        var sprPath = _currentExtractedAsset.SprPath;
+        var actPath = _currentExtractedAsset.ActPath;
+        if (string.IsNullOrWhiteSpace(sprPath) || !File.Exists(sprPath))
+        {
+            System.Windows.MessageBox.Show(this, "Selected extracted entry does not contain a valid SPR file.", "RoDbEditor",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        var entityType = GetSelectedAssignmentEntityType();
+        var selectedTarget = AssignTargetCombo?.SelectedItem as AssignmentTargetOption;
+        var fallbackKey = BuildSpriteKeyFromAssetBase(_currentExtractedAsset.BaseName);
+        var targetKey = selectedTarget?.Key;
+        if (string.IsNullOrWhiteSpace(targetKey))
+            targetKey = fallbackKey;
+
+        if (entityType == SpriteAssignmentEntityType.Monster)
+            targetKey = BuildUniqueMonsterAegis(BuildSpriteKeyFromAssetBase(targetKey));
+
+        var related = new List<string>();
+        if (AssignIncludeRelatedCheckBox?.IsChecked == true)
+        {
+            related = (_currentExtractedAsset.SourcePaths ?? new List<string>())
+                .Where(p =>
+                {
+                    var ext = Path.GetExtension(p).ToLowerInvariant();
+                    return ext is ".wav" or ".bmp" or ".png" or ".tga" or ".jpg" or ".jpeg" or ".pal";
+                })
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+
+        var req = new SpriteAssignmentRequest
+        {
+            EntityType = entityType,
+            TargetKey = targetKey,
+            SourceActPath = actPath ?? "",
+            SourceSprPath = sprPath,
+            RelatedPaths = related,
+            ClientRootPath = @"F:\MMORPG\RAGNAROK ONLINE\client"
+        };
+
+        var result = App.SpriteAssignmentService.ExecuteAssignment(req);
+        if (!result.Success)
+        {
+            System.Windows.MessageBox.Show(this,
+                "Assignment failed:" + Environment.NewLine + string.Join(Environment.NewLine, result.Errors),
+                "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Error);
+            return;
+        }
+
+        string designation = "Asset files copied.";
+        if (entityType == SpriteAssignmentEntityType.Npc && selectedTarget?.Payload is NpcScriptEntry npc)
+        {
+            designation = App.EntityDesignationService.ApplyNpcSprite(npc, targetKey);
+        }
+        else if (entityType == SpriteAssignmentEntityType.Monster && selectedTarget?.Payload is MobEntry mob)
+        {
+            var custom = App.EntityDesignationService.CreateOrUpdateCustomMonsterFrom(mob, targetKey);
+            designation = $"Custom monster created: {custom.Id} ({custom.AegisName}) in db/import/mob_db.yml";
+        }
+
+        var warningText = result.Warnings.Count > 0
+            ? Environment.NewLine + "Warnings:" + Environment.NewLine + string.Join(Environment.NewLine, result.Warnings)
+            : "";
+        System.Windows.MessageBox.Show(this,
+            $"Assignment complete.{Environment.NewLine}" +
+            $"Entity: {entityType}{Environment.NewLine}" +
+            $"Target key: {targetKey}{Environment.NewLine}" +
+            $"Copied files: {result.CopiedFiles.Count}{Environment.NewLine}" +
+            $"{designation}{Environment.NewLine}" +
+            $"Manifest: {result.ManifestPath}{warningText}",
+            "RoDbEditor",
+            MessageBoxButton.OK,
+            MessageBoxImage.Information);
+    }
+
+    private void OpenInGrfEditorButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (AssetListBox.SelectedItem is not Models.ExtractedAssetEntry entry)
+        {
+            System.Windows.MessageBox.Show(this, "Select an extracted asset first.", "RoDbEditor",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        var editorPath = FindGrfEditorExecutable();
+        if (string.IsNullOrEmpty(editorPath))
+        {
+            System.Windows.MessageBox.Show(this,
+                "GRF Editor.exe not found." + Environment.NewLine +
+                "Expected path example:" + Environment.NewLine +
+                @"F:\MMORPG\RAGNAROK ONLINE\EDITORS\GRF EDITOR\GRF Editor.exe",
+                "RoDbEditor",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+            return;
+        }
+
+        var target = TryGetSelectedRelatedFilePath()
+                     ?? entry.SprPath
+                     ?? entry.ActPath
+                     ?? entry.PreviewPath
+                     ?? entry.SourcePaths.FirstOrDefault();
+
+        try
+        {
+            var psi = new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = editorPath,
+                UseShellExecute = true,
+                Arguments = !string.IsNullOrWhiteSpace(target) ? $"\"{target}\"" : ""
+            };
+            System.Diagnostics.Process.Start(psi);
+        }
+        catch (Exception ex)
+        {
+            System.Windows.MessageBox.Show(this,
+                "Failed to launch GRF Editor:" + Environment.NewLine + ex.Message,
+                "RoDbEditor",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+        }
+    }
+
+    private static string? FindGrfEditorExecutable()
+    {
+        var candidates = new[]
+        {
+            @"F:\MMORPG\RAGNAROK ONLINE\EDITORS\GRF EDITOR\GRF Editor.exe",
+            @"F:\MMORPG\RAGNAROK ONLINE\EDITORS\GRF EDITOR\GRFEditor-main\GRF Editor.exe",
+            Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "GRF Editor.exe"),
+        };
+
+        foreach (var path in candidates)
+        {
+            if (File.Exists(path))
+                return path;
+        }
+
+        return null;
+    }
+
+    private void ExtractAllRelatedButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_currentCategory != "EXTRACTED_ASSETS")
+            return;
+
+        using var dlg = new System.Windows.Forms.FolderBrowserDialog
+        {
+            Description = "Select destination root folder for all related extracted files",
+            UseDescriptionForTitle = true,
+            SelectedPath = @"F:\MMORPG\RAGNAROK ONLINE\client"
+        };
+        if (dlg.ShowDialog() != System.Windows.Forms.DialogResult.OK)
+            return;
+
+        var destinationRoot = dlg.SelectedPath;
+        if (string.IsNullOrWhiteSpace(destinationRoot))
+            return;
+
+        var extractedService = App.ExtractedAssetService;
+        if (extractedService == null)
+        {
+            System.Windows.MessageBox.Show(this, "Extracted asset service is not available.", "RoDbEditor",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        var assets = (AssetListBox.ItemsSource as IEnumerable<Models.ExtractedAssetEntry>)?.ToList()
+                     ?? extractedService.Search("", SearchBox?.Text?.Trim())?.ToList()
+                     ?? new List<Models.ExtractedAssetEntry>();
+        if (assets.Count == 0)
+        {
+            System.Windows.MessageBox.Show(this, "No extracted assets to export.", "RoDbEditor",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        int totalCopied = 0;
+        int failed = 0;
+        string? manifestPath = null;
+
+        foreach (var asset in assets)
+        {
+            try
+            {
+                var result = extractedService.SavePairedFilesPreserveLayout(asset, destinationRoot, "ALL_RELATED");
+                totalCopied += result.CopiedCount;
+                if (!string.IsNullOrWhiteSpace(result.ManifestPath))
+                    manifestPath = result.ManifestPath;
+            }
+            catch
+            {
+                failed++;
+            }
+        }
+
+        System.Windows.MessageBox.Show(this,
+            $"Extracted all related files.{Environment.NewLine}" +
+            $"Entries processed: {assets.Count}{Environment.NewLine}" +
+            $"Files copied: {totalCopied}{Environment.NewLine}" +
+            $"Failed entries: {failed}{Environment.NewLine}" +
+            $"Root: {destinationRoot}{Environment.NewLine}" +
+            $"Manifest: {manifestPath ?? "(none)"}",
+            "RoDbEditor",
+            MessageBoxButton.OK,
+            failed == 0 ? MessageBoxImage.Information : MessageBoxImage.Warning);
     }
 
     private void SearchButton_Click(object sender, RoutedEventArgs e)
@@ -1321,6 +2129,7 @@ public partial class MainWindow : Window
         }
 
         App.ReloadFromGrf();
+        App.ExtractedAssetService?.ClearCache();
 
         RefreshList();
         UpdateSourceIndicators();
@@ -1355,12 +2164,17 @@ public partial class MainWindow : Window
         if (string.IsNullOrEmpty(path)) return;
 
         App.FileSystemSpriteSource = new FileSystemSpriteSource(path);
+        App.Config.ExtractedAssetsPath = path;
         App.SpriteLookupService.ClearCache();
         App.SpriteLookupService = new SpriteLookupService(App.GrfService, App.FileSystemSpriteSource);
+        App.ExtractedAssetService?.ClearCache();
 
+        RefreshList();
         UpdateSourceIndicators();
         System.Windows.MessageBox.Show(this,
-            $"Extracted assets loaded.\nSprites indexed: {App.FileSystemSpriteSource.CachedCount}",
+            "Extracted assets loaded." + Environment.NewLine +
+            $"Sprite files indexed: {App.FileSystemSpriteSource.CachedCount}" + Environment.NewLine +
+            $"Paired asset groups: {App.ExtractedAssetService?.TotalCount ?? 0}",
             "RoDbEditor", MessageBoxButton.OK);
     }
 
