@@ -245,17 +245,26 @@ public class ItemDbService
         return maxCustom + 1;
     }
 
+    /// <summary>Result of a save operation for operations log.</summary>
+    public sealed class SaveResult
+    {
+        public string Path { get; init; } = "";
+        public int BodyIndex { get; init; }
+        public bool IsUpdate { get; init; }
+    }
+
     /// <summary>
     /// Save an item to its YAML source file. Handles both editing existing items
     /// and appending new items to db/import/item_db.yml.
+    /// Returns save result for operations log, or null on failure.
     /// </summary>
-    public void SaveItem(ItemEntry item)
+    public SaveResult? SaveItem(ItemEntry item)
     {
-        if (item == null) return;
+        if (item == null) return null;
 
         // Determine the target file path
         var path = ResolveItemFilePath(item);
-        if (string.IsNullOrEmpty(path)) return;
+        if (string.IsNullOrEmpty(path)) return null;
 
         try
         {
@@ -287,7 +296,8 @@ public class ItemDbService
             // Build the YAML entry dictionary
             var entry = BuildItemEntry(item);
 
-            if (item.SourceIndex >= 0 && item.SourceIndex < body.Count)
+            var isUpdate = item.SourceIndex >= 0 && item.SourceIndex < body.Count;
+            if (isUpdate)
             {
                 // Update existing entry
                 body[item.SourceIndex] = entry;
@@ -312,13 +322,62 @@ public class ItemDbService
 
             File.WriteAllText(path, serializer.Serialize(doc));
             System.Diagnostics.Debug.WriteLine($"[ItemDbService] Saved item {item.Id} ({item.AegisName}) to {path}");
+            return new SaveResult { Path = path, BodyIndex = item.SourceIndex, IsUpdate = isUpdate };
         }
         catch (Exception ex)
         {
             System.Diagnostics.Debug.WriteLine($"[ItemDbService] SaveItem error: {ex.Message}");
             LastError = $"SaveItem failed: {ex.Message}";
+            return null;
         }
     }
+
+    /// <summary>Remove an entry at the given index from a YAML file. Used for Undo/Delete.</summary>
+    public bool RemoveEntryAt(string path, int bodyIndex)
+    {
+        if (string.IsNullOrEmpty(path) || !File.Exists(path) || bodyIndex < 0) return false;
+        try
+        {
+            var deserializer = new DeserializerBuilder()
+                .WithNamingConvention(PascalCaseNamingConvention.Instance)
+                .IgnoreUnmatchedProperties()
+                .Build();
+            var serializer = new SerializerBuilder()
+                .WithNamingConvention(PascalCaseNamingConvention.Instance)
+                .ConfigureDefaultValuesHandling(DefaultValuesHandling.OmitNull | DefaultValuesHandling.OmitDefaults)
+                .Build();
+
+            var yaml = File.ReadAllText(path);
+            var doc = deserializer.Deserialize<Dictionary<object, object>>(new StringReader(yaml));
+            if (doc == null) return false;
+            if (!doc.TryGetValue("Body", out var bodyObj) || bodyObj is not List<object> body)
+                return false;
+            if (bodyIndex >= body.Count) return false;
+
+            body.RemoveAt(bodyIndex);
+            File.WriteAllText(path, serializer.Serialize(doc));
+            return true;
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[ItemDbService] RemoveEntryAt error: {ex.Message}");
+            LastError = ex.Message;
+            return false;
+        }
+    }
+
+    /// <summary>Delete an item from its import file. Item must have SourceFile containing 'import'.</summary>
+    public bool DeleteItemFromImport(ItemEntry item)
+    {
+        if (item == null || item.SourceIndex < 0) return false;
+        var path = ResolveItemFilePath(item);
+        if (string.IsNullOrEmpty(path) || !path.Contains("import", StringComparison.OrdinalIgnoreCase))
+            return false;
+        return RemoveEntryAt(path, item.SourceIndex);
+    }
+
+    /// <summary>Get the target path for saving an item. Used to capture snapshot before save.</summary>
+    public string? GetSaveTargetPath(ItemEntry item) => ResolveItemFilePath(item);
 
     private string? ResolveItemFilePath(ItemEntry item)
     {
@@ -376,7 +435,9 @@ public class ItemDbService
 
         if (!string.IsNullOrEmpty(item.Type) && item.Type != "Etc")
             entry["Type"] = item.Type;
-        if (!string.IsNullOrEmpty(item.SubType))
+        // SubType only valid for Weapon, Ammo, Card (rAthena rejects it for Armor, etc.)
+        if (!string.IsNullOrEmpty(item.SubType) &&
+            (item.Type == "Weapon" || item.Type == "Ammo" || item.Type == "Card"))
             entry["SubType"] = item.SubType;
         if (item.Buy.HasValue && item.Buy.Value > 0)
             entry["Buy"] = item.Buy.Value;

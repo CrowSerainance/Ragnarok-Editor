@@ -312,15 +312,23 @@ public class MobDbService
         return int.TryParse(v.ToString(), out var n) ? n : null;
     }
 
-    public void SaveMob(MobEntry mob)
+    /// <summary>Result of a save operation for operations log.</summary>
+    public sealed class SaveResult
+    {
+        public string Path { get; init; } = "";
+        public int BodyIndex { get; init; }
+        public bool IsUpdate { get; init; }
+    }
+
+    public SaveResult? SaveMob(MobEntry mob)
     {
         // Always write edits and new mobs into the import overlay file
         // (db/import/mob_db.yml) so that the official db/re/pre-re mob_db.yml
         // files remain untouched. rAthena will merge the import file on load.
-        if (string.IsNullOrEmpty(_dataPath)) return;
+        if (string.IsNullOrEmpty(_dataPath)) return null;
 
         var path = EnsureImportMobDbPath();
-        if (path == null) return;
+        if (path == null) return null;
 
         var deserializer = new DeserializerBuilder()
             .WithNamingConvention(CamelCaseNamingConvention.Instance)
@@ -448,6 +456,85 @@ public class MobDbService
 
         File.WriteAllText(path, serializer.Serialize(doc), Utf8NoBom);
         Debug.WriteLine($"[MobDbService] Saved mob {mob.Id} ({mob.AegisName}) to import overlay {path}");
+        return new SaveResult { Path = path, BodyIndex = mob.SourceIndex, IsUpdate = existingIndex >= 0 };
+    }
+
+    /// <summary>Remove an entry at the given index from mob_db YAML. Used for Undo/Delete.</summary>
+    public bool RemoveEntryAt(string path, int bodyIndex)
+    {
+        if (string.IsNullOrEmpty(path) || !File.Exists(path) || bodyIndex < 0) return false;
+        try
+        {
+            var deserializer = new DeserializerBuilder()
+                .WithNamingConvention(CamelCaseNamingConvention.Instance)
+                .IgnoreUnmatchedProperties()
+                .Build();
+            var serializer = new SerializerBuilder()
+                .WithNamingConvention(CamelCaseNamingConvention.Instance)
+                .Build();
+
+            var yaml = File.ReadAllText(path);
+            var doc = deserializer.Deserialize<Dictionary<object, object>>(new StringReader(yaml));
+            if (doc == null) return false;
+            if (!doc.TryGetValue("Body", out var bodyObj) && !doc.TryGetValue("body", out bodyObj))
+                return false;
+            if (bodyObj is not List<object> body || bodyIndex >= body.Count)
+                return false;
+
+            body.RemoveAt(bodyIndex);
+            File.WriteAllText(path, serializer.Serialize(doc), Utf8NoBom);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[MobDbService] RemoveEntryAt error: {ex.Message}");
+            LastError = ex.Message;
+            return false;
+        }
+    }
+
+    /// <summary>Delete a mob from import file by ID. Finds the entry in import and removes it.</summary>
+    public bool DeleteMobFromImportById(int mobId)
+    {
+        var path = GetImportMobDbPath();
+        if (string.IsNullOrEmpty(path) || !File.Exists(path)) return false;
+        try
+        {
+            var deserializer = new DeserializerBuilder()
+                .WithNamingConvention(CamelCaseNamingConvention.Instance)
+                .IgnoreUnmatchedProperties()
+                .Build();
+            var serializer = new SerializerBuilder()
+                .WithNamingConvention(CamelCaseNamingConvention.Instance)
+                .Build();
+
+            var yaml = File.ReadAllText(path);
+            var doc = deserializer.Deserialize<Dictionary<object, object>>(new StringReader(yaml));
+            if (doc == null) return false;
+            if (!doc.TryGetValue("Body", out var bodyObj) && !doc.TryGetValue("body", out bodyObj))
+                return false;
+            if (bodyObj is not List<object> body) return false;
+
+            for (int i = 0; i < body.Count; i++)
+            {
+                if (body[i] is not Dictionary<object, object> entry) continue;
+                if (!entry.TryGetValue("Id", out var idObj) && !entry.TryGetValue("id", out idObj))
+                    continue;
+                if (Convert.ToInt32(idObj) == mobId)
+                {
+                    body.RemoveAt(i);
+                    File.WriteAllText(path, serializer.Serialize(doc), Utf8NoBom);
+                    return true;
+                }
+            }
+            return false;
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[MobDbService] DeleteMobFromImportById error: {ex.Message}");
+            LastError = ex.Message;
+            return false;
+        }
     }
 
     /// <summary>

@@ -12,6 +12,7 @@ using GRF.FileFormats.SprFormat;
 using GRF.Image;
 using Microsoft.Win32;
 using RoDbEditor.Core;
+using RoDbEditor.Data;
 using RoDbEditor.Models;
 using RoDbEditor.Services;
 using RoDbEditor.Services.Analysis;
@@ -34,6 +35,8 @@ public partial class MainWindow : Window
     private readonly List<AssetEntry> _allAssets = new();
     private string _currentCategory = "ITEMS";
     private string _originalItemScript = "";
+    private readonly List<(string bonusType, int value)> _itemBonusList = new();
+    private ItemEntry? _currentItemForEdit;
     private string _originalMonsterDropsText = "";
     private string _originalNpcScript = "";
     private MobEntry? _currentMob;
@@ -41,6 +44,7 @@ public partial class MainWindow : Window
     private Models.ExtractedAssetEntry? _currentExtractedAsset;
     private TextMarkerService? _markerService;
     private WorkspaceIndex? _lastWorkspaceIndex;
+    private readonly OperationsLogService _operationsLog = new();
 
     public MainWindow()
     {
@@ -55,7 +59,9 @@ public partial class MainWindow : Window
             SpriteViewer.SetBackgroundMode(Core.Controls.SpriteAnimationViewer.ViewerBackgroundMode.Checkered);
             if (!string.IsNullOrEmpty(App.Config?.DataPath))
                  SetupFileWatcher(App.Config.DataPath);
-            
+
+            RefreshOperationsList();
+
             // Initialize TextMarkerService for NpcScriptEditor
             if (NpcScriptEditor?.Document != null)
             {
@@ -258,10 +264,14 @@ public partial class MainWindow : Window
 
     private void AssetListBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
+        if (ExtractedAssetPropertiesPanel != null)
+            ExtractedAssetPropertiesPanel.Visibility = Visibility.Collapsed;
+
         if (AssetListBox.SelectedItem is ItemEntry itemEntry)
         {
             ItemDetailsPanel.Visibility = Visibility.Visible;
             MonsterDetailsPanel.Visibility = Visibility.Collapsed;
+            NpcDetailsPanel.Visibility = Visibility.Collapsed;
             ShowItemDetails(itemEntry);
             return;
         }
@@ -270,6 +280,7 @@ public partial class MainWindow : Window
         {
             ItemDetailsPanel.Visibility = Visibility.Collapsed;
             MonsterDetailsPanel.Visibility = Visibility.Visible;
+            NpcDetailsPanel.Visibility = Visibility.Collapsed;
             ShowMonsterDetails(mobEntry);
             return;
         }
@@ -294,9 +305,11 @@ public partial class MainWindow : Window
 
     if (AssetListBox.SelectedItem is Models.ExtractedAssetEntry extractedEntry)
     {
-        ItemDetailsPanel.Visibility = Visibility.Visible;
+        ItemDetailsPanel.Visibility = Visibility.Collapsed;
         MonsterDetailsPanel.Visibility = Visibility.Collapsed;
         NpcDetailsPanel.Visibility = Visibility.Collapsed;
+        if (ExtractedAssetPropertiesPanel != null)
+            ExtractedAssetPropertiesPanel.Visibility = Visibility.Visible;
         ShowExtractedAssetDetails(extractedEntry);
         return;
     }
@@ -318,18 +331,31 @@ public partial class MainWindow : Window
 
     private void UpdateExtractedPreviewPanels()
     {
-        if (StaticPreviewPanel == null || SpritePreviewPanel == null)
+        if (StaticPreviewPanel == null || SpritePreviewPanel == null || CenterPreviewGrid == null)
             return;
 
         if (_currentCategory == "EXTRACTED_ASSETS")
         {
+            // Remove bottom pane: collapse SpritePreviewPanel and zero out its rows so BMP/PAL viewer expands to bottom
+            SpritePreviewPanel.Visibility = Visibility.Collapsed;
+            SpritePreviewPanel.Height = 0;
+            if (CenterPreviewGrid.RowDefinitions.Count >= 3)
+            {
+                CenterPreviewGrid.RowDefinitions[1].Height = new GridLength(0);
+                CenterPreviewGrid.RowDefinitions[2].Height = new GridLength(0);
+            }
             StaticPreviewPanel.Visibility = Visibility.Visible;
-            SpritePreviewPanel.Visibility = Visibility.Visible;
         }
         else
         {
+            // Restore layout for ITEMS/MONSTERS/NPCs
+            if (CenterPreviewGrid.RowDefinitions.Count >= 3)
+            {
+                CenterPreviewGrid.RowDefinitions[1].Height = new GridLength(8);
+                CenterPreviewGrid.RowDefinitions[2].Height = new GridLength(1, GridUnitType.Star);
+            }
+            SpritePreviewPanel.Height = double.NaN; // Auto
             StaticPreviewPanel.Visibility = Visibility.Visible;
-            SpritePreviewPanel.Visibility = Visibility.Collapsed;
         }
     }
 
@@ -344,19 +370,11 @@ public partial class MainWindow : Window
             if (StaticPreviewPanel == null || SpritePreviewPanel == null)
                 return;
 
-            switch (mode)
-            {
-                case PreviewMode.Sprite:
-                    SpritePreviewPanel.Visibility = Visibility.Visible;
-                    break;
-                case PreviewMode.Image:
-                    StaticPreviewPanel.Visibility = Visibility.Visible;
-                    break;
-                default:
-                    CenterPreviewImage.Source = null;
-                    SpriteViewer.LoadFromData(null, null);
-                    break;
-            }
+            // For extracted assets: static BMP/PAL preview only — SpritePreviewPanel removed from layout
+            StaticPreviewPanel.Visibility = Visibility.Visible;
+            SpritePreviewPanel.Visibility = Visibility.Collapsed;
+            if (mode == PreviewMode.None)
+                CenterPreviewImage.Source = null;
             return;
         }
 
@@ -1082,7 +1100,20 @@ public partial class MainWindow : Window
         {
             vm.PushTo(_currentMob);
         }
-        App.MobDbService.SaveMob(_currentMob);
+        var path = App.MobDbService.GetImportMobDbPath();
+        byte[]? snapshot = null;
+        if (!string.IsNullOrEmpty(path) && File.Exists(path) && _currentMob.SourceIndex >= 0)
+            snapshot = File.ReadAllBytes(path);
+
+        var result = App.MobDbService.SaveMob(_currentMob);
+        if (result != null)
+        {
+            if (result.IsUpdate)
+                _operationsLog.RecordUpdated(OperationEntityKind.Mob, _currentMob.Id, _currentMob.AegisName, _currentMob.Name ?? "", result.Path, result.BodyIndex, snapshot);
+            else
+                _operationsLog.RecordAdded(OperationEntityKind.Mob, _currentMob.Id, _currentMob.AegisName, _currentMob.Name ?? "", result.Path, result.BodyIndex);
+            RefreshOperationsList();
+        }
         _currentMobSnapshot = CloneMob(_currentMob);
         _originalMonsterDropsText = SerializeMobDrops(_currentMob);
         System.Windows.MessageBox.Show(this, "Monster saved.", "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Information);
@@ -1142,37 +1173,117 @@ public partial class MainWindow : Window
 
     private void ShowItemDetails(ItemEntry item)
     {
+        _currentItemForEdit = item;
         if (ExtractedAssignmentPanel != null)
             ExtractedAssignmentPanel.Visibility = Visibility.Collapsed;
-        DetailName.Text = "NAME: " + item.DisplayName;
-        DetailId.Text = "ID: " + item.Id;
-        DetailType.Text = "TYPE: " + item.Type;
+
+        ItemEditId.Text = item.Id.ToString();
+        ItemEditAegisName.Text = item.AegisName ?? "";
+        ItemEditName.Text = item.Name ?? "";
+        SetComboByContent(ItemEditType, item.Type ?? "Etc");
+        PopulateItemEditSubTypes();
+        SetComboByContent(ItemEditSubType, item.SubType ?? "");
+        ItemEditBuy.Text = item.Buy?.ToString() ?? "";
+        ItemEditSell.Text = item.Sell?.ToString() ?? "";
+        ItemEditWeight.Text = item.Weight?.ToString() ?? "";
+        ItemEditAttack.Text = item.Attack?.ToString() ?? "";
+        ItemEditMagicAttack.Text = item.MagicAttack?.ToString() ?? "";
+        ItemEditDefense.Text = item.Defense?.ToString() ?? "";
+        ItemEditRange.Text = item.Range?.ToString() ?? "";
+        ItemEditSlots.Text = item.Slots?.ToString() ?? "";
+        ItemEditEquipLevelMin.Text = item.EquipLevelMin?.ToString() ?? "";
+        ItemEditEquipLevelMax.Text = item.EquipLevelMax?.ToString() ?? "";
+        ItemEditWeaponLevel.Text = item.WeaponLevel?.ToString() ?? "";
+        ItemEditArmorLevel.Text = item.ArmorLevel?.ToString() ?? "";
+        SetComboByContent(ItemEditGender, item.Gender ?? "Both");
+        ItemEditView.Text = item.View?.ToString() ?? "";
+        ItemEditAliasName.Text = item.AliasName ?? "";
+        ItemEditRefineable.IsChecked = item.Refineable;
+        ItemEditGradable.IsChecked = item.Gradable;
+
+        PopulateItemEditJobCheckboxes(item.Jobs ?? new Dictionary<string, bool>());
+        PopulateItemEditLocationCheckboxes(item.Locations ?? new Dictionary<string, bool>());
+
         DetailDescription.Text = App.ItemInfoDescriptions.TryGetValue(item.Id, out var desc) ? desc : "";
-        DetailDescription.IsReadOnly = true;
         _originalItemScript = item.Script ?? "";
-        DetailScript.Text = _originalItemScript;
-        DetailScript.IsReadOnly = false;
+        if (ItemEditBonusCombo != null)
+            ItemEditBonusCombo.ItemsSource = BonusEffectRegistry.All;
+        _itemBonusList.Clear();
+        _itemBonusList.AddRange(BonusEffectRegistry.ParseScript(item.Script));
+        RefreshItemBonusListUI();
+        ItemEditScript.Text = item.Script ?? "";
+        ItemEditEquipScript.Text = item.EquipScript ?? "";
+        ItemEditUnEquipScript.Text = item.UnEquipScript ?? "";
+
         SaveButton.Visibility = Visibility.Visible;
         SaveButton.Content = "SAVE";
+        if (ItemDeleteButton != null)
+            ItemDeleteButton.Visibility = Visibility.Visible;
         if (ExtractAllRelatedButton != null)
             ExtractAllRelatedButton.Visibility = Visibility.Collapsed;
         if (OpenInGrfEditorButton != null)
             OpenInGrfEditorButton.Visibility = Visibility.Collapsed;
         ItemDiffExpander.Visibility = Visibility.Visible;
         ItemDiffTextBox.Text = "";
-        ItemDiffTextBox.Text = "";
 
-        // Try loading item sprite animation first (from extracted assets or GRF)
+        LoadItemPreview(item);
+
+        if (App.ItemPathService != null && ItemRelatedFilesListBox != null && ItemRelatedFilesExpander != null)
+        {
+            var related = App.ItemPathService.GetRelatedPaths(item);
+            ItemRelatedFilesListBox.ItemsSource = related.Select(r => $"{r.Label}: {r.Path}").ToList();
+            ItemRelatedFilesExpander.Visibility = related.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        PopulateItemReferences(item.Id, item.AegisName ?? "");
+    }
+
+    private static void SetComboByContent(System.Windows.Controls.ComboBox? combo, string content)
+    {
+        if (combo == null || string.IsNullOrEmpty(content)) return;
+        for (int i = 0; i < combo.Items.Count; i++)
+        {
+            if (combo.Items[i] is ComboBoxItem cbi && (cbi.Content?.ToString() ?? "").Equals(content, StringComparison.OrdinalIgnoreCase))
+            {
+                combo.SelectedIndex = i;
+                return;
+            }
+        }
+        combo.Text = content;
+    }
+
+    private void PopulateItemEditJobCheckboxes(Dictionary<string, bool> jobs)
+    {
+        if (ItemEditJobsPanel == null) return;
+        ItemEditJobsPanel.Children.Clear();
+        foreach (var job in _jobNames)
+        {
+            var cb = new System.Windows.Controls.CheckBox { Content = job, Margin = new Thickness(0, 2, 12, 2) };
+            cb.IsChecked = jobs != null && jobs.TryGetValue(job, out var v) && v;
+            ItemEditJobsPanel.Children.Add(cb);
+        }
+    }
+
+    private void PopulateItemEditLocationCheckboxes(Dictionary<string, bool> locations)
+    {
+        if (ItemEditLocationsPanel == null) return;
+        ItemEditLocationsPanel.Children.Clear();
+        foreach (var loc in _locationNames)
+        {
+            var cb = new System.Windows.Controls.CheckBox { Content = loc, Margin = new Thickness(0, 2, 12, 2) };
+            cb.IsChecked = locations != null && locations.TryGetValue(loc, out var v) && v;
+            ItemEditLocationsPanel.Children.Add(cb);
+        }
+    }
+
+    private void LoadItemPreview(ItemEntry item)
+    {
         bool hasSpritePreview = false;
         if (App.SpriteLookupService != null)
         {
-            // Items use 아이템 (item) sprite folder, search by ID or AegisName
             var (actPath, sprPath) = App.SpriteLookupService.FindMonsterSprite(item.AegisName);
             if (actPath == null && sprPath == null)
-            {
-                // Also try by numeric ID (item sprites are often named by ID)
                 (actPath, sprPath) = App.SpriteLookupService.FindMonsterSprite(item.Id.ToString());
-            }
             if (actPath != null || sprPath != null)
             {
                 var (actData, sprData) = App.SpriteLookupService.GetSpriteData(actPath, sprPath);
@@ -1185,23 +1296,11 @@ public partial class MainWindow : Window
                 }
             }
         }
-
-        // Fall back to static item icon
         if (!hasSpritePreview)
         {
             SetPreviewMode(PreviewMode.Image);
             CenterPreviewImage.Source = LoadItemIcon(item);
         }
-
-        if (App.ItemPathService != null && ItemRelatedFilesListBox != null && ItemRelatedFilesExpander != null)
-        {
-            var related = App.ItemPathService.GetRelatedPaths(item);
-            ItemRelatedFilesListBox.ItemsSource = related.Select(r => $"{r.Label}: {r.Path}").ToList();
-            ItemRelatedFilesExpander.Visibility = related.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
-        }
-
-        // Populate "Referenced By" list
-        PopulateItemReferences(item.Id, item.AegisName);
     }
 
     private BitmapSource? LoadItemIcon(ItemEntry item)
@@ -1257,6 +1356,7 @@ public partial class MainWindow : Window
 
     private void ShowAssetDetails(AssetEntry entry)
     {
+        _currentItemForEdit = null;
         var path = entry.Path ?? "";
         var displayName = entry.DisplayName ?? path;
         if (App.ItemPathService != null && App.ItemPathService.IsItemRelatedPath(path))
@@ -1265,15 +1365,18 @@ public partial class MainWindow : Window
             if (item != null)
                 displayName = $"{displayName} — Item: {item.DisplayName} (ID {item.Id})";
         }
-        DetailName.Text = "NAME: " + displayName;
-        DetailId.Text = "ID: —";
-        DetailType.Text = "TYPE: —";
+        ItemEditName.Text = displayName;
+        ItemEditId.Text = "—";
+        ItemEditType.SelectedIndex = -1;
+        ItemEditType.Text = "—";
+        ItemEditSubType.Items.Clear();
+        ItemEditSubType.Text = "";
         DetailDescription.Text = "";
-        DetailDescription.IsReadOnly = true;
-        DetailScript.Text = "{},{},{}";
-        DetailScript.IsReadOnly = true;
+        ItemEditScript.Text = "{},{},{}";
         SaveButton.Visibility = Visibility.Collapsed;
         SaveButton.Content = "SAVE";
+        if (ItemDeleteButton != null)
+            ItemDeleteButton.Visibility = Visibility.Collapsed;
         if (ExtractAllRelatedButton != null)
             ExtractAllRelatedButton.Visibility = Visibility.Collapsed;
         if (OpenInGrfEditorButton != null)
@@ -1340,48 +1443,48 @@ public partial class MainWindow : Window
     private void ShowExtractedAssetDetails(Models.ExtractedAssetEntry entry)
     {
         _currentExtractedAsset = entry;
-        DetailName.Text = "NAME: " + entry.BaseName;
-        DetailId.Text = "ID: —";
-        DetailType.Text = "TYPE: Suggested = " + entry.SuggestedCategory;
-        DetailDescription.Text =
-            "Folder: " + entry.FolderPath + Environment.NewLine +
-            "Data folder: " + entry.DataRelativeFolder + Environment.NewLine +
-            "Variant: " + entry.VariantName + Environment.NewLine +
-            "Paired: " + entry.ExtensionsSummary;
-        DetailDescription.IsReadOnly = true;
-        DetailScript.Text = BuildExtractedTextPreview(entry);
-        DetailScript.IsReadOnly = true;
-        SaveButton.Visibility = Visibility.Visible;
-        SaveButton.Content = "SAVE TO LOCATION";
-        if (ExtractAllRelatedButton != null)
-            ExtractAllRelatedButton.Visibility = Visibility.Visible;
-        if (OpenInGrfEditorButton != null)
-            OpenInGrfEditorButton.Visibility = Visibility.Visible;
-        if (ExtractedAssignmentPanel != null)
-            ExtractedAssignmentPanel.Visibility = Visibility.Visible;
-        ItemDiffExpander.Visibility = Visibility.Collapsed;
-        if (ItemRelatedFilesListBox != null && ItemRelatedFilesExpander != null)
+
+        // Populate new panel metadata
+        if (ExtractedBaseName != null) ExtractedBaseName.Text = "Base: " + entry.BaseName;
+        if (ExtractedFolder != null) ExtractedFolder.Text = "Folder: " + entry.DataRelativeFolder;
+        if (ExtractedExtensions != null) ExtractedExtensions.Text = "Extensions: " + entry.ExtensionsSummary;
+        if (ExtractedCategory != null) ExtractedCategory.Text = "Suggested: " + entry.SuggestedCategory;
+
+        // Populate related files in new panel
+        if (ExtractedRelatedFilesListBox != null && ExtractedRelatedFilesExpander != null)
         {
             var sourceList = (entry.SourcePaths ?? new List<string>())
                 .Where(p => !string.IsNullOrWhiteSpace(p))
                 .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
                 .ToList();
-            ItemRelatedFilesListBox.ItemsSource = sourceList;
-            ItemRelatedFilesExpander.Header = $"Related files ({sourceList.Count})";
-            ItemRelatedFilesExpander.Visibility = sourceList.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
-            ItemRelatedFilesExpander.IsExpanded = sourceList.Count > 0;
+            ExtractedRelatedFilesListBox.ItemsSource = sourceList;
+            ExtractedRelatedFilesExpander.Header = $"Related files ({sourceList.Count})";
+            ExtractedRelatedFilesExpander.IsExpanded = sourceList.Count > 0;
         }
 
+        // Populate Assign-to combo with items/monsters/NPCs based on entity type
+        PopulateExtractedAssignTargets();
+
+        // Auto-select entity type from SuggestedCategory
+        if (ExtractedEntityTypeCombo != null)
+        {
+            var suggestedIndex = entry.SuggestedCategory switch
+            {
+                "MONSTERS" => 1,
+                "NPCs" => 2,
+                _ => 0
+            };
+            ExtractedEntityTypeCombo.SelectedIndex = suggestedIndex;
+        }
+
+        // Show entity-specific properties
+        UpdateExtractedEntityProperties(entry);
+
+        // Preview (static only)
         CenterPreviewImage.Source = null;
-        SpriteViewer.LoadFromData(null, null);
-
-        var hasSprite = TryPreviewRelatedFile(entry.SprPath);
         var hasStatic = TryPreviewRelatedFile(entry.PreviewPath);
-        if (!hasSprite && !hasStatic)
-            SetPreviewMode(PreviewMode.None);
-
-        PopulateAssignmentTargets();
-        UpdateAssignmentDestinationHint();
+        if (!hasStatic)
+            TryPreviewRelatedFile(entry.SprPath);
     }
 
     private static string BuildExtractedTextPreview(Models.ExtractedAssetEntry entry)
@@ -1582,21 +1685,49 @@ public partial class MainWindow : Window
     private void ClearDetails()
     {
         _currentExtractedAsset = null;
+        _currentItemForEdit = null;
         SetPreviewMode(PreviewMode.None);
         if (ItemRelatedFilesListBox != null)
             ItemRelatedFilesListBox.ItemsSource = null;
         if (ItemRelatedFilesExpander != null)
             ItemRelatedFilesExpander.Visibility = Visibility.Collapsed;
 
-        DetailName.Text = "NAME: (select an asset)";
-        DetailId.Text = "ID: —";
-        DetailType.Text = "TYPE: —";
+        ItemEditId.Text = "";
+        ItemEditAegisName.Text = "";
+        ItemEditName.Text = "";
+        ItemEditType.SelectedIndex = -1;
+        ItemEditSubType.Items.Clear();
+        ItemEditSubType.Text = "";
+        ItemEditBuy.Text = "";
+        ItemEditSell.Text = "";
+        ItemEditWeight.Text = "";
+        ItemEditAttack.Text = "";
+        ItemEditMagicAttack.Text = "";
+        ItemEditDefense.Text = "";
+        ItemEditRange.Text = "";
+        ItemEditSlots.Text = "";
+        ItemEditEquipLevelMin.Text = "";
+        ItemEditEquipLevelMax.Text = "";
+        ItemEditWeaponLevel.Text = "";
+        ItemEditArmorLevel.Text = "";
+        ItemEditGender.SelectedIndex = 0;
+        ItemEditView.Text = "";
+        ItemEditAliasName.Text = "";
+        ItemEditRefineable.IsChecked = false;
+        ItemEditGradable.IsChecked = false;
+        ItemEditJobsPanel?.Children.Clear();
+        ItemEditLocationsPanel?.Children.Clear();
         DetailDescription.Text = "";
-        DetailScript.Text = "{},{},{}";
-        DetailDescription.IsReadOnly = true;
-        DetailScript.IsReadOnly = true;
+        _itemBonusList.Clear();
+        RefreshItemBonusListUI();
+        ItemEditScript.Text = "";
+        ItemEditEquipScript.Text = "";
+        ItemEditUnEquipScript.Text = "";
+
         SaveButton.Visibility = Visibility.Collapsed;
         SaveButton.Content = "SAVE";
+        if (ItemDeleteButton != null)
+            ItemDeleteButton.Visibility = Visibility.Collapsed;
         if (ExtractAllRelatedButton != null)
             ExtractAllRelatedButton.Visibility = Visibility.Collapsed;
         if (OpenInGrfEditorButton != null)
@@ -1606,19 +1737,264 @@ public partial class MainWindow : Window
         ItemDiffExpander.Visibility = Visibility.Collapsed;
     }
 
+    private void ItemDeleteButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (AssetListBox.SelectedItem is not ItemEntry item)
+        {
+            System.Windows.MessageBox.Show(this, "Select an item to delete.", "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+        var path = App.ItemDbService?.GetSaveTargetPath(item);
+        if (string.IsNullOrEmpty(path) || !path.Contains("import", StringComparison.OrdinalIgnoreCase))
+        {
+            System.Windows.MessageBox.Show(this, "Cannot delete: this item is from the base database. Only custom items in db/import/ can be deleted.", "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+        if (item.SourceIndex < 0)
+        {
+            System.Windows.MessageBox.Show(this, "Cannot delete: item source index unknown.", "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+        var confirm = System.Windows.MessageBox.Show(this,
+            $"Delete item {item.Id} ({item.AegisName})?\n\nThis will remove it from db/import/item_db.yml.",
+            "RoDbEditor", MessageBoxButton.YesNo, MessageBoxImage.Question);
+        if (confirm != MessageBoxResult.Yes) return;
+
+        try
+        {
+            if (!(App.ItemDbService?.RemoveEntryAt(path, item.SourceIndex) ?? false))
+            {
+                System.Windows.MessageBox.Show(this, "Delete failed.", "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Error);
+                return;
+            }
+            var match = _operationsLog.Records.FirstOrDefault(r =>
+                r.EntityKind == OperationEntityKind.Item && r.Id == item.Id && r.FilePath == path);
+            if (match != null)
+                _operationsLog.RemoveRecord(match);
+            ReloadDataAfterFileChange();
+            RefreshOperationsList();
+            RefreshList();
+            ClearDetails();
+            AssetListBox.SelectedItem = null;
+            System.Windows.MessageBox.Show(this, "Item deleted.", "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            System.Windows.MessageBox.Show(this, "Delete failed: " + ex.Message, "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private void MonsterDeleteButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_currentMob == null)
+        {
+            System.Windows.MessageBox.Show(this, "Select a monster to delete.", "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+        if (string.IsNullOrEmpty(App.MobDbService?.GetImportMobDbPath()))
+        {
+            System.Windows.MessageBox.Show(this, "Cannot delete: no import mob_db.yml found.", "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+        var confirm = System.Windows.MessageBox.Show(this,
+            $"Delete monster {_currentMob.Id} ({_currentMob.AegisName})?\n\nThis will remove it from db/import/mob_db.yml (if present).",
+            "RoDbEditor", MessageBoxButton.YesNo, MessageBoxImage.Question);
+        if (confirm != MessageBoxResult.Yes) return;
+
+        try
+        {
+            if (!(App.MobDbService?.DeleteMobFromImportById(_currentMob.Id) ?? false))
+            {
+                System.Windows.MessageBox.Show(this, "Cannot delete: this monster is not in db/import/mob_db.yml. Only custom monsters can be deleted.", "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+            var path = App.MobDbService.GetImportMobDbPath();
+            var match = _operationsLog.Records.FirstOrDefault(r =>
+                r.EntityKind == OperationEntityKind.Mob && r.Id == _currentMob.Id && r.FilePath == path);
+            if (match != null)
+                _operationsLog.RemoveRecord(match);
+            ReloadDataAfterFileChange();
+            RefreshOperationsList();
+            RefreshList();
+            _currentMob = null;
+            _currentMobSnapshot = null;
+            MonsterDetailsPanel.Visibility = Visibility.Collapsed;
+            ItemDetailsPanel.Visibility = Visibility.Visible;
+            ClearDetails();
+            AssetListBox.SelectedItem = null;
+            System.Windows.MessageBox.Show(this, "Monster deleted.", "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            System.Windows.MessageBox.Show(this, "Delete failed: " + ex.Message, "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
     private void SaveButton_Click(object sender, RoutedEventArgs e)
     {
-        if (AssetListBox.SelectedItem is ItemEntry item)
+        if (AssetListBox.SelectedItem is ItemEntry selectedItem)
         {
-            item.Script = DetailScript.Text?.Trim();
-            App.ItemDbService.SaveItem(item);
-            System.Windows.MessageBox.Show(this, "Item saved.", "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Information);
+            SaveItemFromEditForm(selectedItem);
             return;
         }
 
         if (AssetListBox.SelectedItem is Models.ExtractedAssetEntry extracted)
         {
             SaveExtractedAssetSelection(extracted);
+        }
+    }
+
+    private List<string> ValidateItemEntry(ItemEntry item)
+    {
+        var warnings = new List<string>();
+
+        // Name length (ITEM_NAME_LENGTH = 50, max 49 usable)
+        if (!string.IsNullOrEmpty(item.AegisName) && item.AegisName.Length > 49)
+            warnings.Add($"AegisName is {item.AegisName.Length} chars (max 49). rAthena will truncate it.");
+        if (!string.IsNullOrEmpty(item.Name) && item.Name.Length > 49)
+            warnings.Add($"Name is {item.Name.Length} chars (max 49). rAthena will truncate it.");
+
+        // SubType cleanup
+        if (!string.IsNullOrEmpty(item.SubType) &&
+            item.Type != "Weapon" && item.Type != "Ammo" && item.Type != "Card")
+        {
+            warnings.Add($"SubType '{item.SubType}' cleared — only valid for Weapon/Ammo/Card.");
+            item.SubType = null;
+        }
+
+        // Numeric range checks
+        if (item.Slots.HasValue && (item.Slots.Value < 0 || item.Slots.Value > 4))
+            warnings.Add($"Slots={item.Slots.Value} out of range (0-4).");
+        if (item.WeaponLevel.HasValue && (item.WeaponLevel.Value < 0 || item.WeaponLevel.Value > 5))
+            warnings.Add($"WeaponLevel={item.WeaponLevel.Value} out of range (0-5).");
+        if (item.ArmorLevel.HasValue && (item.ArmorLevel.Value < 0 || item.ArmorLevel.Value > 2))
+            warnings.Add($"ArmorLevel={item.ArmorLevel.Value} out of range (0-2).");
+        if (item.Defense.HasValue && (item.Defense.Value < 0 || item.Defense.Value > 32767))
+            warnings.Add($"Defense={item.Defense.Value} out of range (0-32767).");
+        if (item.EquipLevelMin.HasValue && (item.EquipLevelMin.Value < 0 || item.EquipLevelMin.Value > 275))
+            warnings.Add($"EquipLevelMin={item.EquipLevelMin.Value} out of range (0-275).");
+        if (item.EquipLevelMax.HasValue && (item.EquipLevelMax.Value < 0 || item.EquipLevelMax.Value > 275))
+            warnings.Add($"EquipLevelMax={item.EquipLevelMax.Value} out of range (0-275).");
+        if (item.EquipLevelMin.HasValue && item.EquipLevelMax.HasValue &&
+            item.EquipLevelMax.Value > 0 && item.EquipLevelMax.Value < item.EquipLevelMin.Value)
+            warnings.Add($"EquipLevelMax ({item.EquipLevelMax.Value}) < EquipLevelMin ({item.EquipLevelMin.Value}).");
+
+        // Price exploit: buy/124 < sell/75 → rAthena forces sell to 1
+        if (item.Buy.HasValue && item.Sell.HasValue && item.Sell.Value > 0 && item.Buy.Value > 0)
+        {
+            if ((double)item.Buy.Value / 124.0 < (double)item.Sell.Value / 75.0)
+                warnings.Add($"Price exploit: Buy({item.Buy.Value})/124 < Sell({item.Sell.Value})/75. rAthena will force Sell=1.");
+        }
+
+        // Type-specific field conflicts
+        bool isWeapon = item.Type == "Weapon";
+        bool isAmmo = item.Type == "Ammo";
+        bool isArmor = item.Type == "Armor";
+        bool isShadow = item.Type == "ShadowGear";
+
+        if (item.Attack.HasValue && item.Attack.Value > 0 && !isWeapon && !isAmmo)
+        { warnings.Add("Attack cleared — only valid for Weapon/Ammo."); item.Attack = null; }
+        if (item.MagicAttack.HasValue && item.MagicAttack.Value > 0 && !isWeapon)
+        { warnings.Add("MagicAttack cleared — only valid for Weapon."); item.MagicAttack = null; }
+        if (item.Defense.HasValue && item.Defense.Value > 0 && !isArmor && !isShadow)
+        { warnings.Add("Defense cleared — only valid for Armor/ShadowGear."); item.Defense = null; }
+        if (item.Range.HasValue && item.Range.Value > 0 && !isWeapon)
+        { warnings.Add("Range cleared — only valid for Weapon."); item.Range = null; }
+        if (item.WeaponLevel.HasValue && item.WeaponLevel.Value > 0 && !isWeapon)
+        { warnings.Add("WeaponLevel cleared — only valid for Weapon."); item.WeaponLevel = null; }
+        if (item.ArmorLevel.HasValue && item.ArmorLevel.Value > 0 && !isArmor)
+        { warnings.Add("ArmorLevel cleared — only valid for Armor."); item.ArmorLevel = null; }
+
+        // Musical=Male, Whip=Female
+        if (isWeapon && item.SubType == "Musical" && item.Gender != "Male")
+        { warnings.Add("Musical instruments forced to Gender=Male."); item.Gender = "Male"; }
+        if (isWeapon && item.SubType == "Whip" && item.Gender != "Female")
+        { warnings.Add("Whips forced to Gender=Female."); item.Gender = "Female"; }
+
+        return warnings;
+    }
+
+    private void SaveItemFromEditForm(ItemEntry item)
+    {
+        if (App.ItemDbService == null) return;
+
+        item.AegisName = ItemEditAegisName?.Text?.Trim() ?? "";
+        item.Name = ItemEditName?.Text?.Trim() ?? "";
+        item.Type = (ItemEditType?.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? ItemEditType?.Text ?? "Etc";
+        item.SubType = (ItemEditSubType?.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? ItemEditSubType?.Text;
+        item.Buy = int.TryParse(ItemEditBuy?.Text, out var buy) ? buy : (int?)null;
+        item.Sell = int.TryParse(ItemEditSell?.Text, out var sell) ? sell : (int?)null;
+        item.Weight = int.TryParse(ItemEditWeight?.Text, out var wt) ? wt : (int?)null;
+        item.Attack = int.TryParse(ItemEditAttack?.Text, out var atk) ? atk : (int?)null;
+        item.MagicAttack = int.TryParse(ItemEditMagicAttack?.Text, out var ma) ? ma : (int?)null;
+        item.Defense = int.TryParse(ItemEditDefense?.Text, out var def) ? def : (int?)null;
+        item.Range = int.TryParse(ItemEditRange?.Text, out var r) ? r : (int?)null;
+        item.Slots = int.TryParse(ItemEditSlots?.Text, out var slots) ? slots : (int?)null;
+        item.EquipLevelMin = int.TryParse(ItemEditEquipLevelMin?.Text, out var elmin) ? elmin : (int?)null;
+        item.EquipLevelMax = int.TryParse(ItemEditEquipLevelMax?.Text, out var elmax) ? elmax : (int?)null;
+        item.WeaponLevel = int.TryParse(ItemEditWeaponLevel?.Text, out var wl) ? wl : (int?)null;
+        item.ArmorLevel = int.TryParse(ItemEditArmorLevel?.Text, out var al) ? al : (int?)null;
+        item.Gender = (ItemEditGender?.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "Both";
+        item.View = int.TryParse(ItemEditView?.Text, out var v) ? v : (int?)null;
+        item.AliasName = ItemEditAliasName?.Text?.Trim();
+        item.Refineable = ItemEditRefineable?.IsChecked == true;
+        item.Gradable = ItemEditGradable?.IsChecked == true;
+        item.Script = string.IsNullOrWhiteSpace(ItemEditScript?.Text) ? null : ItemEditScript.Text.Trim();
+        item.EquipScript = string.IsNullOrWhiteSpace(ItemEditEquipScript?.Text) ? null : ItemEditEquipScript.Text.Trim();
+        item.UnEquipScript = string.IsNullOrWhiteSpace(ItemEditUnEquipScript?.Text) ? null : ItemEditUnEquipScript.Text.Trim();
+
+        item.Jobs = new Dictionary<string, bool>();
+        if (ItemEditJobsPanel != null)
+        {
+            foreach (var child in ItemEditJobsPanel.Children)
+            {
+                if (child is System.Windows.Controls.CheckBox cb && cb.IsChecked == true)
+                    item.Jobs[cb.Content?.ToString() ?? ""] = true;
+            }
+        }
+        item.Locations = new Dictionary<string, bool>();
+        if (ItemEditLocationsPanel != null)
+        {
+            foreach (var child in ItemEditLocationsPanel.Children)
+            {
+                if (child is System.Windows.Controls.CheckBox cb && cb.IsChecked == true)
+                    item.Locations[cb.Content?.ToString() ?? ""] = true;
+            }
+        }
+
+        // --- rAthena Validation ---
+        var validationWarnings = ValidateItemEntry(item);
+        if (validationWarnings.Count > 0)
+        {
+            var msg = "Issues found and auto-corrected:\n\n"
+                + string.Join("\n", validationWarnings.Select((w, i) => $"  {i + 1}. {w}"))
+                + "\n\nContinue saving?";
+            var result = System.Windows.MessageBox.Show(this, msg, "rAthena Validation",
+                MessageBoxButton.YesNo, MessageBoxImage.Warning);
+            if (result != MessageBoxResult.Yes) return;
+        }
+
+        try
+        {
+            var path = App.ItemDbService.GetSaveTargetPath(item);
+            byte[]? snapshot = null;
+            if (!string.IsNullOrEmpty(path) && File.Exists(path) && item.SourceIndex >= 0)
+                snapshot = File.ReadAllBytes(path);
+
+            var result = App.ItemDbService.SaveItem(item);
+            if (result != null)
+            {
+                if (result.IsUpdate)
+                    _operationsLog.RecordUpdated(OperationEntityKind.Item, item.Id, item.AegisName, item.Name ?? "", result.Path, result.BodyIndex, snapshot);
+                else
+                    _operationsLog.RecordAdded(OperationEntityKind.Item, item.Id, item.AegisName, item.Name ?? "", result.Path, result.BodyIndex);
+                RefreshOperationsList();
+            }
+            System.Windows.MessageBox.Show(this, "Item saved.", "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            System.Windows.MessageBox.Show(this, "Error saving item: " + ex.Message, "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
 
@@ -1732,7 +2108,13 @@ public partial class MainWindow : Window
 
     private string? TryGetSelectedRelatedFilePath()
     {
-        if (ItemRelatedFilesListBox?.SelectedItem is not string selected)
+        string? selected = null;
+        if (_currentExtractedAsset != null && ExtractedRelatedFilesListBox?.SelectedItem is string extSel)
+            selected = extSel;
+        else if (ItemRelatedFilesListBox?.SelectedItem is string itemSel)
+            selected = itemSel;
+
+        if (string.IsNullOrWhiteSpace(selected))
             return null;
 
         if (File.Exists(selected))
@@ -2315,7 +2697,7 @@ public partial class MainWindow : Window
         {
             if (exp == ItemDiffExpander)
             {
-                var current = DetailScript.Text ?? "";
+                var current = ItemEditScript?.Text ?? "";
                 ItemDiffTextBox.Text = SimpleDiff.HasChanges(_originalItemScript, current)
                     ? SimpleDiff.ToUnifiedDiff(_originalItemScript, current)
                     : " (no changes)";
@@ -2359,7 +2741,7 @@ public partial class MainWindow : Window
             FileName = $"item_{item.Id}_{item.AegisName}.yml"
         };
         if (dlg.ShowDialog(this) != true) return;
-        var script = DetailScript.Text ?? item.Script ?? "";
+        var script = ItemEditScript?.Text ?? item.Script ?? "";
         var yaml = $"# Item {item.Id} {item.DisplayName}\nId: {item.Id}\nAegisName: {item.AegisName}\nScript: {script}\n";
         File.WriteAllText(dlg.FileName, yaml);
         System.Windows.MessageBox.Show(this, "Exported.", "RoDbEditor", MessageBoxButton.OK);
@@ -2809,6 +3191,802 @@ public partial class MainWindow : Window
         {
             System.Windows.MessageBox.Show(this, "Error reading file: " + ex.Message, "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Error);
         }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // Extracted Asset Properties Panel — event handlers (Steps 1/4/5)
+    // ═══════════════════════════════════════════════════════════════════
+
+    private readonly List<(string bonusType, int value)> _extractedBonusList = new();
+
+    private void PopulateExtractedAssignTargets()
+    {
+        if (ExtractedAssignTargetCombo == null) return;
+        var options = new List<AssignmentTargetOption>();
+        var entityType = GetExtractedEntityType();
+        switch (entityType)
+        {
+            case SpriteAssignmentEntityType.Npc:
+                if (App.NpcIndexService?.All != null)
+                    options.AddRange(App.NpcIndexService.All.Select(n => new AssignmentTargetOption
+                    {
+                        Payload = n,
+                        Key = string.IsNullOrWhiteSpace(n.SpriteId) ? n.Name : n.SpriteId,
+                        Display = $"{n.Name} [{n.SpriteId ?? "—"}] ({Path.GetFileName(n.FilePath)})"
+                    }));
+                break;
+            case SpriteAssignmentEntityType.Monster:
+                if (App.MobDbService?.Mobs != null)
+                    options.AddRange(App.MobDbService.Mobs.Select(m => new AssignmentTargetOption
+                    {
+                        Payload = m,
+                        Key = m.AegisName,
+                        Display = $"{m.Id} - {m.DisplayName} [{m.AegisName}]"
+                    }));
+                break;
+            default:
+                if (App.ItemDbService?.Items != null)
+                    options.AddRange(App.ItemDbService.Items.Select(i => new AssignmentTargetOption
+                    {
+                        Payload = i,
+                        Key = i.AegisName,
+                        Display = $"{i.Id} - {i.DisplayName} [{i.AegisName}]"
+                    }));
+                break;
+        }
+        ExtractedAssignTargetCombo.ItemsSource = options.OrderBy(o => o.Display, StringComparer.OrdinalIgnoreCase).Take(2000).ToList();
+        ExtractedAssignTargetCombo.DisplayMemberPath = nameof(AssignmentTargetOption.Display);
+        if (options.Count > 0 && ExtractedAssignTargetCombo.SelectedIndex < 0)
+            ExtractedAssignTargetCombo.SelectedIndex = 0;
+    }
+
+    private void ExtractedEntityTypeCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        PopulateExtractedAssignTargets();
+        UpdateExtractedEntityProperties(_currentExtractedAsset);
+    }
+
+    private void UpdateExtractedEntityProperties(Models.ExtractedAssetEntry? entry)
+    {
+        if (ExtractedItemPropertiesPanel == null) return;
+
+        var entityType = GetExtractedEntityType();
+        ExtractedItemPropertiesPanel.Visibility = entityType == SpriteAssignmentEntityType.Item
+            ? Visibility.Visible : Visibility.Collapsed;
+        if (ExtractedMonsterPropertiesPanel != null)
+            ExtractedMonsterPropertiesPanel.Visibility = entityType == SpriteAssignmentEntityType.Monster
+                ? Visibility.Visible : Visibility.Collapsed;
+        if (ExtractedNpcPropertiesPanel != null)
+            ExtractedNpcPropertiesPanel.Visibility = entityType == SpriteAssignmentEntityType.Npc
+                ? Visibility.Visible : Visibility.Collapsed;
+
+        // Update destination hint
+        if (ExtractedDestinationHint != null)
+        {
+            var folder = entityType switch
+            {
+                SpriteAssignmentEntityType.Npc => @"data\sprite\npc",
+                SpriteAssignmentEntityType.Monster => @"data\sprite\monster",
+                _ => @"data\sprite\item"
+            };
+            ExtractedDestinationHint.Text = $"Destination: {folder}";
+        }
+
+        // Pre-populate fields
+        if (entityType == SpriteAssignmentEntityType.Item)
+            PrepopulateItemFields(entry);
+        else if (entityType == SpriteAssignmentEntityType.Monster)
+            PrepopulateMonsterFields(entry);
+        else
+            PrepopulateNpcFields(entry);
+    }
+
+    private SpriteAssignmentEntityType GetExtractedEntityType()
+    {
+        if (ExtractedEntityTypeCombo?.SelectedItem is ComboBoxItem item &&
+            item.Content is string raw)
+        {
+            var key = raw.Trim().ToUpperInvariant();
+            if (key.Contains("MONSTER")) return SpriteAssignmentEntityType.Monster;
+            if (key.Contains("NPC")) return SpriteAssignmentEntityType.Npc;
+        }
+        return SpriteAssignmentEntityType.Item;
+    }
+
+    private void PrepopulateItemFields(Models.ExtractedAssetEntry? entry)
+    {
+        if (ExtItemId == null) return;
+        var nextId = App.ItemDbService?.GetNextCustomItemId() ?? 50000;
+        ExtItemId.Text = nextId.ToString();
+        var baseName = entry?.BaseName ?? "Custom_Item";
+        var aegis = string.Concat(baseName.Select(c => char.IsLetterOrDigit(c) || c == '_' ? c : '_'));
+        ExtItemAegisName.Text = aegis;
+        ExtItemName.Text = baseName.Replace('_', ' ');
+        ExtItemBuy.Text = "0";
+        ExtItemSell.Text = "0";
+        ExtItemWeight.Text = "10";
+        ExtItemAttack.Text = "0";
+        ExtItemDefense.Text = "0";
+        ExtItemReqLevel.Text = "1";
+        ExtItemSlots.Text = "0";
+        if (ExtItemMagicAttack != null) ExtItemMagicAttack.Text = "0";
+        if (ExtItemRange != null) ExtItemRange.Text = "0";
+        if (ExtItemEquipLevelMax != null) ExtItemEquipLevelMax.Text = "0";
+        if (ExtItemWeaponLevel != null) ExtItemWeaponLevel.Text = "0";
+        if (ExtItemArmorLevel != null) ExtItemArmorLevel.Text = "0";
+        if (ExtItemRefineable != null) ExtItemRefineable.IsChecked = false;
+        if (ExtItemGradable != null) ExtItemGradable.IsChecked = false;
+        if (ExtItemView != null) ExtItemView.Text = "0";
+        if (ExtItemAliasName != null) ExtItemAliasName.Text = "";
+        if (ExtItemEquipScript != null) ExtItemEquipScript.Text = "";
+        if (ExtItemUnEquipScript != null) ExtItemUnEquipScript.Text = "";
+
+        // Populate bonus combo
+        if (ExtItemBonusCombo != null)
+            ExtItemBonusCombo.ItemsSource = BonusEffectRegistry.All;
+
+        // Populate Jobs checkboxes
+        PopulateExtractedJobCheckboxes();
+        PopulateExtractedLocationCheckboxes();
+
+        // Clear bonus list
+        _extractedBonusList.Clear();
+        RefreshExtractedBonusListUI();
+        if (ExtItemScript != null) ExtItemScript.Text = "";
+    }
+
+    private void PrepopulateMonsterFields(Models.ExtractedAssetEntry? entry)
+    {
+        if (ExtMobId == null) return;
+        ExtMobId.Text = "3000";
+        var baseName = entry?.BaseName ?? "Custom_Monster";
+        var aegis = string.Concat(baseName.Select(c => char.IsLetterOrDigit(c) || c == '_' ? c : '_'));
+        ExtMobAegisName.Text = aegis.ToUpperInvariant();
+        ExtMobName.Text = baseName.Replace('_', ' ');
+        ExtMobLevel.Text = "1";
+        ExtMobHp.Text = "100";
+        ExtMobBaseExp.Text = "10";
+        ExtMobJobExp.Text = "5";
+    }
+
+    private void PrepopulateNpcFields(Models.ExtractedAssetEntry? entry)
+    {
+        if (ExtNpcName == null) return;
+        var baseName = entry?.BaseName ?? "Custom_NPC";
+        ExtNpcName.Text = baseName.Replace('_', ' ');
+        ExtNpcSpriteId.Text = baseName;
+        ExtNpcMap.Text = "prontera";
+    }
+
+    private static readonly string[] _jobNames = new[]
+    {
+        "All", "Acolyte", "Alchemist", "Archer", "Assassin", "BardDancer",
+        "Blacksmith", "Crusader", "Gunslinger", "Hunter", "KagerouOboro",
+        "Knight", "Mage", "Merchant", "Monk", "Ninja", "Novice", "Priest",
+        "Rebellion", "Rogue", "Sage", "SoulLinker", "StarGladiator",
+        "Summoner", "SuperNovice", "Swordman", "Taekwon", "Thief", "Wizard"
+    };
+
+    private static readonly string[] _locationNames = new[]
+    {
+        "Head_Top", "Head_Mid", "Head_Low", "Armor", "Right_Hand", "Left_Hand",
+        "Garment", "Shoes", "Right_Accessory", "Left_Accessory", "Both_Accessory",
+        "Costume_Head_Top", "Costume_Head_Mid", "Costume_Head_Low", "Costume_Garment",
+        "Ammo",
+        "Shadow_Armor", "Shadow_Weapon", "Shadow_Shield", "Shadow_Shoes",
+        "Shadow_Right_Accessory", "Shadow_Left_Accessory"
+    };
+
+    private void PopulateExtractedJobCheckboxes()
+    {
+        if (ExtItemJobsPanel == null) return;
+        ExtItemJobsPanel.Children.Clear();
+        foreach (var job in _jobNames)
+        {
+            var cb = new System.Windows.Controls.CheckBox { Content = job, Margin = new Thickness(0, 2, 12, 2) };
+            if (job == "All") cb.IsChecked = true;
+            ExtItemJobsPanel.Children.Add(cb);
+        }
+    }
+
+    private void PopulateExtractedLocationCheckboxes()
+    {
+        if (ExtItemLocationsPanel == null) return;
+        ExtItemLocationsPanel.Children.Clear();
+        foreach (var loc in _locationNames)
+        {
+            var cb = new System.Windows.Controls.CheckBox { Content = loc, Margin = new Thickness(0, 2, 12, 2) };
+            ExtItemLocationsPanel.Children.Add(cb);
+        }
+    }
+
+    private void ExtItemType_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (ExtItemSubType == null) return;
+        var type = (ExtItemType?.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "";
+        ExtItemSubType.Items.Clear();
+        ExtItemSubType.Text = "";
+        if (type == "Weapon")
+        {
+            foreach (var st in new[] { "Fist", "Dagger", "1hSword", "2hSword", "1hSpear", "2hSpear",
+                "1hAxe", "2hAxe", "Mace", "2hMace", "Staff", "Bow", "Knuckle", "Musical",
+                "Whip", "Book", "Katar", "Revolver", "Rifle", "Gatling", "Shotgun", "Grenade", "Huuma", "2hStaff" })
+                ExtItemSubType.Items.Add(new ComboBoxItem { Content = st });
+        }
+        else if (type == "Ammo")
+        {
+            foreach (var st in new[] { "Arrow", "Dagger", "Bullet", "Shell", "Grenade",
+                "Shuriken", "Kunai", "Cannonball", "ThrowWeapon" })
+                ExtItemSubType.Items.Add(new ComboBoxItem { Content = st });
+        }
+        else if (type == "Card")
+        {
+            foreach (var st in new[] { "Normal", "Enchant" })
+                ExtItemSubType.Items.Add(new ComboBoxItem { Content = st });
+        }
+        // Armor and other types: SubType not valid (rAthena rejects it). Use Locations for equip slot.
+    }
+
+    private void PopulateItemEditSubTypes()
+    {
+        if (ItemEditSubType == null) return;
+        var type = (ItemEditType?.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? ItemEditType?.Text ?? "";
+        ItemEditSubType.Items.Clear();
+        ItemEditSubType.Text = "";
+        if (type == "Weapon")
+        {
+            foreach (var st in new[] { "Fist", "Dagger", "1hSword", "2hSword", "1hSpear", "2hSpear",
+                "1hAxe", "2hAxe", "Mace", "2hMace", "Staff", "Bow", "Knuckle", "Musical",
+                "Whip", "Book", "Katar", "Revolver", "Rifle", "Gatling", "Shotgun", "Grenade", "Huuma", "2hStaff" })
+                ItemEditSubType.Items.Add(new ComboBoxItem { Content = st });
+        }
+        else if (type == "Ammo")
+        {
+            foreach (var st in new[] { "Arrow", "Dagger", "Bullet", "Shell", "Grenade",
+                "Shuriken", "Kunai", "Cannonball", "ThrowWeapon" })
+                ItemEditSubType.Items.Add(new ComboBoxItem { Content = st });
+        }
+        else if (type == "Card")
+        {
+            foreach (var st in new[] { "Normal", "Enchant" })
+                ItemEditSubType.Items.Add(new ComboBoxItem { Content = st });
+        }
+        // Armor and other types: SubType not valid (rAthena rejects it). Use Locations for equip slot.
+    }
+
+    private void ItemEditType_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        PopulateItemEditSubTypes();
+    }
+
+    private void ItemEditAddBonus_Click(object sender, RoutedEventArgs e)
+    {
+        if (ItemEditBonusCombo?.SelectedItem is not BonusEffectDefinition def) return;
+        int.TryParse(ItemEditBonusValue?.Text, out var val);
+        _itemBonusList.Add((def.BonusConstant, val));
+        RefreshItemBonusListUI();
+    }
+
+    private void ItemEditRemoveBonus_Click(object sender, RoutedEventArgs e)
+    {
+        if (ItemEditBonusList == null) return;
+        var idx = ItemEditBonusList.SelectedIndex;
+        if (idx >= 0 && idx < _itemBonusList.Count)
+        {
+            _itemBonusList.RemoveAt(idx);
+            RefreshItemBonusListUI();
+        }
+    }
+
+    private void RefreshItemBonusListUI()
+    {
+        if (ItemEditBonusList == null) return;
+        ItemEditBonusList.ItemsSource = null;
+        ItemEditBonusList.ItemsSource = _itemBonusList
+            .Select(b =>
+            {
+                var def = BonusEffectRegistry.All.FirstOrDefault(d => d.BonusConstant == b.bonusType);
+                var label = def != null ? def.DisplayName : b.bonusType;
+                return def != null && !def.TakesValue ? label : $"{label} {b.value}";
+            })
+            .ToList();
+        var script = BonusEffectRegistry.BuildScript(_itemBonusList);
+        if (ItemEditScript != null)
+            ItemEditScript.Text = script;
+    }
+
+    private void ExtItemAddBonus_Click(object sender, RoutedEventArgs e)
+    {
+        if (ExtItemBonusCombo?.SelectedItem is not BonusEffectDefinition def) return;
+        int.TryParse(ExtItemBonusValue?.Text, out var val);
+        _extractedBonusList.Add((def.BonusConstant, val));
+        RefreshExtractedBonusListUI();
+    }
+
+    private void ExtItemRemoveBonus_Click(object sender, RoutedEventArgs e)
+    {
+        if (ExtItemBonusList == null) return;
+        var idx = ExtItemBonusList.SelectedIndex;
+        if (idx >= 0 && idx < _extractedBonusList.Count)
+        {
+            _extractedBonusList.RemoveAt(idx);
+            RefreshExtractedBonusListUI();
+        }
+    }
+
+    private void RefreshExtractedBonusListUI()
+    {
+        if (ExtItemBonusList == null) return;
+        ExtItemBonusList.ItemsSource = null;
+        ExtItemBonusList.ItemsSource = _extractedBonusList
+            .Select(b =>
+            {
+                var def = BonusEffectRegistry.All.FirstOrDefault(d => d.BonusConstant == b.bonusType);
+                var label = def != null ? def.DisplayName : b.bonusType;
+                return def != null && !def.TakesValue ? label : $"{label} {b.value}";
+            })
+            .ToList();
+
+        var script = BonusEffectRegistry.BuildScript(_extractedBonusList);
+        if (ExtItemScriptPreview != null)
+            ExtItemScriptPreview.Text = script;
+        if (ExtItemScript != null)
+            ExtItemScript.Text = script;
+    }
+
+    private void ExtractedAssignSpriteButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_currentExtractedAsset == null)
+        {
+            System.Windows.MessageBox.Show(this, "Select an extracted asset first.", "RoDbEditor",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        var entry = _currentExtractedAsset;
+        if (string.IsNullOrWhiteSpace(entry.SprPath) && string.IsNullOrWhiteSpace(entry.ActPath))
+        {
+            System.Windows.MessageBox.Show(this, "No .spr/.act file found for this asset.", "RoDbEditor",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        var entityType = GetExtractedEntityType();
+        var selectedTarget = ExtractedAssignTargetCombo?.SelectedItem as AssignmentTargetOption;
+        var targetKey = selectedTarget?.Key;
+        if (string.IsNullOrWhiteSpace(targetKey))
+        {
+            targetKey = entityType switch
+            {
+                SpriteAssignmentEntityType.Item => ExtItemAegisName?.Text?.Trim(),
+                SpriteAssignmentEntityType.Monster => ExtMobAegisName?.Text?.Trim(),
+                SpriteAssignmentEntityType.Npc => ExtNpcSpriteId?.Text?.Trim(),
+                _ => null
+            };
+        }
+        if (string.IsNullOrWhiteSpace(targetKey))
+            targetKey = BuildSpriteKeyFromAssetBase(entry.BaseName);
+        if (entityType == SpriteAssignmentEntityType.Monster)
+            targetKey = BuildUniqueMonsterAegis(targetKey);
+
+        var clientRoot = GetClientRootForAssignment();
+        if (string.IsNullOrWhiteSpace(clientRoot) || !Directory.Exists(clientRoot))
+        {
+            System.Windows.MessageBox.Show(this,
+                "Client root not found. Open a GRF first (File > Open GRF) or ensure the client folder exists.",
+                "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        var relatedPaths = new List<string>();
+        if (ExtractedIncludeRelatedCheckBox?.IsChecked == true && entry.SourcePaths != null)
+        {
+            var includeExts = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { ".wav", ".bmp", ".png", ".tga", ".jpg", ".jpeg", ".pal" };
+            relatedPaths.AddRange(entry.SourcePaths.Where(p =>
+                !string.IsNullOrWhiteSpace(p) && includeExts.Contains(Path.GetExtension(p))));
+        }
+
+        var req = new SpriteAssignmentRequest
+        {
+            EntityType = entityType,
+            TargetKey = targetKey,
+            SourceActPath = entry.ActPath ?? "",
+            SourceSprPath = entry.SprPath ?? "",
+            RelatedPaths = relatedPaths,
+            ClientRootPath = clientRoot
+        };
+
+        try
+        {
+            var result = App.SpriteAssignmentService?.ExecuteAssignment(req);
+            if (result == null)
+            {
+                System.Windows.MessageBox.Show(this, "SpriteAssignmentService not available.", "RoDbEditor");
+                return;
+            }
+            if (result.Success)
+            {
+                var designation = "";
+                if (entityType == SpriteAssignmentEntityType.Npc && selectedTarget?.Payload is NpcScriptEntry npc)
+                    designation = App.EntityDesignationService.ApplyNpcSprite(npc, targetKey);
+                else if (entityType == SpriteAssignmentEntityType.Monster && selectedTarget?.Payload is MobEntry mob)
+                {
+                    var custom = App.EntityDesignationService.CreateOrUpdateCustomMonsterFrom(mob, targetKey);
+                    designation = $"Custom monster created: {custom.Id} ({custom.AegisName}) in db/import/mob_db.yml";
+                }
+                else
+                    designation = $"Copied to data\\sprite\\{entityType.ToString().ToLowerInvariant()}";
+                System.Windows.MessageBox.Show(this,
+                    $"Sprite assigned successfully.\nCopied {result.CopiedFiles?.Count ?? 0} files.\n{designation}\nManifest: {result.ManifestPath}",
+                    "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+            else
+                System.Windows.MessageBox.Show(this,
+                    "Assignment failed:\n" + string.Join("\n", result.Errors ?? new List<string>()),
+                    "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        catch (Exception ex)
+        {
+            System.Windows.MessageBox.Show(this, "Error during assignment: " + ex.Message, "RoDbEditor",
+                MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private static string? GetClientRootForAssignment()
+    {
+        var firstGrf = App.GrfService?.GrfPaths?.FirstOrDefault();
+        if (!string.IsNullOrWhiteSpace(firstGrf) && File.Exists(firstGrf))
+            return Path.GetDirectoryName(firstGrf);
+        var defaultClient = @"F:\MMORPG\RAGNAROK ONLINE\client";
+        return Directory.Exists(defaultClient) ? defaultClient : null;
+    }
+
+    private void ExtractedViewInGrfButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (AssetListBox.SelectedItem is not Models.ExtractedAssetEntry entry)
+        {
+            System.Windows.MessageBox.Show(this, "Select an extracted asset first.", "RoDbEditor",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        var target = TryGetSelectedRelatedFilePath()
+                     ?? entry.SprPath
+                     ?? entry.ActPath
+                     ?? entry.PreviewPath
+                     ?? entry.SourcePaths?.FirstOrDefault();
+
+        if (string.IsNullOrWhiteSpace(target) || !File.Exists(target))
+        {
+            System.Windows.MessageBox.Show(this, "No file to open.", "RoDbEditor",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        var editorPath = FindGrfEditorExecutable();
+        if (!string.IsNullOrEmpty(editorPath))
+        {
+            try
+            {
+                var psi = new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = editorPath,
+                    UseShellExecute = true,
+                    Arguments = $"\"{target}\""
+                };
+                System.Diagnostics.Process.Start(psi);
+            }
+            catch (Exception ex)
+            {
+                System.Windows.MessageBox.Show(this, "Failed to launch GRF Editor: " + ex.Message,
+                    "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+        else
+        {
+            try
+            {
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = "explorer.exe",
+                    UseShellExecute = true,
+                    Arguments = $"/select,\"{target}\""
+                });
+            }
+            catch (Exception ex)
+            {
+                System.Windows.MessageBox.Show(this, "Failed to open Explorer: " + ex.Message,
+                    "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+    }
+
+    private void ExtractedSaveButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_currentExtractedAsset == null)
+        {
+            System.Windows.MessageBox.Show(this, "Select an extracted asset first.", "RoDbEditor",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        var entityType = GetExtractedEntityType();
+        switch (entityType)
+        {
+            case SpriteAssignmentEntityType.Item:
+                SaveExtractedAsItemEntry();
+                break;
+            case SpriteAssignmentEntityType.Monster:
+                SaveExtractedAsMobEntry();
+                break;
+            case SpriteAssignmentEntityType.Npc:
+                System.Windows.MessageBox.Show(this,
+                    "NPC scripts are complex and cannot be auto-generated.\nUse the Assign Sprite button to install the sprite, then create the NPC script manually.",
+                    "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Information);
+                break;
+        }
+    }
+
+    private void SaveExtractedAsItemEntry()
+    {
+        if (App.ItemDbService == null)
+        {
+            System.Windows.MessageBox.Show(this, "ItemDbService not available.", "RoDbEditor");
+            return;
+        }
+
+        var item = new ItemEntry
+        {
+            Id = int.TryParse(ExtItemId?.Text, out var id) ? id : App.ItemDbService.GetNextCustomItemId(),
+            AegisName = ExtItemAegisName?.Text?.Trim() ?? "Custom_Item",
+            Name = ExtItemName?.Text?.Trim() ?? "Custom Item",
+            Type = (ExtItemType?.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? ExtItemType?.Text ?? "Etc",
+            SubType = (ExtItemSubType?.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? ExtItemSubType?.Text,
+            Buy = int.TryParse(ExtItemBuy?.Text, out var buy) ? buy : (int?)null,
+            Sell = int.TryParse(ExtItemSell?.Text, out var sell) ? sell : (int?)null,
+            Weight = int.TryParse(ExtItemWeight?.Text, out var wt) ? wt : (int?)null,
+            Attack = int.TryParse(ExtItemAttack?.Text, out var atk) ? atk : (int?)null,
+            MagicAttack = int.TryParse(ExtItemMagicAttack?.Text, out var ma) ? ma : (int?)null,
+            Defense = int.TryParse(ExtItemDefense?.Text, out var def) ? def : (int?)null,
+            Range = int.TryParse(ExtItemRange?.Text, out var r) ? r : (int?)null,
+            EquipLevelMin = int.TryParse(ExtItemReqLevel?.Text, out var lvl) ? lvl : (int?)null,
+            EquipLevelMax = int.TryParse(ExtItemEquipLevelMax?.Text, out var elm) ? elm : (int?)null,
+            WeaponLevel = int.TryParse(ExtItemWeaponLevel?.Text, out var wl) ? wl : (int?)null,
+            ArmorLevel = int.TryParse(ExtItemArmorLevel?.Text, out var al) ? al : (int?)null,
+            Slots = int.TryParse(ExtItemSlots?.Text, out var slots) ? slots : (int?)null,
+            Gender = (ExtItemGender?.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "Both",
+            Refineable = ExtItemRefineable?.IsChecked == true,
+            Gradable = ExtItemGradable?.IsChecked == true,
+            View = int.TryParse(ExtItemView?.Text, out var v) ? v : (int?)null,
+            AliasName = ExtItemAliasName?.Text?.Trim(),
+            EquipScript = string.IsNullOrWhiteSpace(ExtItemEquipScript?.Text) ? null : ExtItemEquipScript.Text.Trim(),
+            UnEquipScript = string.IsNullOrWhiteSpace(ExtItemUnEquipScript?.Text) ? null : ExtItemUnEquipScript.Text.Trim(),
+        };
+
+        // Build Jobs dict from checkboxes
+        item.Jobs = new Dictionary<string, bool>();
+        if (ExtItemJobsPanel != null)
+        {
+            foreach (var child in ExtItemJobsPanel.Children)
+            {
+                if (child is System.Windows.Controls.CheckBox cb && cb.IsChecked == true)
+                    item.Jobs[cb.Content?.ToString() ?? ""] = true;
+            }
+        }
+
+        // Build Locations dict from checkboxes
+        item.Locations = new Dictionary<string, bool>();
+        if (ExtItemLocationsPanel != null)
+        {
+            foreach (var child in ExtItemLocationsPanel.Children)
+            {
+                if (child is System.Windows.Controls.CheckBox cb && cb.IsChecked == true)
+                    item.Locations[cb.Content?.ToString() ?? ""] = true;
+            }
+        }
+
+        // Script: authoritative source is the free-text ExtItemScript field
+        item.Script = string.IsNullOrWhiteSpace(ExtItemScript?.Text) ? null : ExtItemScript.Text.Trim();
+
+        // --- rAthena Validation ---
+        var validationWarnings = ValidateItemEntry(item);
+        if (validationWarnings.Count > 0)
+        {
+            var msg = "Issues found and auto-corrected:\n\n"
+                + string.Join("\n", validationWarnings.Select((w, i) => $"  {i + 1}. {w}"))
+                + "\n\nContinue saving?";
+            var result = System.Windows.MessageBox.Show(this, msg, "rAthena Validation",
+                MessageBoxButton.YesNo, MessageBoxImage.Warning);
+            if (result != MessageBoxResult.Yes) return;
+        }
+
+        try
+        {
+            App.ItemDbService.AddItem(item);
+            var result = App.ItemDbService.SaveItem(item);
+            if (result != null)
+            {
+                _operationsLog.RecordAdded(OperationEntityKind.Item, item.Id, item.AegisName, item.Name ?? "", result.Path, result.BodyIndex);
+                RefreshOperationsList();
+            }
+            System.Windows.MessageBox.Show(this,
+                $"Item saved: {item.Id} ({item.AegisName}) to db/import/item_db.yml",
+                "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            System.Windows.MessageBox.Show(this, "Error saving item: " + ex.Message,
+                "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private void SaveExtractedAsMobEntry()
+    {
+        if (App.MobDbService == null)
+        {
+            System.Windows.MessageBox.Show(this, "MobDbService not available.", "RoDbEditor");
+            return;
+        }
+
+        var mob = new MobEntry
+        {
+            Id = int.TryParse(ExtMobId?.Text, out var id) ? id : App.MobDbService.GetNextCustomMobId(),
+            AegisName = (ExtMobAegisName?.Text?.Trim() ?? "Custom_Monster").ToUpperInvariant(),
+            Name = ExtMobName?.Text?.Trim() ?? "Custom Monster",
+            Level = int.TryParse(ExtMobLevel?.Text, out var lvl) ? lvl : 1,
+            Hp = int.TryParse(ExtMobHp?.Text, out var hp) ? hp : 100,
+            BaseExp = int.TryParse(ExtMobBaseExp?.Text, out var bexp) ? bexp : 10,
+            JobExp = int.TryParse(ExtMobJobExp?.Text, out var jexp) ? jexp : 5,
+            Race = (ExtMobRace?.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? ExtMobRace?.Text ?? "Formless",
+            Element = (ExtMobElement?.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? ExtMobElement?.Text ?? "Neutral",
+            Size = (ExtMobSize?.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? ExtMobSize?.Text ?? "Medium",
+        };
+
+        try
+        {
+            App.MobDbService.AddMob(mob);
+            var result = App.MobDbService.SaveMob(mob);
+            if (result != null)
+            {
+                _operationsLog.RecordAdded(OperationEntityKind.Mob, mob.Id, mob.AegisName, mob.Name ?? "", result.Path, result.BodyIndex);
+                RefreshOperationsList();
+            }
+            System.Windows.MessageBox.Show(this,
+                $"Monster saved: {mob.Id} ({mob.AegisName}) to db/import/mob_db.yml",
+                "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            System.Windows.MessageBox.Show(this, "Error saving monster: " + ex.Message,
+                "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private void RefreshOperationsList()
+    {
+        if (OperationsListView == null) return;
+        OperationsListView.ItemsSource = null;
+        OperationsListView.ItemsSource = _operationsLog.Records.ToList();
+    }
+
+    private void UndoButton_Click(object sender, RoutedEventArgs e)
+    {
+        var record = _operationsLog.TryPopLast();
+        if (record == null)
+        {
+            System.Windows.MessageBox.Show(this, "No operation to undo.", "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+        try
+        {
+            if (record.Kind == OperationKind.Added)
+            {
+                if (record.EntityKind == OperationEntityKind.Item)
+                    App.ItemDbService?.RemoveEntryAt(record.FilePath, record.BodyIndex);
+                else
+                    App.MobDbService?.RemoveEntryAt(record.FilePath, record.BodyIndex);
+            }
+            else if (record.Kind == OperationKind.Updated && record.PreviousYamlSnapshot != null)
+            {
+                File.WriteAllBytes(record.FilePath, record.PreviousYamlSnapshot);
+            }
+            else
+            {
+                System.Windows.MessageBox.Show(this, "Cannot undo: no snapshot available for update.", "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+            ReloadDataAfterFileChange();
+            RefreshOperationsList();
+            RefreshList();
+            System.Windows.MessageBox.Show(this, "Undo completed.", "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            System.Windows.MessageBox.Show(this, "Undo failed: " + ex.Message, "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private void DeleteSelectedButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (OperationsListView?.SelectedItem is not OperationRecord record)
+        {
+            System.Windows.MessageBox.Show(this, "Select an operation in the list to delete.", "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+        try
+        {
+            bool ok = record.EntityKind == OperationEntityKind.Item
+                ? App.ItemDbService?.RemoveEntryAt(record.FilePath, record.BodyIndex) ?? false
+                : App.MobDbService?.RemoveEntryAt(record.FilePath, record.BodyIndex) ?? false;
+            if (!ok)
+            {
+                System.Windows.MessageBox.Show(this, "Delete failed.", "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Error);
+                return;
+            }
+            _operationsLog.RemoveRecord(record);
+            ReloadDataAfterFileChange();
+            RefreshOperationsList();
+            RefreshList();
+            System.Windows.MessageBox.Show(this, "Entry deleted.", "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            System.Windows.MessageBox.Show(this, "Delete failed: " + ex.Message, "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private void DeleteLatestEntryButton_Click(object sender, RoutedEventArgs e)
+    {
+        var isItemContext = _currentCategory == "ITEMS";
+        var record = _operationsLog.GetLastAddedForContext(isItemContext);
+        if (record == null)
+        {
+            var ctx = isItemContext ? "item_db.yml" : "mob_db.yml";
+            System.Windows.MessageBox.Show(this, $"No recent Added operation for {ctx}. Switch to ITEMS or MONSTERS tab and add an entry first.", "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+        try
+        {
+            bool ok = record.EntityKind == OperationEntityKind.Item
+                ? App.ItemDbService?.RemoveEntryAt(record.FilePath, record.BodyIndex) ?? false
+                : App.MobDbService?.RemoveEntryAt(record.FilePath, record.BodyIndex) ?? false;
+            if (!ok)
+            {
+                System.Windows.MessageBox.Show(this, "Delete failed.", "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Error);
+                return;
+            }
+            _operationsLog.RemoveRecord(record);
+            ReloadDataAfterFileChange();
+            RefreshOperationsList();
+            RefreshList();
+            System.Windows.MessageBox.Show(this, "Latest entry deleted.", "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            System.Windows.MessageBox.Show(this, "Delete failed: " + ex.Message, "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private void ReloadDataAfterFileChange()
+    {
+        var dataPath = App.Config?.DataPath;
+        if (string.IsNullOrEmpty(dataPath)) return;
+        App.ReloadDataPath(dataPath);
+        UpdateSourceIndicators();
+    }
+
+    private void ExtractedExportButton_Click(object sender, RoutedEventArgs e)
+    {
+        // Reuse existing export logic
+        ItemExportButton_Click(sender, e);
+    }
+
+    private void ExtractedCancelButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (ExtractedAssetPropertiesPanel != null)
+            ExtractedAssetPropertiesPanel.Visibility = Visibility.Collapsed;
+        ItemDetailsPanel.Visibility = Visibility.Visible;
+        ClearDetails();
     }
 }
 

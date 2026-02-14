@@ -111,10 +111,10 @@
             <GridSplitter Grid.Column="1" Width="6" HorizontalAlignment="Stretch" Background="#c0c0c0"
                           ResizeDirection="Columns" ShowsPreview="False" DragIncrement="1"/>
 
-            <!-- Center: Preview (static + ACT/SPR environment) -->
+            <!-- Center: Preview (static BMP/PAL + ACT/SPR; SpritePreviewPanel removed for extracted assets) -->
             <Expander Grid.Column="2" Header="PREVIEW" IsExpanded="True" Margin="0">
                 <GroupBox BorderThickness="0" Padding="0" Margin="0">
-                    <Grid Margin="8">
+                    <Grid x:Name="CenterPreviewGrid" Margin="8">
                         <Grid.RowDefinitions>
                             <RowDefinition Height="*"/>
                             <RowDefinition Height="8"/>
@@ -150,12 +150,102 @@
                                 <TextBlock x:Name="SourceIndicator3" FontSize="11" Text="Items: None" TextTrimming="CharacterEllipsis"/>
                             </StackPanel>
                         </Border>
-                        <!-- Item details (ITEMS tab) -->
+                        <!-- Item details (ITEMS tab) - full property editor -->
                         <StackPanel x:Name="ItemDetailsPanel">
-                            <TextBlock Text="DETAILS PANEL" FontWeight="SemiBold" Margin="0,0,0,8"/>
-                            <TextBlock x:Name="DetailName" Text="NAME: (select an asset)" Margin="0,0,0,4"/>
-                            <TextBlock x:Name="DetailId" Text="ID: —" Margin="0,0,0,4"/>
-                            <TextBlock x:Name="DetailType" Text="TYPE: —" Margin="0,0,0,4"/>
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                <TextBlock Text="ITEM PROPERTIES" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                                <TextBlock Text=" ⓘ" FontSize="12" Foreground="#89B4FA" Cursor="Help"
+                                           VerticalAlignment="Center" Margin="6,0,0,0"
+                                           ToolTipService.InitialShowDelay="0"
+                                           ToolTipService.ShowDuration="60000">
+                                    <TextBlock.ToolTip>
+                                        <ToolTip MaxWidth="480">
+                                            <TextBlock TextWrapping="Wrap" Text="ITEM PROPERTIES — Field Guide&#x0a;&#x0a;This panel shows all editable properties for the selected item from rAthena's item database.&#x0a;&#x0a;• Item ID: Read-only unique ID. Existing items keep their ID; new items get the next available custom ID.&#x0a;• AegisName: Internal code name used in scripts and commands (max 49 chars, no spaces).&#x0a;• Name: Display name shown in-game to players (max 49 chars).&#x0a;• Type: Item category. Determines which fields are relevant: Weapon → Attack, MagicAttack, Range, WeaponLevel, SubType; Armor → Defense, ArmorLevel, Locations; ShadowGear → Defense, Shadow_* locations; Ammo → Attack, SubType; Card → SubType (Normal/Enchant); Others → mostly stat-free (Healing, Usable, Etc, Cash, etc.)&#x0a;• SubType: Weapon type (Dagger, 1hSword…), Ammo type (Arrow, Bullet…), or Card type. Only valid for those three Types — blank for everything else.&#x0a;• Buy/Sell: NPC prices in Zeny. Rule: if Buy/124 &lt; Sell/75, server forces Sell=1.&#x0a;• Weight: 10 units = 1.0 displayed in-game.&#x0a;• Attack/MagicAttack: Physical/magic ATK (Weapon &amp; Ammo only).&#x0a;• Defense: DEF value (Armor &amp; ShadowGear only). Max 32767.&#x0a;• Range: Attack range in cells (Weapon only).&#x0a;• Slots: Card slots (0-4).&#x0a;• EquipLevelMin/Max: Required character level range (0-275). Max must be ≥ Min.&#x0a;• WeaponLevel: Weapon tier 0-5 (Weapon only). ArmorLevel: Armor tier 0-2 (Armor only).&#x0a;• Gender: Both/Male/Female. Musical=Male, Whip=Female (forced by server).&#x0a;• View: Sprite view ID. AliasName: Borrow another item's appearance.&#x0a;• Refineable/Gradable: Can this item be refined (+1, +2…) or graded.&#x0a;• Jobs: Which job classes can equip/use. Check 'All' for no restriction.&#x0a;• Locations: Which equip slot (Head_Top, Armor, Right_Hand, Shadow_Armor, etc.).&#x0a;• Script/EquipScript/UnEquipScript: rAthena script code for bonuses and effects.&#x0a;• SAVE: Writes changes to the item's source YAML file (db/import/item_db.yml for custom items).&#x0a;&#x0a;All validations are checked automatically on save — invalid fields are auto-corrected with a warning dialog."/>
+                                        </ToolTip>
+                                    </TextBlock.ToolTip>
+                                </TextBlock>
+                            </StackPanel>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="100"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
+                                <TextBlock Grid.Row="0" Grid.Column="0" Text="Item ID:" Margin="0,2" VerticalAlignment="Center"/>
+                                <TextBox x:Name="ItemEditId" Grid.Row="0" Grid.Column="1" Padding="2" Margin="0,2" IsReadOnly="True" Background="#e8e8e8"/>
+                                <TextBlock Grid.Row="1" Grid.Column="0" Text="AegisName:" Margin="0,2" VerticalAlignment="Center"/>
+                                <TextBox x:Name="ItemEditAegisName" Grid.Row="1" Grid.Column="1" Padding="2" Margin="0,2"/>
+                                <TextBlock Grid.Row="2" Grid.Column="0" Text="Name:" Margin="0,2" VerticalAlignment="Center"/>
+                                <TextBox x:Name="ItemEditName" Grid.Row="2" Grid.Column="1" Padding="2" Margin="0,2"/>
+                                <TextBlock Grid.Row="3" Grid.Column="0" Text="Type:" Margin="0,2" VerticalAlignment="Center"/>
+                                <ComboBox x:Name="ItemEditType" Grid.Row="3" Grid.Column="1" IsEditable="True" Margin="0,2" SelectionChanged="ItemEditType_SelectionChanged">
+                                    <ComboBoxItem Content="Healing"/><ComboBoxItem Content="Usable"/><ComboBoxItem Content="Etc"/><ComboBoxItem Content="Weapon"/><ComboBoxItem Content="Armor"/>
+                                    <ComboBoxItem Content="Card"/><ComboBoxItem Content="PetEgg"/><ComboBoxItem Content="PetArmor"/><ComboBoxItem Content="Ammo"/><ComboBoxItem Content="DelayConsume"/><ComboBoxItem Content="Cash"/><ComboBoxItem Content="ShadowGear"/>
+                                </ComboBox>
+                                <TextBlock Grid.Row="4" Grid.Column="0" Text="SubType:" Margin="0,2" VerticalAlignment="Center"/>
+                                <ComboBox x:Name="ItemEditSubType" Grid.Row="4" Grid.Column="1" IsEditable="True" Margin="0,2"/>
+                                <TextBlock Grid.Row="5" Grid.Column="0" Text="Buy:" Margin="0,2" VerticalAlignment="Center"/>
+                                <TextBox x:Name="ItemEditBuy" Grid.Row="5" Grid.Column="1" Padding="2" Margin="0,2" Width="80" HorizontalAlignment="Left"/>
+                                <TextBlock Grid.Row="6" Grid.Column="0" Text="Sell:" Margin="0,2" VerticalAlignment="Center"/>
+                                <TextBox x:Name="ItemEditSell" Grid.Row="6" Grid.Column="1" Padding="2" Margin="0,2" Width="80" HorizontalAlignment="Left"/>
+                                <TextBlock Grid.Row="7" Grid.Column="0" Text="Weight:" Margin="0,2" VerticalAlignment="Center"/>
+                                <TextBox x:Name="ItemEditWeight" Grid.Row="7" Grid.Column="1" Padding="2" Margin="0,2" Width="80" HorizontalAlignment="Left"/>
+                                <TextBlock Grid.Row="8" Grid.Column="0" Text="Attack:" Margin="0,2" VerticalAlignment="Center"/>
+                                <TextBox x:Name="ItemEditAttack" Grid.Row="8" Grid.Column="1" Padding="2" Margin="0,2" Width="80" HorizontalAlignment="Left"/>
+                                <TextBlock Grid.Row="9" Grid.Column="0" Text="MagicAttack:" Margin="0,2" VerticalAlignment="Center"/>
+                                <TextBox x:Name="ItemEditMagicAttack" Grid.Row="9" Grid.Column="1" Padding="2" Margin="0,2" Width="80" HorizontalAlignment="Left"/>
+                                <TextBlock Grid.Row="10" Grid.Column="0" Text="Defense:" Margin="0,2" VerticalAlignment="Center"/>
+                                <TextBox x:Name="ItemEditDefense" Grid.Row="10" Grid.Column="1" Padding="2" Margin="0,2" Width="80" HorizontalAlignment="Left"/>
+                                <TextBlock Grid.Row="11" Grid.Column="0" Text="Range:" Margin="0,2" VerticalAlignment="Center"/>
+                                <TextBox x:Name="ItemEditRange" Grid.Row="11" Grid.Column="1" Padding="2" Margin="0,2" Width="80" HorizontalAlignment="Left"/>
+                                <TextBlock Grid.Row="12" Grid.Column="0" Text="Slots:" Margin="0,2" VerticalAlignment="Center"/>
+                                <TextBox x:Name="ItemEditSlots" Grid.Row="12" Grid.Column="1" Padding="2" Margin="0,2" Width="60" HorizontalAlignment="Left"/>
+                                <TextBlock Grid.Row="13" Grid.Column="0" Text="EquipLevelMin:" Margin="0,2" VerticalAlignment="Center"/>
+                                <TextBox x:Name="ItemEditEquipLevelMin" Grid.Row="13" Grid.Column="1" Padding="2" Margin="0,2" Width="80" HorizontalAlignment="Left"/>
+                                <TextBlock Grid.Row="14" Grid.Column="0" Text="EquipLevelMax:" Margin="0,2" VerticalAlignment="Center"/>
+                                <TextBox x:Name="ItemEditEquipLevelMax" Grid.Row="14" Grid.Column="1" Padding="2" Margin="0,2" Width="80" HorizontalAlignment="Left"/>
+                                <TextBlock Grid.Row="15" Grid.Column="0" Text="WeaponLevel:" Margin="0,2" VerticalAlignment="Center"/>
+                                <TextBox x:Name="ItemEditWeaponLevel" Grid.Row="15" Grid.Column="1" Padding="2" Margin="0,2" Width="80" HorizontalAlignment="Left"/>
+                                <TextBlock Grid.Row="16" Grid.Column="0" Text="ArmorLevel:" Margin="0,2" VerticalAlignment="Center"/>
+                                <TextBox x:Name="ItemEditArmorLevel" Grid.Row="16" Grid.Column="1" Padding="2" Margin="0,2" Width="80" HorizontalAlignment="Left"/>
+                                <TextBlock Grid.Row="17" Grid.Column="0" Text="Gender:" Margin="0,2" VerticalAlignment="Center"/>
+                                <ComboBox x:Name="ItemEditGender" Grid.Row="17" Grid.Column="1" Margin="0,2" Width="100" HorizontalAlignment="Left" SelectedIndex="0">
+                                    <ComboBoxItem Content="Both"/><ComboBoxItem Content="Male"/><ComboBoxItem Content="Female"/>
+                                </ComboBox>
+                                <TextBlock Grid.Row="18" Grid.Column="0" Text="View:" Margin="0,2" VerticalAlignment="Center"/>
+                                <TextBox x:Name="ItemEditView" Grid.Row="18" Grid.Column="1" Padding="2" Margin="0,2" Width="80" HorizontalAlignment="Left"/>
+                                <TextBlock Grid.Row="19" Grid.Column="0" Text="AliasName:" Margin="0,2" VerticalAlignment="Center"/>
+                                <TextBox x:Name="ItemEditAliasName" Grid.Row="19" Grid.Column="1" Padding="2" Margin="0,2"/>
+                            </Grid>
+                            <StackPanel Orientation="Horizontal" Margin="0,4,0,4">
+                                <CheckBox x:Name="ItemEditRefineable" Content="Refineable" Margin="0,2,16,2" VerticalAlignment="Center"/>
+                                <CheckBox x:Name="ItemEditGradable" Content="Gradable" Margin="0,2,0,2" VerticalAlignment="Center"/>
+                            </StackPanel>
+                            <TextBlock Text="Applicable Jobs:" FontWeight="SemiBold" Margin="0,8,0,4"/>
+                            <WrapPanel x:Name="ItemEditJobsPanel" Margin="0,0,0,8"/>
+                            <TextBlock Text="Equip Location:" FontWeight="SemiBold" Margin="0,4,0,4"/>
+                            <WrapPanel x:Name="ItemEditLocationsPanel" Margin="0,0,0,8"/>
+                            <TextBlock Text="Description:" Margin="0,4,0,4"/>
+                            <TextBox x:Name="DetailDescription" TextWrapping="Wrap" AcceptsReturn="True" MinHeight="50" IsReadOnly="True" Margin="0,0,0,8"/>
+                            <TextBlock Text="Script (Bonus Effects):" FontWeight="SemiBold" Margin="0,4,0,4"/>
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                                <ComboBox x:Name="ItemEditBonusCombo" Width="200" DisplayMemberPath="DisplayName"/>
+                                <TextBox x:Name="ItemEditBonusValue" Width="60" Padding="2" Margin="4,0,0,0" Text="0"/>
+                                <Button x:Name="ItemEditAddBonus" Content="+ Add" Padding="8,2" Margin="4,0,0,0" Click="ItemEditAddBonus_Click"/>
+                            </StackPanel>
+                            <ListBox x:Name="ItemEditBonusList" MinHeight="40" MaxHeight="100" Margin="0,0,0,4"/>
+                            <Button Content="Remove Selected" Padding="8,2" Margin="0,0,0,4" HorizontalAlignment="Left" Click="ItemEditRemoveBonus_Click"/>
+                            <TextBlock Text="Full Script (authoritative):" FontSize="11" Margin="0,4,0,2"/>
+                            <TextBox x:Name="ItemEditScript" FontFamily="Consolas" FontSize="11" TextWrapping="Wrap" AcceptsReturn="True" MinHeight="60" Margin="0,0,0,4"/>
+                            <TextBlock Text="EquipScript:" FontSize="11" Margin="0,4,0,2"/>
+                            <TextBox x:Name="ItemEditEquipScript" FontFamily="Consolas" FontSize="11" TextWrapping="Wrap" AcceptsReturn="True" MinHeight="40" Margin="0,0,0,4"/>
+                            <TextBlock Text="UnEquipScript:" FontSize="11" Margin="0,4,0,2"/>
+                            <TextBox x:Name="ItemEditUnEquipScript" FontFamily="Consolas" FontSize="11" TextWrapping="Wrap" AcceptsReturn="True" MinHeight="40" Margin="0,0,0,8"/>
                             <Expander x:Name="ItemRelatedFilesExpander" Header="Related files" Margin="0,4,0,4" IsExpanded="False">
                                 <ListBox x:Name="ItemRelatedFilesListBox" MinHeight="40" MaxHeight="120" FontFamily="Consolas" FontSize="11"
                                          SelectionChanged="ItemRelatedFilesListBox_SelectionChanged"
@@ -166,34 +256,22 @@
                                 <StackPanel>
                                     <TextBlock Text="ACT/SPR ASSIGNMENT" FontWeight="SemiBold" Margin="0,0,0,6"/>
                                     <Grid Margin="0,0,0,4">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="80"/>
-                                            <ColumnDefinition Width="*"/>
-                                        </Grid.ColumnDefinitions>
+                                        <Grid.ColumnDefinitions><ColumnDefinition Width="80"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
                                         <TextBlock Grid.Column="0" Text="Entity:" VerticalAlignment="Center"/>
                                         <ComboBox x:Name="AssignEntityTypeCombo" Grid.Column="1" SelectionChanged="AssignEntityTypeCombo_SelectionChanged">
-                                            <ComboBoxItem Content="NPC"/>
-                                            <ComboBoxItem Content="MONSTER"/>
-                                            <ComboBoxItem Content="ITEM"/>
+                                            <ComboBoxItem Content="NPC"/><ComboBoxItem Content="MONSTER"/><ComboBoxItem Content="ITEM"/>
                                         </ComboBox>
                                     </Grid>
                                     <Grid Margin="0,0,0,4">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="80"/>
-                                            <ColumnDefinition Width="*"/>
-                                        </Grid.ColumnDefinitions>
+                                        <Grid.ColumnDefinitions><ColumnDefinition Width="80"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
                                         <TextBlock Grid.Column="0" Text="Target:" VerticalAlignment="Center"/>
                                         <ComboBox x:Name="AssignTargetCombo" Grid.Column="1" IsEditable="True"/>
                                     </Grid>
                                     <CheckBox x:Name="AssignIncludeRelatedCheckBox" Content="Install related files (.wav/.bmp/.pal)" IsChecked="True" Margin="0,0,0,4"/>
-                                    <TextBlock x:Name="AssignDestinationHint" Text="Destination: data\\sprite\\..." FontSize="11" Foreground="#666" Margin="0,0,0,6"/>
+                                    <TextBlock x:Name="AssignDestinationHint" Text="Destination: data\sprite\..." FontSize="11" Foreground="#666" Margin="0,0,0,6"/>
                                     <Button x:Name="AssignSpriteButton" Content="ASSIGN SPRITE" Click="AssignSpriteButton_Click"/>
                                 </StackPanel>
                             </Border>
-                            <TextBlock Text="DESCRIPTION:" Margin="0,8,0,4"/>
-                            <TextBox x:Name="DetailDescription" TextWrapping="Wrap" AcceptsReturn="True" MinHeight="60" IsReadOnly="True" Margin="0,0,0,8"/>
-                            <TextBlock Text="SCRIPT" Margin="0,4,0,4"/>
-                            <TextBox x:Name="DetailScript" Text="{},{},{}" TextWrapping="Wrap" AcceptsReturn="True" MinHeight="60" Margin="0,0,0,12"/>
                             <Expander x:Name="ItemDiffExpander" Header="What changed" Margin="0,8,0,8" Collapsed="DiffExpander_Collapsed" Expanded="DiffExpander_Expanded">
                                 <TextBox x:Name="ItemDiffTextBox" IsReadOnly="True" TextWrapping="NoWrap" AcceptsReturn="True" MinHeight="80" FontFamily="Consolas" FontSize="11" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"/>
                             </Expander>
@@ -213,6 +291,7 @@
                                 <Button x:Name="ExtractAllRelatedButton" Content="EXTRACT ALL RELATED" Padding="12,6" Margin="0,0,8,0" Click="ExtractAllRelatedButton_Click" Visibility="Collapsed"/>
                                 <Button x:Name="OpenInGrfEditorButton" Content="OPEN IN GRF EDITOR" Padding="12,6" Margin="0,0,8,0" Click="OpenInGrfEditorButton_Click" Visibility="Collapsed"/>
                                 <Button x:Name="ItemExportButton" Content="EXPORT" Padding="12,6" Margin="0,0,8,0" Click="ItemExportButton_Click"/>
+                                <Button x:Name="ItemDeleteButton" Content="DELETE" Padding="12,6" Margin="0,0,8,0" Click="ItemDeleteButton_Click"/>
                                 <Button Content="CANCEL" Padding="12,6" Click="CancelButton_Click"/>
                             </StackPanel>
                         </StackPanel>
@@ -325,7 +404,7 @@
                                 <StackPanel Orientation="Horizontal" Margin="0,12,0,4">
                                     <TextBlock Text="MONSTER SKILLS" FontWeight="Bold"/>
                                     <TextBlock Text=" ⓘ" FontSize="12" Foreground="#89B4FA" Cursor="Help"
-                                               ToolTipService.ToolTip="Import overlay: db/import/mob_skill_db.txt only. Mob overrides: Drops merge (max 10). See doc-map-server-drop-limit-analysis.md"/>
+                                               ToolTipService.ToolTip="Skills this monster uses in combat. Sourced from mob_skill_db.yml. Use Add/Edit/Delete to manage skills in db/import/mob_skill_db.txt. Each skill has a trigger condition (e.g., 'always', 'myhpltmaxrate'), cast rate, delay, and target type."/>
                                 </StackPanel>
 
                                 <DataGrid x:Name="MonsterSkillsGrid"
@@ -360,7 +439,7 @@
                                 <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
                                     <TextBlock Text="SLAVES" FontWeight="Bold"/>
                                     <TextBlock Text=" ⓘ" FontSize="12" Foreground="#89B4FA" Cursor="Help"
-                                               ToolTipService.ToolTip="Import overlay: db/import/mob_skill_db.txt only. Mob overrides: Drops merge (max 10). See doc-map-server-drop-limit-analysis.md"/>
+                                               ToolTipService.ToolTip="Slave monsters summoned by this mob (e.g., Orc Lord summons Orc Warriors). Shows slave ID, count, and name. Defined in the mob's AI behavior — edit via mob_db.yml Slaves field."/>
                                 </StackPanel>
 
                                 <DataGrid x:Name="MonsterSlavesGrid"
@@ -389,6 +468,7 @@
                                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                                     <Button x:Name="MonsterSaveButton" Content="SAVE" Padding="12,6" Margin="0,0,8,0" Click="MonsterSaveButton_Click"/>
                                     <Button x:Name="MonsterExportButton" Content="EXPORT" Padding="12,6" Margin="0,0,8,0" Click="MonsterExportButton_Click"/>
+                                    <Button x:Name="MonsterDeleteButton" Content="DELETE" Padding="12,6" Margin="0,0,8,0" Click="MonsterDeleteButton_Click"/>
                                     <Button Content="CANCEL" Padding="12,6" Click="MonsterCancelButton_Click"/>
                                 </StackPanel>
                             </StackPanel>
@@ -443,36 +523,359 @@
                                 <Button Content="CANCEL" Padding="12,6" Click="NpcCancelButton_Click"/>
                             </StackPanel>
                         </StackPanel>
+                        <!-- Extracted Asset Properties (EXTRACTED ASSETS tab) -->
+                        <ScrollViewer x:Name="ExtractedAssetPropertiesPanel" Visibility="Collapsed" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                            <StackPanel Margin="0,0,0,8">
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                    <TextBlock Text="EXTRACTED ASSET PROPERTIES" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                                    <TextBlock Text=" ⓘ" FontSize="12" Foreground="#89B4FA" Cursor="Help"
+                                               VerticalAlignment="Center" Margin="6,0,0,0"
+                                               ToolTipService.InitialShowDelay="0"
+                                               ToolTipService.ShowDuration="60000">
+                                        <TextBlock.ToolTip>
+                                            <ToolTip MaxWidth="420">
+                                                <TextBlock TextWrapping="Wrap" Text="EXTRACTED ASSET PROPERTIES — Field Guide&#x0a;&#x0a;─── ASSET METADATA (grey box) ───&#x0a;• Base: The filename (without extension) of the selected sprite.&#x0a;• Folder: Where this sprite lives inside your extracted assets directory.&#x0a;• Extensions: File types found (.act, .spr, .bmp, .pal, etc.).&#x0a;• Suggested: Auto-detected category (ITEM/MONSTER/NPC/CUSTOM) based on folder path.&#x0a;&#x0a;─── ACT/SPR ASSIGNMENT ───&#x0a;• Entity: Choose what kind of game object this sprite is for — ITEM, MONSTER, or NPC. This changes which properties panel appears below and determines the destination folder for sprite installation.&#x0a;• Assign to: Pick an existing database entry (item/monster/NPC) whose sprite files you want to replace or set. The dropdown lists all loaded entries from rAthena's database.&#x0a;• Install related files: When checked, also copies associated .wav, .bmp, and .pal files alongside the .act/.spr.&#x0a;• ASSIGN SPRITE: Copies the sprite files into your client's data folder at the correct path (e.g., data\sprite\item\, data\sprite\몬스터\, data\sprite\npc\).&#x0a;&#x0a;─── ITEM PROPERTIES (Entity=ITEM) ───&#x0a;• Item ID: Unique numeric ID. Custom items typically use 1270000+ range to avoid conflicts with official items.&#x0a;• AegisName: Internal code name used in scripts (max 49 chars, no spaces — use underscores).&#x0a;• Name: Display name shown in-game (max 49 chars).&#x0a;• Type: Item category — determines which fields are valid (Weapon, Armor, etc.).&#x0a;• SubType: Only for Weapon (Dagger/Sword/etc.), Ammo (Arrow/Bullet/etc.), or Card (Normal/Enchant). Ignored for all other types.&#x0a;• Buy/Sell: NPC buy/sell prices in Zeny. If Buy/124 &lt; Sell/75, rAthena forces Sell=1 (exploit prevention).&#x0a;• Weight: Item weight (10 = 1.0 in-game).&#x0a;• Attack/MagicAttack: Physical/magical attack power (Weapon/Ammo only — zeroed for other types).&#x0a;• Defense: Physical defense (Armor/ShadowGear only — zeroed for other types).&#x0a;• Range: Attack range in cells (Weapon only).&#x0a;• Required Lvl / EquipLevelMax: Min/Max character level to equip (0-275). Max must be ≥ Min.&#x0a;• Slots: Card slot count (0-4).&#x0a;• WeaponLevel: Weapon tier 0-5 (Weapon only). ArmorLevel: Armor tier 0-2 (Armor only).&#x0a;• Gender: Both/Male/Female. Musical weapons are forced Male, Whips forced Female by rAthena.&#x0a;• View: Sprite view ID for shields/headgear. AliasName: Reference another item's sprite.&#x0a;• Refineable/Gradable: Whether the item can be refined or graded.&#x0a;• Jobs: Which job classes can equip this item. Check 'All' for universal.&#x0a;• Locations: Equip slot (Head_Top, Armor, etc.). Use Shadow_* slots for ShadowGear type items.&#x0a;• Script: Bonus effects applied while item is equipped (e.g., bonus bStr,10;).&#x0a;• EquipScript/UnEquipScript: Scripts that run once on equip/unequip.&#x0a;• SAVE: Writes the item entry to db/import/item_db.yml on the rAthena server.&#x0a;&#x0a;─── MONSTER PROPERTIES (Entity=MONSTER) ───&#x0a;• Mob ID: Unique monster ID. Custom monsters use ranges above base DB entries.&#x0a;• AegisName: Internal code name (UPPERCASE convention).&#x0a;• Name: Display name shown in-game.&#x0a;• Level/HP/BaseEXP/JobEXP: Core monster stats.&#x0a;• Race/Element/Size: Monster classification affecting damage formulas.&#x0a;• SAVE: Writes to db/import/mob_db.yml.&#x0a;&#x0a;─── NPC PROPERTIES (Entity=NPC) ───&#x0a;• Name: NPC display name.&#x0a;• Sprite ID: Which sprite file to use.&#x0a;• Map: Which map the NPC appears on.&#x0a;• Note: NPC scripts are complex — use ASSIGN SPRITE for the visual, then write the script manually in npc/custom/."/>
+                                            </ToolTip>
+                                        </TextBlock.ToolTip>
+                                    </TextBlock>
+                                </StackPanel>
+                                <!-- Asset metadata -->
+                                <Border Background="#f0f0f0" Padding="8,6" Margin="0,0,0,8" CornerRadius="4">
+                                    <StackPanel>
+                                        <TextBlock x:Name="ExtractedBaseName" Text="Base: —" FontSize="11" TextTrimming="CharacterEllipsis"/>
+                                        <TextBlock x:Name="ExtractedFolder" Text="Folder: —" FontSize="11" TextTrimming="CharacterEllipsis"/>
+                                        <TextBlock x:Name="ExtractedExtensions" Text="Extensions: —" FontSize="11"/>
+                                        <TextBlock x:Name="ExtractedCategory" Text="Suggested: —" FontSize="11"/>
+                                    </StackPanel>
+                                </Border>
+                                <!-- Related files -->
+                                <Expander x:Name="ExtractedRelatedFilesExpander" Header="Related files" Margin="0,4,0,4" IsExpanded="False">
+                                    <ListBox x:Name="ExtractedRelatedFilesListBox" MinHeight="40" MaxHeight="120"
+                                             FontFamily="Consolas" FontSize="11"
+                                             SelectionChanged="ItemRelatedFilesListBox_SelectionChanged"
+                                             MouseDoubleClick="ItemRelatedFilesListBox_MouseDoubleClick"
+                                             ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                                             ScrollViewer.VerticalScrollBarVisibility="Auto"/>
+                                </Expander>
+                                <!-- ACT/SPR ASSIGNMENT (refactored) -->
+                                <Border BorderBrush="#ddd" BorderThickness="1" Padding="8" Margin="0,0,0,8" CornerRadius="4">
+                                    <StackPanel>
+                                        <TextBlock Text="ACT/SPR ASSIGNMENT" FontWeight="SemiBold" Margin="0,0,0,6"/>
+                                        <Grid Margin="0,0,0,4">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="80"/>
+                                                <ColumnDefinition Width="*"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Grid.Column="0" Text="Entity:" VerticalAlignment="Center"/>
+                                            <ComboBox x:Name="ExtractedEntityTypeCombo" Grid.Column="1" SelectedIndex="0"
+                                                      SelectionChanged="ExtractedEntityTypeCombo_SelectionChanged">
+                                                <ComboBoxItem Content="ITEM"/>
+                                                <ComboBoxItem Content="MONSTER"/>
+                                                <ComboBoxItem Content="NPC"/>
+                                            </ComboBox>
+                                        </Grid>
+                                        <Grid Margin="0,0,0,4">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="80"/>
+                                                <ColumnDefinition Width="*"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Grid.Column="0" Text="Assign to:" VerticalAlignment="Center"/>
+                                            <ComboBox x:Name="ExtractedAssignTargetCombo" Grid.Column="1" IsEditable="True"
+                                                      DisplayMemberPath="Display"/>
+                                        </Grid>
+                                        <CheckBox x:Name="ExtractedIncludeRelatedCheckBox"
+                                                  Content="Install related files (.wav/.bmp/.pal)" IsChecked="True" Margin="0,0,0,4"/>
+                                        <TextBlock x:Name="ExtractedDestinationHint" Text="Destination: data\sprite\item"
+                                                   FontSize="11" Foreground="#666" Margin="0,0,0,6"/>
+                                        <Button x:Name="ExtractedAssignSpriteButton" Content="ASSIGN SPRITE"
+                                                Click="ExtractedAssignSpriteButton_Click"/>
+                                    </StackPanel>
+                                </Border>
+
+                                <!-- ITEM PROPERTIES (visible when Entity=ITEM) -->
+                                <StackPanel x:Name="ExtractedItemPropertiesPanel" Visibility="Visible">
+                                    <TextBlock Text="ITEM PROPERTIES" FontWeight="SemiBold" Margin="0,0,0,6"/>
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="100"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                        </Grid.RowDefinitions>
+                                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Item ID:" Margin="0,2" VerticalAlignment="Center"/>
+                                        <TextBox x:Name="ExtItemId" Grid.Row="0" Grid.Column="1" Padding="2" Margin="0,2"/>
+                                        <TextBlock Grid.Row="1" Grid.Column="0" Text="AegisName:" Margin="0,2" VerticalAlignment="Center"/>
+                                        <TextBox x:Name="ExtItemAegisName" Grid.Row="1" Grid.Column="1" Padding="2" Margin="0,2"/>
+                                        <TextBlock Grid.Row="2" Grid.Column="0" Text="Name:" Margin="0,2" VerticalAlignment="Center"/>
+                                        <TextBox x:Name="ExtItemName" Grid.Row="2" Grid.Column="1" Padding="2" Margin="0,2"/>
+                                        <TextBlock Grid.Row="3" Grid.Column="0" Text="Type:" Margin="0,2" VerticalAlignment="Center"/>
+                                        <ComboBox x:Name="ExtItemType" Grid.Row="3" Grid.Column="1" IsEditable="True" Margin="0,2"
+                                                  SelectionChanged="ExtItemType_SelectionChanged">
+                                            <ComboBoxItem Content="Healing"/>
+                                            <ComboBoxItem Content="Usable"/>
+                                            <ComboBoxItem Content="Etc"/>
+                                            <ComboBoxItem Content="Weapon"/>
+                                            <ComboBoxItem Content="Armor"/>
+                                            <ComboBoxItem Content="Card"/>
+                                            <ComboBoxItem Content="PetEgg"/>
+                                            <ComboBoxItem Content="PetArmor"/>
+                                            <ComboBoxItem Content="Ammo"/>
+                                            <ComboBoxItem Content="DelayConsume"/>
+                                            <ComboBoxItem Content="Cash"/>
+                                            <ComboBoxItem Content="ShadowGear"/>
+                                        </ComboBox>
+                                        <TextBlock Grid.Row="4" Grid.Column="0" Text="SubType:" Margin="0,2" VerticalAlignment="Center"/>
+                                        <ComboBox x:Name="ExtItemSubType" Grid.Row="4" Grid.Column="1" IsEditable="True" Margin="0,2"/>
+                                        <TextBlock Grid.Row="5" Grid.Column="0" Text="Buy:" Margin="0,2" VerticalAlignment="Center"/>
+                                        <TextBox x:Name="ExtItemBuy" Grid.Row="5" Grid.Column="1" Padding="2" Margin="0,2" Width="100" HorizontalAlignment="Left"/>
+                                        <TextBlock Grid.Row="6" Grid.Column="0" Text="Sell:" Margin="0,2" VerticalAlignment="Center"/>
+                                        <TextBox x:Name="ExtItemSell" Grid.Row="6" Grid.Column="1" Padding="2" Margin="0,2" Width="100" HorizontalAlignment="Left"/>
+                                        <TextBlock Grid.Row="7" Grid.Column="0" Text="Weight:" Margin="0,2" VerticalAlignment="Center"/>
+                                        <TextBox x:Name="ExtItemWeight" Grid.Row="7" Grid.Column="1" Padding="2" Margin="0,2" Width="100" HorizontalAlignment="Left"/>
+                                        <TextBlock Grid.Row="8" Grid.Column="0" Text="Attack:" Margin="0,2" VerticalAlignment="Center"/>
+                                        <TextBox x:Name="ExtItemAttack" Grid.Row="8" Grid.Column="1" Padding="2" Margin="0,2" Width="100" HorizontalAlignment="Left"/>
+                                        <TextBlock Grid.Row="9" Grid.Column="0" Text="MagicAttack:" Margin="0,2" VerticalAlignment="Center"/>
+                                        <TextBox x:Name="ExtItemMagicAttack" Grid.Row="9" Grid.Column="1" Padding="2" Margin="0,2" Width="100" HorizontalAlignment="Left"/>
+                                        <TextBlock Grid.Row="10" Grid.Column="0" Text="Defense:" Margin="0,2" VerticalAlignment="Center"/>
+                                        <TextBox x:Name="ExtItemDefense" Grid.Row="10" Grid.Column="1" Padding="2" Margin="0,2" Width="100" HorizontalAlignment="Left"/>
+                                        <TextBlock Grid.Row="11" Grid.Column="0" Text="Range:" Margin="0,2" VerticalAlignment="Center"/>
+                                        <TextBox x:Name="ExtItemRange" Grid.Row="11" Grid.Column="1" Padding="2" Margin="0,2" Width="100" HorizontalAlignment="Left"/>
+                                        <TextBlock Grid.Row="12" Grid.Column="0" Text="Required Lvl:" Margin="0,2" VerticalAlignment="Center"/>
+                                        <TextBox x:Name="ExtItemReqLevel" Grid.Row="12" Grid.Column="1" Padding="2" Margin="0,2" Width="100" HorizontalAlignment="Left"/>
+                                        <TextBlock Grid.Row="13" Grid.Column="0" Text="EquipLevelMax:" Margin="0,2" VerticalAlignment="Center"/>
+                                        <TextBox x:Name="ExtItemEquipLevelMax" Grid.Row="13" Grid.Column="1" Padding="2" Margin="0,2" Width="100" HorizontalAlignment="Left"/>
+                                        <TextBlock Grid.Row="14" Grid.Column="0" Text="Slots:" Margin="0,2" VerticalAlignment="Center"/>
+                                        <TextBox x:Name="ExtItemSlots" Grid.Row="14" Grid.Column="1" Padding="2" Margin="0,2" Width="60" HorizontalAlignment="Left"/>
+                                        <TextBlock Grid.Row="15" Grid.Column="0" Text="WeaponLevel:" Margin="0,2" VerticalAlignment="Center"/>
+                                        <TextBox x:Name="ExtItemWeaponLevel" Grid.Row="15" Grid.Column="1" Padding="2" Margin="0,2" Width="100" HorizontalAlignment="Left"/>
+                                        <TextBlock Grid.Row="16" Grid.Column="0" Text="ArmorLevel:" Margin="0,2" VerticalAlignment="Center"/>
+                                        <TextBox x:Name="ExtItemArmorLevel" Grid.Row="16" Grid.Column="1" Padding="2" Margin="0,2" Width="100" HorizontalAlignment="Left"/>
+                                        <TextBlock Grid.Row="17" Grid.Column="0" Text="Gender:" Margin="0,2" VerticalAlignment="Center"/>
+                                        <ComboBox x:Name="ExtItemGender" Grid.Row="17" Grid.Column="1" Margin="0,2" Width="100" HorizontalAlignment="Left" SelectedIndex="0">
+                                            <ComboBoxItem Content="Both"/>
+                                            <ComboBoxItem Content="Male"/>
+                                            <ComboBoxItem Content="Female"/>
+                                        </ComboBox>
+                                        <TextBlock Grid.Row="18" Grid.Column="0" Text="View:" Margin="0,2" VerticalAlignment="Center"/>
+                                        <TextBox x:Name="ExtItemView" Grid.Row="18" Grid.Column="1" Padding="2" Margin="0,2" Width="100" HorizontalAlignment="Left"/>
+                                        <TextBlock Grid.Row="19" Grid.Column="0" Text="AliasName:" Margin="0,2" VerticalAlignment="Center"/>
+                                        <TextBox x:Name="ExtItemAliasName" Grid.Row="19" Grid.Column="1" Padding="2" Margin="0,2"/>
+                                    </Grid>
+                                    <StackPanel Orientation="Horizontal" Margin="0,4,0,4">
+                                        <CheckBox x:Name="ExtItemRefineable" Content="Refineable" Margin="0,2,16,2" VerticalAlignment="Center"/>
+                                        <CheckBox x:Name="ExtItemGradable" Content="Gradable" Margin="0,2,0,2" VerticalAlignment="Center"/>
+                                    </StackPanel>
+                                    <!-- Applicable Jobs -->
+                                    <TextBlock Text="Applicable Jobs:" FontWeight="SemiBold" Margin="0,8,0,4"/>
+                                    <WrapPanel x:Name="ExtItemJobsPanel" Margin="0,0,0,8"/>
+                                    <!-- Equip Location -->
+                                    <TextBlock Text="Equip Location:" FontWeight="SemiBold" Margin="0,4,0,4"/>
+                                    <WrapPanel x:Name="ExtItemLocationsPanel" Margin="0,0,0,8"/>
+                                    <!-- Description -->
+                                    <TextBlock Text="Description:" Margin="0,4,0,4"/>
+                                    <TextBox x:Name="ExtItemDescription" TextWrapping="Wrap" AcceptsReturn="True" MinHeight="60" Margin="0,0,0,8"/>
+                                    <!-- Script Builder -->
+                                    <TextBlock Text="Script (Bonus Effects):" FontWeight="SemiBold" Margin="0,4,0,4"/>
+                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                                        <ComboBox x:Name="ExtItemBonusCombo" Width="200" DisplayMemberPath="DisplayName"/>
+                                        <TextBox x:Name="ExtItemBonusValue" Width="60" Padding="2" Margin="4,0,0,0" Text="0"/>
+                                        <Button Content="+ Add" Padding="8,2" Margin="4,0,0,0" Click="ExtItemAddBonus_Click"/>
+                                    </StackPanel>
+                                    <ListBox x:Name="ExtItemBonusList" MinHeight="40" MaxHeight="120" Margin="0,0,0,4"/>
+                                    <Button Content="Remove Selected" Padding="8,2" Margin="0,0,0,4" HorizontalAlignment="Left" Click="ExtItemRemoveBonus_Click"/>
+                                    <TextBlock Text="Generated Script:" FontSize="11" Margin="0,4,0,2"/>
+                                    <TextBox x:Name="ExtItemScriptPreview" IsReadOnly="True" FontFamily="Consolas" FontSize="11"
+                                             TextWrapping="Wrap" MinHeight="30" Margin="0,0,0,4" Background="#f5f5f5"/>
+                                    <TextBlock Text="Full Script (authoritative):" FontSize="11" Margin="0,4,0,2"/>
+                                    <TextBox x:Name="ExtItemScript" FontFamily="Consolas" FontSize="11"
+                                             TextWrapping="Wrap" AcceptsReturn="True" MinHeight="50" Margin="0,0,0,4"/>
+                                    <TextBlock Text="EquipScript:" FontSize="11" Margin="0,4,0,2"/>
+                                    <TextBox x:Name="ExtItemEquipScript" FontFamily="Consolas" FontSize="11"
+                                             TextWrapping="Wrap" AcceptsReturn="True" MinHeight="40" Margin="0,0,0,4"/>
+                                    <TextBlock Text="UnEquipScript:" FontSize="11" Margin="0,4,0,2"/>
+                                    <TextBox x:Name="ExtItemUnEquipScript" FontFamily="Consolas" FontSize="11"
+                                             TextWrapping="Wrap" AcceptsReturn="True" MinHeight="40" Margin="0,0,0,8"/>
+                                </StackPanel>
+
+                                <!-- MONSTER PROPERTIES (visible when Entity=MONSTER) -->
+                                <StackPanel x:Name="ExtractedMonsterPropertiesPanel" Visibility="Collapsed">
+                                    <TextBlock Text="MONSTER PROPERTIES" FontWeight="SemiBold" Margin="0,0,0,6"/>
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="100"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                        </Grid.RowDefinitions>
+                                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Mob ID:" Margin="0,2" VerticalAlignment="Center"/>
+                                        <TextBox x:Name="ExtMobId" Grid.Row="0" Grid.Column="1" Padding="2" Margin="0,2"/>
+                                        <TextBlock Grid.Row="1" Grid.Column="0" Text="AegisName:" Margin="0,2" VerticalAlignment="Center"/>
+                                        <TextBox x:Name="ExtMobAegisName" Grid.Row="1" Grid.Column="1" Padding="2" Margin="0,2"/>
+                                        <TextBlock Grid.Row="2" Grid.Column="0" Text="Name:" Margin="0,2" VerticalAlignment="Center"/>
+                                        <TextBox x:Name="ExtMobName" Grid.Row="2" Grid.Column="1" Padding="2" Margin="0,2"/>
+                                        <TextBlock Grid.Row="3" Grid.Column="0" Text="Level:" Margin="0,2" VerticalAlignment="Center"/>
+                                        <TextBox x:Name="ExtMobLevel" Grid.Row="3" Grid.Column="1" Padding="2" Margin="0,2" Width="60" HorizontalAlignment="Left"/>
+                                        <TextBlock Grid.Row="4" Grid.Column="0" Text="HP:" Margin="0,2" VerticalAlignment="Center"/>
+                                        <TextBox x:Name="ExtMobHp" Grid.Row="4" Grid.Column="1" Padding="2" Margin="0,2" Width="100" HorizontalAlignment="Left"/>
+                                        <TextBlock Grid.Row="5" Grid.Column="0" Text="Base EXP:" Margin="0,2" VerticalAlignment="Center"/>
+                                        <TextBox x:Name="ExtMobBaseExp" Grid.Row="5" Grid.Column="1" Padding="2" Margin="0,2" Width="100" HorizontalAlignment="Left"/>
+                                        <TextBlock Grid.Row="6" Grid.Column="0" Text="Job EXP:" Margin="0,2" VerticalAlignment="Center"/>
+                                        <TextBox x:Name="ExtMobJobExp" Grid.Row="6" Grid.Column="1" Padding="2" Margin="0,2" Width="100" HorizontalAlignment="Left"/>
+                                        <TextBlock Grid.Row="7" Grid.Column="0" Text="Race:" Margin="0,2" VerticalAlignment="Center"/>
+                                        <ComboBox x:Name="ExtMobRace" Grid.Row="7" Grid.Column="1" IsEditable="True" Margin="0,2">
+                                            <ComboBoxItem Content="Formless"/>
+                                            <ComboBoxItem Content="Undead"/>
+                                            <ComboBoxItem Content="Brute"/>
+                                            <ComboBoxItem Content="Plant"/>
+                                            <ComboBoxItem Content="Insect"/>
+                                            <ComboBoxItem Content="Fish"/>
+                                            <ComboBoxItem Content="Demon"/>
+                                            <ComboBoxItem Content="Demihuman"/>
+                                            <ComboBoxItem Content="Angel"/>
+                                            <ComboBoxItem Content="Dragon"/>
+                                        </ComboBox>
+                                        <TextBlock Grid.Row="8" Grid.Column="0" Text="Element:" Margin="0,2" VerticalAlignment="Center"/>
+                                        <ComboBox x:Name="ExtMobElement" Grid.Row="8" Grid.Column="1" IsEditable="True" Margin="0,2">
+                                            <ComboBoxItem Content="Neutral"/>
+                                            <ComboBoxItem Content="Water"/>
+                                            <ComboBoxItem Content="Earth"/>
+                                            <ComboBoxItem Content="Fire"/>
+                                            <ComboBoxItem Content="Wind"/>
+                                            <ComboBoxItem Content="Poison"/>
+                                            <ComboBoxItem Content="Holy"/>
+                                            <ComboBoxItem Content="Shadow"/>
+                                            <ComboBoxItem Content="Ghost"/>
+                                            <ComboBoxItem Content="Undead"/>
+                                        </ComboBox>
+                                        <TextBlock Grid.Row="9" Grid.Column="0" Text="Size:" Margin="0,2" VerticalAlignment="Center"/>
+                                        <ComboBox x:Name="ExtMobSize" Grid.Row="9" Grid.Column="1" IsEditable="True" Margin="0,2" Width="100" HorizontalAlignment="Left">
+                                            <ComboBoxItem Content="Small"/>
+                                            <ComboBoxItem Content="Medium"/>
+                                            <ComboBoxItem Content="Large"/>
+                                        </ComboBox>
+                                    </Grid>
+                                </StackPanel>
+
+                                <!-- NPC PROPERTIES (visible when Entity=NPC) -->
+                                <StackPanel x:Name="ExtractedNpcPropertiesPanel" Visibility="Collapsed">
+                                    <TextBlock Text="NPC PROPERTIES" FontWeight="SemiBold" Margin="0,0,0,6"/>
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="100"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                        </Grid.RowDefinitions>
+                                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Name:" Margin="0,2" VerticalAlignment="Center"/>
+                                        <TextBox x:Name="ExtNpcName" Grid.Row="0" Grid.Column="1" Padding="2" Margin="0,2"/>
+                                        <TextBlock Grid.Row="1" Grid.Column="0" Text="Sprite ID:" Margin="0,2" VerticalAlignment="Center"/>
+                                        <TextBox x:Name="ExtNpcSpriteId" Grid.Row="1" Grid.Column="1" Padding="2" Margin="0,2"/>
+                                        <TextBlock Grid.Row="2" Grid.Column="0" Text="Map:" Margin="0,2" VerticalAlignment="Center"/>
+                                        <TextBox x:Name="ExtNpcMap" Grid.Row="2" Grid.Column="1" Padding="2" Margin="0,2"/>
+                                    </Grid>
+                                </StackPanel>
+
+                                <!-- Save/Export/Cancel -->
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
+                                    <Button x:Name="ExtractedViewInGrfButton" Content="VIEW IN GRF" Padding="12,6" Margin="0,0,8,0"
+                                            Click="ExtractedViewInGrfButton_Click" ToolTip="Open file in GRF Editor or Explorer"/>
+                                    <Button x:Name="ExtractedSaveButton" Content="SAVE" Padding="12,6" Margin="0,0,8,0"
+                                            Click="ExtractedSaveButton_Click"/>
+                                    <Button x:Name="ExtractedExportButton" Content="EXPORT" Padding="12,6" Margin="0,0,8,0"
+                                            Click="ExtractedExportButton_Click"/>
+                                    <Button Content="CANCEL" Padding="12,6" Click="ExtractedCancelButton_Click"/>
+                                </StackPanel>
+                            </StackPanel>
+                        </ScrollViewer>
                     </StackPanel>
                 </ScrollViewer>
             </Border>
         </Grid>
 
-        <!-- Diagnostics Panel -->
-        <Expander Grid.Row="3" Header="Unchecked Diagnostics (Click Analyze to populate)" IsExpanded="True" Margin="6">
-            <Grid>
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="*"/>
-                </Grid.RowDefinitions>
-
-                <StackPanel Grid.Row="0" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,0,0,6">
-                    <Button Content="Copy Selected" Click="CopySelectedDiagnostics_Click" Padding="8,3" Margin="0,0,6,0"/>
-                    <Button Content="Copy All" Click="CopyAllDiagnostics_Click" Padding="8,3"/>
-                </StackPanel>
-
-                <ListView Grid.Row="1" x:Name="DiagnosticsListView" MaxHeight="200" MinHeight="100" MouseDoubleClick="DiagnosticsListView_MouseDoubleClick">
-                    <ListView.View>
-                        <GridView>
-                            <GridViewColumn Header="Severity" DisplayMemberBinding="{Binding Severity}" Width="80"/>
-                            <GridViewColumn Header="Code" DisplayMemberBinding="{Binding Code}" Width="60"/>
-                            <GridViewColumn Header="Message" DisplayMemberBinding="{Binding Message}" Width="400"/>
-                            <GridViewColumn Header="File" DisplayMemberBinding="{Binding FilePath}" Width="250"/>
-                            <GridViewColumn Header="Line" DisplayMemberBinding="{Binding LineNumber}" Width="50"/>
-                        </GridView>
-                    </ListView.View>
-                </ListView>
-            </Grid>
+        <!-- Operations Log | Diagnostics Panel -->
+        <Expander Grid.Row="3" Header="Operations Log | Diagnostics" IsExpanded="True" Margin="6">
+            <TabControl>
+                <TabItem Header="Operations Log">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+                        <StackPanel Grid.Row="0" Orientation="Horizontal" HorizontalAlignment="Left" Margin="0,0,0,6">
+                            <Button Content="Undo" Click="UndoButton_Click" Padding="8,3" Margin="0,0,6,0"/>
+                            <Button Content="Delete" Click="DeleteSelectedButton_Click" Padding="8,3" Margin="0,0,6,0"/>
+                            <Button Content="Delete Latest Entry" Click="DeleteLatestEntryButton_Click" Padding="8,3"/>
+                        </StackPanel>
+                        <ListView Grid.Row="1" x:Name="OperationsListView" MaxHeight="200" MinHeight="100">
+                            <ListView.View>
+                                <GridView>
+                                    <GridViewColumn Header="Time" Width="70" DisplayMemberBinding="{Binding Timestamp, StringFormat={}{0:HH:mm:ss}}"/>
+                                    <GridViewColumn Header="Action" Width="70" DisplayMemberBinding="{Binding DisplayAction}"/>
+                                    <GridViewColumn Header="Entity" Width="180" DisplayMemberBinding="{Binding DisplayEntity}"/>
+                                    <GridViewColumn Header="File" Width="120" DisplayMemberBinding="{Binding DisplayFile}"/>
+                                    <GridViewColumn Header="Id" Width="50" DisplayMemberBinding="{Binding Id}"/>
+                                </GridView>
+                            </ListView.View>
+                        </ListView>
+                    </Grid>
+                </TabItem>
+                <TabItem Header="Diagnostics">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+                        <StackPanel Grid.Row="0" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,0,0,6">
+                            <Button Content="Copy Selected" Click="CopySelectedDiagnostics_Click" Padding="8,3" Margin="0,0,6,0"/>
+                            <Button Content="Copy All" Click="CopyAllDiagnostics_Click" Padding="8,3"/>
+                        </StackPanel>
+                        <ListView Grid.Row="1" x:Name="DiagnosticsListView" MaxHeight="200" MinHeight="100" MouseDoubleClick="DiagnosticsListView_MouseDoubleClick">
+                            <ListView.View>
+                                <GridView>
+                                    <GridViewColumn Header="Severity" DisplayMemberBinding="{Binding Severity}" Width="80"/>
+                                    <GridViewColumn Header="Code" DisplayMemberBinding="{Binding Code}" Width="60"/>
+                                    <GridViewColumn Header="Message" DisplayMemberBinding="{Binding Message}" Width="400"/>
+                                    <GridViewColumn Header="File" DisplayMemberBinding="{Binding FilePath}" Width="250"/>
+                                    <GridViewColumn Header="Line" DisplayMemberBinding="{Binding LineNumber}" Width="50"/>
+                                </GridView>
+                            </ListView.View>
+                        </ListView>
+                    </Grid>
+                </TabItem>
+            </TabControl>
         </Expander>
     </Grid>
 </Window>
