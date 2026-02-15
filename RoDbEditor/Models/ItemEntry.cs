@@ -44,6 +44,7 @@ public class ItemEntry
     // Visual
     public int? View { get; set; }
     public string? AliasName { get; set; }
+    public string? ResourceName { get; set; }
     
     // Scripts
     public string? Script { get; set; }

@@ -102,6 +102,32 @@ public class ExtractedAssetService
         return all;
     }
 
+    /// <summary>
+    /// Finds texture files (.bmp, .png, etc.) with the given base name from any asset group.
+    /// Used when sprite (.spr/.act) is in one folder but icon (.bmp) is in another (e.g. texture/effect).
+    /// </summary>
+    public IReadOnlyList<string> FindTextureFilesForBase(string baseName)
+    {
+        BuildCacheIfNeeded();
+        var result = new List<string>();
+        var textureExts = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { ".bmp", ".png", ".tga", ".jpg", ".jpeg", ".gif" };
+        foreach (var entry in _all ?? new List<ExtractedAssetEntry>())
+        {
+            if (!entry.BaseName.Equals(baseName, StringComparison.OrdinalIgnoreCase))
+                continue;
+            foreach (var path in entry.SourcePaths ?? new List<string>())
+            {
+                var ext = Path.GetExtension(path);
+                if (textureExts.Contains(ext))
+                {
+                    result.Add(path);
+                    break; // one texture per group
+                }
+            }
+        }
+        return result;
+    }
+
     public SaveResult SavePairedFilesPreserveLayout(
         ExtractedAssetEntry entry,
         string destinationRoot,

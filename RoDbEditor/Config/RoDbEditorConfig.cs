@@ -28,6 +28,12 @@ public class RoDbEditorConfig
     public string? DataPath { get; set; }
     public string? ExtractedAssetsPath { get; set; }
 
+    /// <summary>Target GRF filename for asset assignment (default: custom.grf).</summary>
+    public string TargetGrfFileName { get; set; } = "custom.grf";
+
+    /// <summary>Full path override for target GRF. When set, used instead of ClientRoot + TargetGrfFileName.</summary>
+    public string? TargetGrfPath { get; set; }
+
     public static RoDbEditorConfig Load()
     {
         var config = new RoDbEditorConfig();
@@ -68,6 +74,10 @@ public class RoDbEditorConfig
                         if (!string.IsNullOrEmpty(value) && Directory.Exists(value))
                             config.ExtractedAssetsPath = value;
                     }
+                    if (string.Equals(key, "TargetGrfFileName", System.StringComparison.OrdinalIgnoreCase) && !string.IsNullOrEmpty(value))
+                        config.TargetGrfFileName = value;
+                    if (string.Equals(key, "TargetGrfPath", System.StringComparison.OrdinalIgnoreCase) && !string.IsNullOrEmpty(value))
+                        config.TargetGrfPath = value;
                 }
 
                 // After reading the INI, force the configured DataPath to the

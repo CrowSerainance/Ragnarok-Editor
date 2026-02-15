@@ -9,6 +9,13 @@ namespace RoDbEditor.Services;
 
 public class SpriteAssignmentService
 {
+    private readonly GrfWriterService _grfWriter;
+
+    public SpriteAssignmentService(GrfWriterService grfWriter)
+    {
+        _grfWriter = grfWriter ?? throw new ArgumentNullException(nameof(grfWriter));
+    }
+
     public SpriteAssignmentResult ExecuteAssignment(SpriteAssignmentRequest request)
     {
         var result = new SpriteAssignmentResult();
@@ -37,82 +44,126 @@ public class SpriteAssignmentService
         }
 
         var safeBase = MakeSafeFileBase(request.TargetKey);
-        var dataRoot = Path.Combine(request.ClientRootPath, "data");
-        var spriteFolder = request.EntityType switch
-        {
-            SpriteAssignmentEntityType.Npc => Path.Combine(dataRoot, "sprite", "npc"),
-            SpriteAssignmentEntityType.Monster => Path.Combine(dataRoot, "sprite", "monster"),
-            _ => Path.Combine(dataRoot, "sprite", "item")
-        };
-        Directory.CreateDirectory(spriteFolder);
+        var grfPath = !string.IsNullOrWhiteSpace(request.TargetGrfPath)
+            ? request.TargetGrfPath
+            : Path.Combine(request.ClientRootPath, "custom.grf");
 
-        var destinationSpr = Path.Combine(spriteFolder, safeBase + ".spr");
-        File.Copy(request.SourceSprPath, destinationSpr, overwrite: true);
-        result.CopiedFiles.Add(destinationSpr);
+        var filesToAdd = new List<(string GrfInternalPath, string SourceDiskPath)>();
 
-        if (!string.IsNullOrWhiteSpace(request.SourceActPath) && File.Exists(request.SourceActPath))
+        // Sprite/act files
+        if (request.EntityType == SpriteAssignmentEntityType.Item && request.IsHeadgear)
         {
-            var destinationAct = Path.Combine(spriteFolder, safeBase + ".act");
-            File.Copy(request.SourceActPath, destinationAct, overwrite: true);
-            result.CopiedFiles.Add(destinationAct);
+            AddSprActPair(filesToAdd, request, @"data\sprite\아이템", safeBase);
+            AddSprActPair(filesToAdd, request, @"data\sprite\악세사리\남", "남_" + safeBase);
+            AddSprActPair(filesToAdd, request, @"data\sprite\악세사리\여", "여_" + safeBase);
         }
         else
         {
-            result.Warnings.Add("ACT file is missing. Installed SPR only.");
+            var spriteFolder = request.EntityType switch
+            {
+                SpriteAssignmentEntityType.Npc => @"data\sprite\npc",
+                SpriteAssignmentEntityType.Monster => @"data\sprite\몬스터",
+                _ => @"data\sprite\아이템"
+            };
+            AddSprActPair(filesToAdd, request, spriteFolder, safeBase);
         }
 
+        if (!string.IsNullOrWhiteSpace(request.SourceActPath) && !File.Exists(request.SourceActPath) && result.Warnings.Count == 0)
+        {
+            result.Warnings.Add("ACT file is missing. Installing SPR only.");
+        }
+
+        // Related files (.wav, .bmp, .pal)
         foreach (var source in request.RelatedPaths ?? new List<string>())
         {
             if (string.IsNullOrWhiteSpace(source) || !File.Exists(source))
                 continue;
 
             var ext = Path.GetExtension(source).ToLowerInvariant();
-            string? dest = null;
+            string? grfInternalPath = null;
             if (ext == ".wav")
             {
-                var wavFolder = Path.Combine(dataRoot, "wav");
-                Directory.CreateDirectory(wavFolder);
-                dest = Path.Combine(wavFolder, safeBase + ".wav");
+                grfInternalPath = Path.Combine("data", "wav", safeBase + ".wav").Replace('/', '\\');
             }
             else if (ext is ".bmp" or ".png" or ".tga" or ".jpg" or ".jpeg")
             {
-                var fxFolder = Path.Combine(dataRoot, "texture", "effect");
-                Directory.CreateDirectory(fxFolder);
-                dest = Path.Combine(fxFolder, safeBase + ext);
+                // For Item: add to 유저인터페이스 (User Interface) per RO doc:
+                //   - item: inventory icon
+                //   - collection: right-click detail view
+                // Also add to effect\item for clients that use that path.
+                if (request.EntityType == SpriteAssignmentEntityType.Item)
+                {
+                    var extStr = ext;
+                    var baseWithExt = safeBase + extStr;
+                    // 유저인터페이스\item = inventory icon
+                    filesToAdd.Add((Path.Combine("data", "texture", "유저인터페이스", "item", baseWithExt).Replace('/', '\\'), source));
+                    // 유저인터페이스\collection = collection (right-click view)
+                    filesToAdd.Add((Path.Combine("data", "texture", "유저인터페이스", "collection", baseWithExt).Replace('/', '\\'), source));
+                    // effect\item = some clients use this
+                    grfInternalPath = Path.Combine("data", "texture", "effect", "item", baseWithExt).Replace('/', '\\');
+                }
+                else
+                {
+                    grfInternalPath = Path.Combine("data", "texture", "effect", safeBase + ext).Replace('/', '\\');
+                }
             }
             else if (ext == ".pal")
             {
-                var palFolder = Path.Combine(dataRoot, "texture", "palette");
-                Directory.CreateDirectory(palFolder);
-                dest = Path.Combine(palFolder, safeBase + ".pal");
+                grfInternalPath = Path.Combine("data", "texture", "palette", safeBase + ".pal").Replace('/', '\\');
             }
 
-            if (dest == null)
-                continue;
-
-            File.Copy(source, dest, overwrite: true);
-            result.CopiedFiles.Add(dest);
+            if (grfInternalPath != null)
+                filesToAdd.Add((grfInternalPath, source));
         }
 
-        result.ManifestPath = WriteManifest(request, result.CopiedFiles, result.Warnings);
-        result.Success = result.Errors.Count == 0;
+        if (filesToAdd.Count == 0)
+        {
+            result.Errors.Add("No files to add.");
+            return result;
+        }
+
+        var addResult = _grfWriter.AddFilesToGrf(grfPath, filesToAdd);
+
+        result.CopiedFiles.AddRange(addResult.AddedPaths);
+        result.Errors.AddRange(addResult.Errors);
+        result.Success = addResult.Success && result.Errors.Count == 0;
+
+        result.ManifestPath = WriteManifest(request, grfPath, result.CopiedFiles, result.Warnings);
         return result;
+    }
+
+    private static void AddSprActPair(
+        List<(string GrfInternalPath, string SourceDiskPath)> list,
+        SpriteAssignmentRequest request,
+        string grfFolder,
+        string fileBase)
+    {
+        var sprPath = Path.Combine(grfFolder, fileBase + ".spr").Replace('/', '\\');
+        list.Add((sprPath, request.SourceSprPath));
+
+        if (!string.IsNullOrWhiteSpace(request.SourceActPath) && File.Exists(request.SourceActPath))
+        {
+            var actPath = Path.Combine(grfFolder, fileBase + ".act").Replace('/', '\\');
+            list.Add((actPath, request.SourceActPath));
+        }
     }
 
     private static string WriteManifest(
         SpriteAssignmentRequest request,
-        IReadOnlyList<string> copiedFiles,
+        string grfPath,
+        IReadOnlyList<string> addedPaths,
         IReadOnlyList<string> warnings)
     {
         var manifestPath = Path.Combine(request.ClientRootPath, "asset-assignment-manifest.txt");
         var sb = new StringBuilder();
         sb.AppendLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}]");
+        sb.AppendLine($"TargetGRF: {grfPath}");
         sb.AppendLine($"EntityType: {request.EntityType}");
         sb.AppendLine($"TargetKey: {request.TargetKey}");
         sb.AppendLine($"SourceACT: {request.SourceActPath}");
         sb.AppendLine($"SourceSPR: {request.SourceSprPath}");
-        foreach (var file in copiedFiles)
-            sb.AppendLine("Copied: " + file);
+        foreach (var path in addedPaths)
+            sb.AppendLine("Added to GRF: " + path);
         foreach (var warning in warnings)
             sb.AppendLine("Warning: " + warning);
         sb.AppendLine();
@@ -130,4 +181,3 @@ public class SpriteAssignmentService
         return value;
     }
 }
-

@@ -16,6 +16,7 @@ using RoDbEditor.Data;
 using RoDbEditor.Models;
 using RoDbEditor.Services;
 using RoDbEditor.Services.Analysis;
+using RoDbEditor.Services.Export;
 using RoDbEditor.UI;
 
 namespace RoDbEditor;
@@ -1116,6 +1117,13 @@ public partial class MainWindow : Window
         }
         _currentMobSnapshot = CloneMob(_currentMob);
         _originalMonsterDropsText = SerializeMobDrops(_currentMob);
+        try { App.MobInfoLuaWriter?.WriteEntry(_currentMob); }
+        catch (Exception luaEx)
+        {
+            System.Windows.MessageBox.Show(this,
+                "Monster saved to YAML but failed to update mobinfo_custom.lua:\n" + luaEx.Message,
+                "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
         System.Windows.MessageBox.Show(this, "Monster saved.", "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Information);
     }
 
@@ -1990,6 +1998,25 @@ public partial class MainWindow : Window
                     _operationsLog.RecordAdded(OperationEntityKind.Item, item.Id, item.AegisName, item.Name ?? "", result.Path, result.BodyIndex);
                 RefreshOperationsList();
             }
+            try { App.ItemInfoLuaWriter?.WriteEntry(item); }
+            catch (Exception luaEx)
+            {
+                System.Windows.MessageBox.Show(this,
+                    "Item saved to YAML but failed to update itemInfo_C.lua:\n" + luaEx.Message,
+                    "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+            try
+            {
+                if ((item.View ?? 0) > 0)
+                    App.AccessoryIdWriter?.WriteEntry(item);
+                App.ClientAssetWriter?.EnsureItemIcon(item);
+                App.ClientAssetWriter?.EnsureCollectionIcon(item);
+            }
+            catch (Exception assetEx)
+            {
+                System.Windows.MessageBox.Show(this, "Client assets (accessoryid/icon): " + assetEx.Message,
+                    "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
             System.Windows.MessageBox.Show(this, "Item saved.", "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Information);
         }
         catch (Exception ex)
@@ -2274,6 +2301,42 @@ public partial class MainWindow : Window
                 })
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
+            // Also include .bmp/.png etc. with same base name from other folders (e.g. texture/effect)
+            var crossFolderTextures = App.ExtractedAssetService?.FindTextureFilesForBase(_currentExtractedAsset.BaseName) ?? Array.Empty<string>();
+            foreach (var p in crossFolderTextures)
+            {
+                if (!string.IsNullOrWhiteSpace(p) && File.Exists(p) && !related.Contains(p, StringComparer.OrdinalIgnoreCase))
+                    related.Add(p);
+            }
+        }
+
+        var isHeadgear = entityType == SpriteAssignmentEntityType.Item && selectedTarget?.Payload is ItemEntry itemEntry
+            && itemEntry.Locations != null
+            && itemEntry.Locations.Keys.Any(k => k.StartsWith("Head_", StringComparison.OrdinalIgnoreCase) || k.StartsWith("Costume_Head_", StringComparison.OrdinalIgnoreCase));
+
+        var clientRoot = GetClientRootForAssignment() ?? @"F:\MMORPG\RAGNAROK ONLINE\client";
+        var targetGrfPath = App.Config?.TargetGrfPath ?? Path.Combine(clientRoot, App.Config?.TargetGrfFileName ?? "custom.grf");
+
+        var safeBaseForPaths = string.Join("", targetKey.Trim().Select(c => Path.GetInvalidFileNameChars().Contains(c) ? '_' : c));
+        if (string.IsNullOrWhiteSpace(safeBaseForPaths)) safeBaseForPaths = "custom_sprite";
+
+        var showGrfEditorOfferAfterSuccess = false;
+        if (entityType == SpriteAssignmentEntityType.Item && !HasTextureInRelatedPaths(related))
+        {
+            var noBmpMsg = "The .spr and .act you chose has no .bmp with them. Items need an icon for the inventory." +
+                Environment.NewLine + Environment.NewLine +
+                "We can proceed with .spr and .act only. You will need to add the .bmp manually. Drop it into these GRF paths:" +
+                Environment.NewLine + Environment.NewLine +
+                "• data\\texture\\유저인터페이스\\item\\" + safeBaseForPaths + ".bmp" +
+                Environment.NewLine +
+                "• data\\texture\\유저인터페이스\\collection\\" + safeBaseForPaths + ".bmp" +
+                Environment.NewLine + Environment.NewLine +
+                "I can open GRF Editor with your target GRF so you can transfer the file.";
+            var noBmpResult = System.Windows.MessageBox.Show(this, noBmpMsg, "No .bmp found for this item",
+                MessageBoxButton.OKCancel, MessageBoxImage.Warning);
+            if (noBmpResult == MessageBoxResult.Cancel)
+                return;
+            showGrfEditorOfferAfterSuccess = true;
         }
 
         var req = new SpriteAssignmentRequest
@@ -2283,7 +2346,9 @@ public partial class MainWindow : Window
             SourceActPath = actPath ?? "",
             SourceSprPath = sprPath,
             RelatedPaths = related,
-            ClientRootPath = @"F:\MMORPG\RAGNAROK ONLINE\client"
+            ClientRootPath = clientRoot,
+            TargetGrfPath = targetGrfPath,
+            IsHeadgear = isHeadgear
         };
 
         var result = App.SpriteAssignmentService.ExecuteAssignment(req);
@@ -2295,7 +2360,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        string designation = "Asset files copied.";
+        string designation = "Asset files added to GRF.";
         if (entityType == SpriteAssignmentEntityType.Npc && selectedTarget?.Payload is NpcScriptEntry npc)
         {
             designation = App.EntityDesignationService.ApplyNpcSprite(npc, targetKey);
@@ -2313,12 +2378,46 @@ public partial class MainWindow : Window
             $"Assignment complete.{Environment.NewLine}" +
             $"Entity: {entityType}{Environment.NewLine}" +
             $"Target key: {targetKey}{Environment.NewLine}" +
-            $"Copied files: {result.CopiedFiles.Count}{Environment.NewLine}" +
+            $"Added to GRF: {result.CopiedFiles.Count} files{Environment.NewLine}" +
             $"{designation}{Environment.NewLine}" +
             $"Manifest: {result.ManifestPath}{warningText}",
             "RoDbEditor",
             MessageBoxButton.OK,
             MessageBoxImage.Information);
+
+        if (showGrfEditorOfferAfterSuccess)
+        {
+            var launchResult = System.Windows.MessageBox.Show(this,
+                "Added .spr and .act to GRF. Would you like me to open GRF Editor so you can add the .bmp manually?",
+                "Open GRF Editor?", MessageBoxButton.YesNo, MessageBoxImage.Question);
+            if (launchResult == MessageBoxResult.Yes)
+            {
+                var editorPath = FindGrfEditorExecutable();
+                if (!string.IsNullOrEmpty(editorPath) && File.Exists(targetGrfPath))
+                {
+                    try
+                    {
+                        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                        {
+                            FileName = editorPath,
+                            UseShellExecute = true,
+                            Arguments = $"\"{targetGrfPath}\""
+                        });
+                    }
+                    catch (Exception ex)
+                    {
+                        System.Windows.MessageBox.Show(this, "Failed to launch GRF Editor: " + ex.Message,
+                            "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    }
+                }
+                else
+                {
+                    System.Windows.MessageBox.Show(this,
+                        "GRF Editor.exe not found, or target GRF does not exist.",
+                        "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Warning);
+                }
+            }
+        }
     }
 
     private void OpenInGrfEditorButton_Click(object sender, RoutedEventArgs e)
@@ -2385,6 +2484,12 @@ public partial class MainWindow : Window
         }
 
         return null;
+    }
+
+    private static bool HasTextureInRelatedPaths(IEnumerable<string>? paths)
+    {
+        var textureExts = new[] { ".bmp", ".png", ".tga", ".jpg", ".jpeg", ".gif" };
+        return paths?.Any(p => textureExts.Contains(Path.GetExtension(p), StringComparer.OrdinalIgnoreCase)) ?? false;
     }
 
     private void ExtractAllRelatedButton_Click(object sender, RoutedEventArgs e)
@@ -2733,57 +2838,82 @@ public partial class MainWindow : Window
 
     private void ItemExportButton_Click(object sender, RoutedEventArgs e)
     {
-        if (AssetListBox.SelectedItem is not ItemEntry item) return;
-        var dlg = new Microsoft.Win32.SaveFileDialog
-        {
-            Title = "Export item",
-            Filter = "YAML|*.yml|All|*.*",
-            FileName = $"item_{item.Id}_{item.AegisName}.yml"
-        };
-        if (dlg.ShowDialog(this) != true) return;
-        var script = ItemEditScript?.Text ?? item.Script ?? "";
-        var yaml = $"# Item {item.Id} {item.DisplayName}\nId: {item.Id}\nAegisName: {item.AegisName}\nScript: {script}\n";
-        File.WriteAllText(dlg.FileName, yaml);
-        System.Windows.MessageBox.Show(this, "Exported.", "RoDbEditor", MessageBoxButton.OK);
+        CopyCustomOutputItem_Click(sender, e);
     }
 
     private void MonsterExportButton_Click(object sender, RoutedEventArgs e)
     {
-        if (AssetListBox.SelectedItem is not MobEntry mob) return;
-        var dlg = new Microsoft.Win32.SaveFileDialog
-        {
-            Title = "Export monster",
-            Filter = "YAML|*.yml|Text|*.txt|All|*.*",
-            FileName = $"mob_{mob.Id}_{mob.AegisName}.yml"
-        };
-        if (dlg.ShowDialog(this) != true) return;
-        var sb = new System.Text.StringBuilder();
-        sb.AppendLine($"# Mob {mob.Id} {mob.DisplayName}");
-        sb.AppendLine($"Id: {mob.Id}");
-        sb.AppendLine($"AegisName: {mob.AegisName}");
-        sb.AppendLine("Drops:");
-        foreach (MobDropEntry d in MonsterDropsGrid.Items.Cast<MobDropEntry>())
-            sb.AppendLine($"  - Item: {d.Item}  Rate: {d.Rate}");
-        sb.AppendLine("MvpDrops:");
-        foreach (MobDropEntry d in MonsterMvpDropsGrid.Items.Cast<MobDropEntry>())
-            sb.AppendLine($"  - Item: {d.Item}  Rate: {d.Rate}");
-        File.WriteAllText(dlg.FileName, sb.ToString());
-        System.Windows.MessageBox.Show(this, "Exported.", "RoDbEditor", MessageBoxButton.OK);
+        CopyCustomOutputMob_Click(sender, e);
     }
 
     private void NpcExportButton_Click(object sender, RoutedEventArgs e)
     {
-        if (AssetListBox.SelectedItem is not NpcScriptEntry npc) return;
-        var dlg = new Microsoft.Win32.SaveFileDialog
+        CopyCustomOutputNpc_Click(sender, e);
+    }
+
+    private void CopyCustomOutputItem_Click(object sender, RoutedEventArgs e)
+    {
+        if (AssetListBox.SelectedItem is not ItemEntry item)
         {
-            Title = "Export NPC script",
-            Filter = "Text|*.txt|All|*.*",
-            FileName = $"npc_{npc.Name}.txt"
-        };
-        if (dlg.ShowDialog(this) != true) return;
-        var content = NpcScriptEditor.Text ?? (npc.Type == NpcScriptType.Script ? npc.ScriptBody : npc.RawLine);
-        File.WriteAllText(dlg.FileName, content);
-        System.Windows.MessageBox.Show(this, "Exported.", "RoDbEditor", MessageBoxButton.OK);
+            System.Windows.MessageBox.Show(this, "Select an item first.", "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        item.Script = string.IsNullOrWhiteSpace(ItemEditScript?.Text) ? item.Script : ItemEditScript.Text.Trim();
+        item.EquipScript = string.IsNullOrWhiteSpace(ItemEditEquipScript?.Text) ? item.EquipScript : ItemEditEquipScript.Text.Trim();
+        item.UnEquipScript = string.IsNullOrWhiteSpace(ItemEditUnEquipScript?.Text) ? item.UnEquipScript : ItemEditUnEquipScript.Text.Trim();
+
+        var bundle = BuildCustomBundleExporter().BuildForItem(item, includeClient: true, includeAssetNotes: true);
+        CopyBundleToClipboard(bundle, "custom item bundle");
+    }
+
+    private void CopyCustomOutputMob_Click(object sender, RoutedEventArgs e)
+    {
+        if (AssetListBox.SelectedItem is not MobEntry mob)
+        {
+            System.Windows.MessageBox.Show(this, "Select a monster first.", "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        var bundle = BuildCustomBundleExporter().BuildForMob(
+            mob,
+            includeMobAvail: false,
+            includeMobSkills: true,
+            includeAssetNotes: true);
+        CopyBundleToClipboard(bundle, "custom monster bundle");
+    }
+
+    private void CopyCustomOutputNpc_Click(object sender, RoutedEventArgs e)
+    {
+        if (AssetListBox.SelectedItem is not NpcScriptEntry npc)
+        {
+            System.Windows.MessageBox.Show(this, "Select an NPC first.", "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        var editedText = NpcScriptEditor?.Text;
+        var bundle = BuildCustomBundleExporter().BuildForNpc(
+            npc,
+            editedText,
+            includeClientIdentity: false,
+            includeAssetNotes: true);
+        CopyBundleToClipboard(bundle, "custom NPC bundle");
+    }
+
+    private CustomBundleExporter BuildCustomBundleExporter()
+    {
+        var clientRoot = GetClientRootForAssignment();
+        var itemExporter = new ItemBundleExporter(clientRoot);
+        var mobExporter = new MobBundleExporter(id => App.MobSkillDbService?.GetRowsForMob(id) ?? Array.Empty<MobSkillDbRow>());
+        var npcExporter = new NpcBundleExporter();
+        return new CustomBundleExporter(itemExporter, mobExporter, npcExporter);
+    }
+
+    private void CopyBundleToClipboard(ExportBundle bundle, string label)
+    {
+        var text = ExportBundleText.ToClipboardText(bundle);
+        System.Windows.Clipboard.SetText(text);
+        System.Windows.MessageBox.Show(this, $"Copied {label} to clipboard.", "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Information);
     }
 
     private void OnAnalyzeClicked(object sender, RoutedEventArgs e)
@@ -3266,8 +3396,8 @@ public partial class MainWindow : Window
             var folder = entityType switch
             {
                 SpriteAssignmentEntityType.Npc => @"data\sprite\npc",
-                SpriteAssignmentEntityType.Monster => @"data\sprite\monster",
-                _ => @"data\sprite\item"
+                SpriteAssignmentEntityType.Monster => @"data\sprite\몬스터",
+                _ => @"data\sprite\아이템"
             };
             ExtractedDestinationHint.Text = $"Destination: {folder}";
         }
@@ -3584,6 +3714,44 @@ public partial class MainWindow : Window
             var includeExts = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { ".wav", ".bmp", ".png", ".tga", ".jpg", ".jpeg", ".pal" };
             relatedPaths.AddRange(entry.SourcePaths.Where(p =>
                 !string.IsNullOrWhiteSpace(p) && includeExts.Contains(Path.GetExtension(p))));
+            // Also include .bmp/.png etc. with same base name from other folders (e.g. texture/effect)
+            var crossFolderTextures = App.ExtractedAssetService?.FindTextureFilesForBase(entry.BaseName) ?? Array.Empty<string>();
+            foreach (var p in crossFolderTextures)
+            {
+                if (!string.IsNullOrWhiteSpace(p) && File.Exists(p) && !relatedPaths.Contains(p, StringComparer.OrdinalIgnoreCase))
+                    relatedPaths.Add(p);
+            }
+        }
+
+        var isHeadgear = false;
+        if (entityType == SpriteAssignmentEntityType.Item && selectedTarget?.Payload is ItemEntry extItemEntry
+            && extItemEntry.Locations != null)
+        {
+            isHeadgear = extItemEntry.Locations.Keys.Any(k => k.StartsWith("Head_", StringComparison.OrdinalIgnoreCase) || k.StartsWith("Costume_Head_", StringComparison.OrdinalIgnoreCase));
+        }
+
+        var targetGrfPath = App.Config?.TargetGrfPath ?? Path.Combine(clientRoot, App.Config?.TargetGrfFileName ?? "custom.grf");
+
+        var safeBaseForPaths = string.Join("", targetKey.Trim().Select(c => Path.GetInvalidFileNameChars().Contains(c) ? '_' : c));
+        if (string.IsNullOrWhiteSpace(safeBaseForPaths)) safeBaseForPaths = "custom_sprite";
+
+        var showGrfEditorOfferAfterSuccess = false;
+        if (entityType == SpriteAssignmentEntityType.Item && !HasTextureInRelatedPaths(relatedPaths))
+        {
+            var noBmpMsg = "The .spr and .act you chose has no .bmp with them. Items need an icon for the inventory." +
+                Environment.NewLine + Environment.NewLine +
+                "We can proceed with .spr and .act only. You will need to add the .bmp manually. Drop it into these GRF paths:" +
+                Environment.NewLine + Environment.NewLine +
+                "• data\\texture\\유저인터페이스\\item\\" + safeBaseForPaths + ".bmp" +
+                Environment.NewLine +
+                "• data\\texture\\유저인터페이스\\collection\\" + safeBaseForPaths + ".bmp" +
+                Environment.NewLine + Environment.NewLine +
+                "I can open GRF Editor with your target GRF so you can transfer the file.";
+            var noBmpResult = System.Windows.MessageBox.Show(this, noBmpMsg, "No .bmp found for this item",
+                MessageBoxButton.OKCancel, MessageBoxImage.Warning);
+            if (noBmpResult == MessageBoxResult.Cancel)
+                return;
+            showGrfEditorOfferAfterSuccess = true;
         }
 
         var req = new SpriteAssignmentRequest
@@ -3593,7 +3761,9 @@ public partial class MainWindow : Window
             SourceActPath = entry.ActPath ?? "",
             SourceSprPath = entry.SprPath ?? "",
             RelatedPaths = relatedPaths,
-            ClientRootPath = clientRoot
+            ClientRootPath = clientRoot,
+            TargetGrfPath = targetGrfPath,
+            IsHeadgear = isHeadgear
         };
 
         try
@@ -3615,10 +3785,44 @@ public partial class MainWindow : Window
                     designation = $"Custom monster created: {custom.Id} ({custom.AegisName}) in db/import/mob_db.yml";
                 }
                 else
-                    designation = $"Copied to data\\sprite\\{entityType.ToString().ToLowerInvariant()}";
+                    designation = $"Added to data\\sprite\\{entityType.ToString().ToLowerInvariant()} in GRF";
                 System.Windows.MessageBox.Show(this,
-                    $"Sprite assigned successfully.\nCopied {result.CopiedFiles?.Count ?? 0} files.\n{designation}\nManifest: {result.ManifestPath}",
+                    $"Sprite assigned successfully.\nAdded {result.CopiedFiles?.Count ?? 0} files to GRF.\n{designation}\nManifest: {result.ManifestPath}",
                     "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Information);
+
+                if (showGrfEditorOfferAfterSuccess)
+                {
+                    var launchResult = System.Windows.MessageBox.Show(this,
+                        "Added .spr and .act to GRF. Would you like me to open GRF Editor so you can add the .bmp manually?",
+                        "Open GRF Editor?", MessageBoxButton.YesNo, MessageBoxImage.Question);
+                    if (launchResult == MessageBoxResult.Yes)
+                    {
+                        var editorPath = FindGrfEditorExecutable();
+                        if (!string.IsNullOrEmpty(editorPath) && File.Exists(targetGrfPath))
+                        {
+                            try
+                            {
+                                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                                {
+                                    FileName = editorPath,
+                                    UseShellExecute = true,
+                                    Arguments = $"\"{targetGrfPath}\""
+                                });
+                            }
+                            catch (Exception ex)
+                            {
+                                System.Windows.MessageBox.Show(this, "Failed to launch GRF Editor: " + ex.Message,
+                                    "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Warning);
+                            }
+                        }
+                        else
+                        {
+                            System.Windows.MessageBox.Show(this,
+                                "GRF Editor.exe not found, or target GRF does not exist.",
+                                "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Warning);
+                        }
+                    }
+                }
             }
             else
                 System.Windows.MessageBox.Show(this,
@@ -3720,9 +3924,7 @@ public partial class MainWindow : Window
                 SaveExtractedAsMobEntry();
                 break;
             case SpriteAssignmentEntityType.Npc:
-                System.Windows.MessageBox.Show(this,
-                    "NPC scripts are complex and cannot be auto-generated.\nUse the Assign Sprite button to install the sprite, then create the NPC script manually.",
-                    "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Information);
+                SaveExtractedAsNpcEntry();
                 break;
         }
     }
@@ -3809,6 +4011,20 @@ public partial class MainWindow : Window
                 _operationsLog.RecordAdded(OperationEntityKind.Item, item.Id, item.AegisName, item.Name ?? "", result.Path, result.BodyIndex);
                 RefreshOperationsList();
             }
+            try
+            {
+                App.ItemInfoLuaWriter?.WriteEntry(item);
+                if (item.View.HasValue && item.View.Value > 0)
+                    App.AccessoryIdWriter?.WriteEntry(item);
+                App.ClientAssetWriter?.EnsureItemIcon(item);
+                App.ClientAssetWriter?.EnsureCollectionIcon(item);
+            }
+            catch (Exception luaEx)
+            {
+                System.Windows.MessageBox.Show(this,
+                    "Item saved to YAML but failed to update client files:\n" + luaEx.Message,
+                    "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
             System.Windows.MessageBox.Show(this,
                 $"Item saved: {item.Id} ({item.AegisName}) to db/import/item_db.yml",
                 "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Information);
@@ -3818,6 +4034,54 @@ public partial class MainWindow : Window
             System.Windows.MessageBox.Show(this, "Error saving item: " + ex.Message,
                 "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Error);
         }
+    }
+
+    private void SaveExtractedAsNpcEntry()
+    {
+        if (App.NpcScriptWriter == null || string.IsNullOrWhiteSpace(App.Config.DataPath))
+        {
+            System.Windows.MessageBox.Show(this,
+                "rAthena DataPath not set. Use File > Select rAthena folder to set the server path.",
+                "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        var name = ExtNpcName?.Text?.Trim() ?? "Custom NPC";
+        var spriteId = ExtNpcSpriteId?.Text?.Trim() ?? _currentExtractedAsset?.BaseName ?? "custom_npc";
+        var map = ExtNpcMap?.Text?.Trim() ?? "prontera";
+
+        var path = App.NpcScriptWriter.WriteEntry(map, 150, 150, 4, name, spriteId);
+        if (path == null)
+        {
+            System.Windows.MessageBox.Show(this, "Failed to create NPC script.", "RoDbEditor",
+                MessageBoxButton.OK, MessageBoxImage.Error);
+            return;
+        }
+
+        var clientRoot = GetClientRootForAssignment();
+        if (!string.IsNullOrWhiteSpace(clientRoot) && Directory.Exists(clientRoot) &&
+            _currentExtractedAsset != null && !string.IsNullOrWhiteSpace(_currentExtractedAsset.SprPath) &&
+            File.Exists(_currentExtractedAsset.SprPath))
+        {
+            var targetGrfPath = App.Config?.TargetGrfPath ?? Path.Combine(clientRoot, App.Config?.TargetGrfFileName ?? "custom.grf");
+            var req = new SpriteAssignmentRequest
+            {
+                EntityType = SpriteAssignmentEntityType.Npc,
+                TargetKey = spriteId,
+                SourceActPath = _currentExtractedAsset.ActPath ?? "",
+                SourceSprPath = _currentExtractedAsset.SprPath,
+                RelatedPaths = new List<string>(),
+                ClientRootPath = clientRoot,
+                TargetGrfPath = targetGrfPath
+            };
+            App.SpriteAssignmentService?.ExecuteAssignment(req);
+        }
+
+        App.NpcIndexService?.LoadFromDataPath(App.Config.DataPath);
+        RefreshList();
+        System.Windows.MessageBox.Show(this,
+            $"NPC script created: {Path.GetFileName(path)}\nMap: {map}, Sprite: {spriteId}",
+            "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Information);
     }
 
     private void SaveExtractedAsMobEntry()
@@ -3851,6 +4115,13 @@ public partial class MainWindow : Window
                 _operationsLog.RecordAdded(OperationEntityKind.Mob, mob.Id, mob.AegisName, mob.Name ?? "", result.Path, result.BodyIndex);
                 RefreshOperationsList();
             }
+            try { App.MobInfoLuaWriter?.WriteEntry(mob); }
+            catch (Exception luaEx)
+            {
+                System.Windows.MessageBox.Show(this,
+                    "Monster saved to YAML but failed to update mobinfo_custom.lua:\n" + luaEx.Message,
+                    "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
             System.Windows.MessageBox.Show(this,
                 $"Monster saved: {mob.Id} ({mob.AegisName}) to db/import/mob_db.yml",
                 "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Information);
@@ -3882,9 +4153,18 @@ public partial class MainWindow : Window
             if (record.Kind == OperationKind.Added)
             {
                 if (record.EntityKind == OperationEntityKind.Item)
+                {
+                    var item = App.ItemDbService?.Items?.FirstOrDefault(i => i.Id == record.Id);
+                    if (item?.View.HasValue == true && item.View.Value > 0)
+                        App.AccessoryIdWriter?.RemoveEntry(item.View.Value, item.AegisName);
                     App.ItemDbService?.RemoveEntryAt(record.FilePath, record.BodyIndex);
+                    App.ItemInfoLuaWriter?.RemoveEntry(record.Id);
+                }
                 else
+                {
+                    App.MobInfoLuaWriter?.RemoveEntry(record.Id);
                     App.MobDbService?.RemoveEntryAt(record.FilePath, record.BodyIndex);
+                }
             }
             else if (record.Kind == OperationKind.Updated && record.PreviousYamlSnapshot != null)
             {

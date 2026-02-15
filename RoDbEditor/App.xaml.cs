@@ -33,7 +33,13 @@ public partial class App : System.Windows.Application
     public static MobSkillPanelService MobSkillPanelService { get; private set; } = null!;
     public static MobSkillWriteService? MobSkillWriteService { get; private set; }
     public static ExtractedAssetService ExtractedAssetService { get; private set; } = null!;
+    public static GrfWriterService GrfWriterService { get; private set; } = null!;
     public static SpriteAssignmentService SpriteAssignmentService { get; private set; } = null!;
+    public static ItemInfoLuaWriter? ItemInfoLuaWriter { get; private set; }
+    public static AccessoryIdWriter? AccessoryIdWriter { get; private set; }
+    public static ClientAssetWriter? ClientAssetWriter { get; private set; }
+    public static MobInfoLuaWriter? MobInfoLuaWriter { get; private set; }
+    public static NpcScriptWriter? NpcScriptWriter { get; private set; }
     public static EntityDesignationService EntityDesignationService { get; private set; } = null!;
     public static IReadOnlyDictionary<int, string> ItemInfoDescriptions { get; set; } = new Dictionary<int, string>();
     public static IHighlightingDefinition? RagnarokScriptHighlighting { get; private set; }
@@ -238,7 +244,14 @@ public partial class App : System.Windows.Application
         SkillDbMiniService = new SkillDbMiniService();
         MobSkillPanelService = new MobSkillPanelService(MobSkillDbService, SkillDbMiniService, MobDbService);
         ExtractedAssetService = new ExtractedAssetService(() => FileSystemSpriteSource?.RootPath);
-        SpriteAssignmentService = new SpriteAssignmentService();
+        GrfWriterService = new GrfWriterService();
+        SpriteAssignmentService = new SpriteAssignmentService(GrfWriterService);
+        var clientRoot = @"F:\MMORPG\RAGNAROK ONLINE\client";
+        ItemInfoLuaWriter = new ItemInfoLuaWriter(clientRoot);
+        AccessoryIdWriter = new AccessoryIdWriter(clientRoot);
+        ClientAssetWriter = new ClientAssetWriter(clientRoot);
+        MobInfoLuaWriter = new MobInfoLuaWriter(clientRoot);
+        NpcScriptWriter = new NpcScriptWriter(Config.DataPath ?? clientRoot);
         EntityDesignationService = new EntityDesignationService(NpcIndexService, MobDbService);
         
         // Wire up condition text resolvers

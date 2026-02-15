@@ -306,7 +306,7 @@ public class ItemDbService
             {
                 // Append new entry
                 item.SourceIndex = body.Count;
-                item.SourceFile = Path.GetFileName(path);
+                item.SourceFile = path;
                 body.Add(entry);
             }
 
@@ -381,6 +381,14 @@ public class ItemDbService
 
     private string? ResolveItemFilePath(ItemEntry item)
     {
+        // Custom entries should stay in import overlay whenever available.
+        if (item.Id >= 50000)
+        {
+            var importFirst = GetImportItemDbPath();
+            if (!string.IsNullOrEmpty(importFirst))
+                return importFirst;
+        }
+
         // If item already has a known source file, find it
         if (!string.IsNullOrEmpty(item.SourceFile))
         {
