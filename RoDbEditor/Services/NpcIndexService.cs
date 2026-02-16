@@ -189,6 +189,17 @@ public class NpcIndexService
         return _byMap.TryGetValue(map, out var list) ? list : Array.Empty<NpcScriptEntry>();
     }
 
+    public IReadOnlyList<NpcScriptEntry> FindByMapAndCoord(string map, int x, int y)
+    {
+        if (string.IsNullOrWhiteSpace(map))
+            return Array.Empty<NpcScriptEntry>();
+
+        if (!_byMap.TryGetValue(map, out var list))
+            return Array.Empty<NpcScriptEntry>();
+
+        return list.Where(n => n.X == x && n.Y == y).ToList();
+    }
+
     public void SaveNpc(NpcScriptEntry entry)
     {
         if (string.IsNullOrEmpty(entry.FilePath) || !File.Exists(entry.FilePath)) return;

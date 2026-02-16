@@ -23,7 +23,10 @@ public class AnalysisEngine
             new DuplicateIdValidator(),
             new BrokenReferenceValidator(),
             new ItemIconValidator(grf, fileSystem),
+            new ItemClientInfoValidator(grf, fileSystem),
             new MobSpriteValidator(spriteLookup),
+            new MobAvailSpriteValidator(spriteLookup),
+            new NpcIdentityValidator(spriteLookup),
             new NpcMapValidator(mapIndex, npcIndex)
         };
     }

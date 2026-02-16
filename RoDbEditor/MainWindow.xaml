@@ -21,7 +21,6 @@
         <!-- Menu -->
         <Menu Grid.Row="0">
             <MenuItem Header="_File">
-                <MenuItem Header="Open GRF..." Click="MenuOpenGrf_Click"/>
                 <MenuItem Header="Select rAthena folder..." Click="MenuOpenDataFolder_Click"/>
                 <MenuItem Header="Open Extracted Assets..." Click="MenuOpenExtractedAssets_Click"/>
                 <Separator/>
@@ -34,9 +33,16 @@
                 <MenuItem Header="Analyze Workspace" Click="OnAnalyzeClicked"/>
                 <MenuItem Header="Analyze Folder..." Click="OnAnalyzeFolderClicked"/>
                 <Separator/>
+                <MenuItem Header="Open Client Folder..." Click="OpenClientFolder_Click"/>
+                <MenuItem Header="Set Client Patch Output..." Click="SetClientPatchOutput_Click"/>
+                <Separator/>
                 <MenuItem Header="Copy Custom Output (Item)" Click="CopyCustomOutputItem_Click"/>
                 <MenuItem Header="Copy Custom Output (Mob)" Click="CopyCustomOutputMob_Click"/>
                 <MenuItem Header="Copy Custom Output (NPC)" Click="CopyCustomOutputNpc_Click"/>
+                <Separator/>
+                <MenuItem Header="Write itemInfo_rodbeditor.lua" Click="WriteItemInfoOverlay_Click"/>
+                <MenuItem Header="Append mob_avail override" Click="AppendMobAvail_Click"/>
+                <MenuItem Header="Append npcidentity/jobname overlay" Click="AppendNpcIdentity_Click"/>
             </MenuItem>
             <MenuItem Header="_Help">
                 <MenuItem Header="Sprite Diagnostic..." Click="MenuSpriteDiagnostic_Click"/>
@@ -101,7 +107,8 @@
                     </StackPanel>
                     <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
                         <TextBlock x:Name="CurrentListLabel" Text="CURRENT LIST: ITEMS" FontWeight="SemiBold" VerticalAlignment="Center"/>
-                        <Button x:Name="CreateNewButton" Content="+ NEW" Padding="8,2" Margin="8,0,0,0" Click="CreateNewButton_Click" FontSize="11"/>
+                        <Button x:Name="RefreshListButton" Content="Refresh" Padding="8,2" Margin="8,0,0,0" Click="RefreshListButton_Click" FontSize="11"/>
+                        <Button x:Name="CreateNewButton" Content="+ NEW" Padding="8,2" Margin="4,0,0,0" Click="CreateNewButton_Click" FontSize="11"/>
                     </StackPanel>
                 </StackPanel>
                 <ListBox x:Name="AssetListBox" Grid.Row="2" DisplayMemberPath="DisplayName" SelectedValuePath="Path"
@@ -235,7 +242,7 @@
                             <TextBlock Text="Equip Location:" FontWeight="SemiBold" Margin="0,4,0,4"/>
                             <WrapPanel x:Name="ItemEditLocationsPanel" Margin="0,0,0,8"/>
                             <TextBlock Text="Description:" Margin="0,4,0,4"/>
-                            <TextBox x:Name="DetailDescription" TextWrapping="Wrap" AcceptsReturn="True" MinHeight="50" IsReadOnly="True" Margin="0,0,0,8"/>
+                            <TextBox x:Name="DetailDescription" TextWrapping="Wrap" AcceptsReturn="True" MinHeight="50" Margin="0,0,0,8"/>
                             <TextBlock Text="Script (Bonus Effects):" FontWeight="SemiBold" Margin="0,4,0,4"/>
                             <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
                                 <ComboBox x:Name="ItemEditBonusCombo" Width="200" DisplayMemberPath="DisplayName"/>

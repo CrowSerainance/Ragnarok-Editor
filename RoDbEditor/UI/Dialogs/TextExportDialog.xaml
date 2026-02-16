@@ -1,0 +1,48 @@
+<Window x:Class="RoDbEditor.UI.Dialogs.TextExportDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Blueprint Export" Height="720" Width="1100"
+        WindowStartupLocation="CenterOwner">
+    <Grid Margin="12">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <TextBlock x:Name="HeaderText"
+                   Grid.Row="0"
+                   FontSize="16"
+                   FontWeight="SemiBold"
+                   Text="Blueprint Export"
+                   Margin="0,0,0,8"/>
+
+        <TextBox x:Name="ExportTextBox"
+                 Grid.Row="1"
+                 FontFamily="Consolas"
+                 FontSize="13"
+                 TextWrapping="NoWrap"
+                 VerticalScrollBarVisibility="Auto"
+                 HorizontalScrollBarVisibility="Auto"
+                 AcceptsReturn="True"
+                 AcceptsTab="True"
+                 IsReadOnly="True"/>
+
+        <DockPanel Grid.Row="2" Margin="0,10,0,0" LastChildFill="False">
+            <Button Content="COPY"
+                    Width="110"
+                    Height="34"
+                    Margin="0,0,8,0"
+                    Click="Copy_Click"/>
+            <Button Content="SAVE..."
+                    Width="110"
+                    Height="34"
+                    Margin="0,0,8,0"
+                    Click="Save_Click"/>
+            <Button Content="CLOSE"
+                    Width="110"
+                    Height="34"
+                    Click="Close_Click"/>
+        </DockPanel>
+    </Grid>
+</Window>

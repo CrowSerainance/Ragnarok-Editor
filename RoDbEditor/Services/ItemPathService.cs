@@ -32,13 +32,17 @@ public class ItemPathService
         var result = new List<(string, string)>();
         if (item == null || !_grfService.IsLoaded) return result;
 
+        var resourceName = GetItemResourceName(item);
+
         var iconPaths = new[]
         {
             $@"data\texture\effect\{item.Id}.bmp",
             $@"data\texture\effect\{item.AegisName}.bmp",
+            $@"data\texture\effect\{resourceName}.bmp",
             $@"data\texture\effect\item\{item.Id}.bmp",
             $@"data\texture\effect\collection\{item.Id}.bmp",
             $@"data\texture\effect\collection\{item.AegisName}.bmp",
+            $@"data\texture\effect\collection\{resourceName}.bmp",
         };
 
         foreach (var p in iconPaths)
@@ -52,10 +56,13 @@ public class ItemPathService
             var uiPath = $@"data\texture\유저인터페이스\item\{item.Id}.bmp";
             if (_grfService.Exists(uiPath))
                 result.Add((uiPath, $"{item.DisplayName} (icon)"));
+            var uiPathByName = $@"data\texture\유저인터페이스\item\{resourceName}.bmp";
+            if (!string.IsNullOrEmpty(resourceName) && _grfService.Exists(uiPathByName))
+                result.Add((uiPathByName, $"{item.DisplayName} (icon)"));
         }
         catch { /* encoding fallback */ }
 
-        var (_, sprPath) = _spriteLookup.FindMonsterSprite(item.AegisName);
+        var (_, sprPath) = _spriteLookup.FindMonsterSprite(resourceName);
         if (!string.IsNullOrEmpty(sprPath) && _grfService.Exists(sprPath))
         {
             var actPath = Path.ChangeExtension(sprPath, ".act");
@@ -91,6 +98,22 @@ public class ItemPathService
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Resolve the client resource name for an item (icon/sprite base name).
+    /// Uses ClientItemInfoService when available, else item.ResourceName ?? item.AegisName.
+    /// </summary>
+    private static string GetItemResourceName(ItemEntry item)
+    {
+        if (item == null) return "";
+        if (RoDbEditor.App.ClientItemInfoService != null &&
+            RoDbEditor.App.ClientItemInfoService.TryGet(item.Id, out var entry) && entry != null)
+        {
+            var r = entry.IdentifiedResourceName ?? entry.UnidentifiedResourceName;
+            if (!string.IsNullOrWhiteSpace(r)) return r;
+        }
+        return string.IsNullOrWhiteSpace(item.ResourceName) ? (item.AegisName ?? "") : item.ResourceName;
     }
 
     /// <summary>

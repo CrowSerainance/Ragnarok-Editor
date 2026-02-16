@@ -34,7 +34,8 @@ public class AccessoryIdWriter
         if (view <= 0)
             return; // No View = not headgear with sprite mapping
 
-        var resourceName = string.IsNullOrEmpty(item.AegisName) ? "Custom_Item" : item.AegisName;
+        var rawName = !string.IsNullOrWhiteSpace(item.ResourceName) ? item.ResourceName : item.AegisName;
+        var resourceName = NormalizeResourceName(string.IsNullOrWhiteSpace(rawName) ? "Custom_Item" : rawName!);
         var constName = ToAccessoryConstantName(resourceName);
 
         WriteAccessoryId(constName, view);
@@ -117,7 +118,7 @@ public class AccessoryIdWriter
         if (!string.IsNullOrEmpty(dir))
             Directory.CreateDirectory(dir);
 
-        var spriteName = "_" + resourceName;
+        var spriteName = NormalizeResourceName(resourceName);
         var content = File.Exists(path) ? File.ReadAllText(path, Encoding.UTF8) : "";
 
         var marker = $"[ACCESSORY_IDs.{constName}]";
@@ -173,5 +174,23 @@ public class AccessoryIdWriter
     private static string EscapeLua(string s)
     {
         return s?.Replace("\\", "\\\\").Replace("\"", "\\\"") ?? "";
+    }
+
+    private static string NormalizeResourceName(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return "Custom_Item";
+
+        var sb = new StringBuilder();
+        foreach (var c in value.Trim())
+        {
+            if (char.IsLetterOrDigit(c) || c == '_')
+                sb.Append(c);
+            else if (char.IsWhiteSpace(c))
+                sb.Append('_');
+        }
+
+        var normalized = sb.ToString();
+        return string.IsNullOrWhiteSpace(normalized) ? "Custom_Item" : normalized;
     }
 }

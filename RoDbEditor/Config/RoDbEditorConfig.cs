@@ -34,6 +34,12 @@ public class RoDbEditorConfig
     /// <summary>Full path override for target GRF. When set, used instead of ClientRoot + TargetGrfFileName.</summary>
     public string? TargetGrfPath { get; set; }
 
+    /// <summary>Ragnarok client root folder (contains System/ and GRF files).</summary>
+    public string? ClientRootPath { get; set; }
+
+    /// <summary>Patch output root where RoDbEditor writes System/ and data/ overlay files.</summary>
+    public string? ClientPatchRoot { get; set; }
+
     public static RoDbEditorConfig Load()
     {
         var config = new RoDbEditorConfig();
@@ -78,6 +84,10 @@ public class RoDbEditorConfig
                         config.TargetGrfFileName = value;
                     if (string.Equals(key, "TargetGrfPath", System.StringComparison.OrdinalIgnoreCase) && !string.IsNullOrEmpty(value))
                         config.TargetGrfPath = value;
+                    if (string.Equals(key, "ClientRootPath", System.StringComparison.OrdinalIgnoreCase))
+                        config.ClientRootPath = value;
+                    if (string.Equals(key, "ClientPatchRoot", System.StringComparison.OrdinalIgnoreCase))
+                        config.ClientPatchRoot = value;
                 }
 
                 // After reading the INI, force the configured DataPath to the
@@ -107,6 +117,42 @@ public class RoDbEditorConfig
         }
 
         return config;
+    }
+
+    /// <summary>Persist config to INI file (creates directory if needed).</summary>
+    public void Save()
+    {
+        var configPath = FindConfigPath();
+        if (string.IsNullOrEmpty(configPath))
+        {
+            var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+            var dir = Path.Combine(appData, "RoDbEditor");
+            Directory.CreateDirectory(dir);
+            configPath = Path.Combine(dir, ConfigFileName);
+        }
+        var dirPath = Path.GetDirectoryName(configPath);
+        if (!string.IsNullOrEmpty(dirPath))
+            Directory.CreateDirectory(dirPath);
+
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("[" + SectionGrf + "]");
+        if (!string.IsNullOrEmpty(DataPath))
+            sb.AppendLine("DataPath=" + DataPath);
+        if (!string.IsNullOrEmpty(ExtractedAssetsPath))
+            sb.AppendLine("ExtractedAssetsPath=" + ExtractedAssetsPath);
+        sb.AppendLine("TargetGrfFileName=" + (TargetGrfFileName ?? "custom.grf"));
+        if (!string.IsNullOrEmpty(TargetGrfPath))
+            sb.AppendLine("TargetGrfPath=" + TargetGrfPath);
+        if (!string.IsNullOrEmpty(ClientRootPath))
+            sb.AppendLine("ClientRootPath=" + ClientRootPath);
+        if (!string.IsNullOrEmpty(ClientPatchRoot))
+            sb.AppendLine("ClientPatchRoot=" + ClientPatchRoot);
+        foreach (var path in GrfPaths)
+        {
+            if (!string.IsNullOrEmpty(path))
+                sb.AppendLine("Path=" + path);
+        }
+        File.WriteAllText(configPath, sb.ToString());
     }
 
     private static string? FindConfigPath()

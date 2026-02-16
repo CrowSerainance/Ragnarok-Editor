@@ -46,6 +46,9 @@ public class ItemEntry
     public string? AliasName { get; set; }
     public string? ResourceName { get; set; }
     
+    // Client-side lore (written to itemInfo; not in rAthena YAML)
+    public string? Description { get; set; }
+
     // Scripts
     public string? Script { get; set; }
     public string? EquipScript { get; set; }

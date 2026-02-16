@@ -391,11 +391,13 @@ public class MobDbService
 
         if (mob.MvpExp > 0) entry["MvpExp"] = mob.MvpExp;
 
-        var enabledModes = mob.Modes != null
-            ? mob.Modes.Where(kv => kv.Value).Select(kv => (object)kv.Key).ToList()
-            : new List<object>();
-        if (enabledModes.Count > 0)
-            entry["Modes"] = enabledModes;
+        if (mob.Modes != null && mob.Modes.Any(kv => kv.Value))
+        {
+            var modes = new Dictionary<object, object>();
+            foreach (var kv in mob.Modes.Where(kv => kv.Value))
+                modes[kv.Key] = true;
+            entry["Modes"] = modes;
+        }
 
         if (mob.Drops.Count > 0)
         {
@@ -551,17 +553,17 @@ public class MobDbService
     }
 
     /// <summary>
-    /// Get the next available custom mob ID (3000+ range).
+    /// Get the next available custom mob ID (30000+ range).
     /// </summary>
     public int GetNextCustomMobId()
     {
-        int maxCustom = 2999;
+        int maxCustom = 29999;
         foreach (var mob in _mobs)
         {
-            if (mob.Id >= 3000 && mob.Id > maxCustom)
+            if (mob.Id >= 30000 && mob.Id > maxCustom)
                 maxCustom = mob.Id;
         }
-        return maxCustom + 1;
+        return Math.Max(30000, maxCustom + 1);
     }
 
     /// <summary>

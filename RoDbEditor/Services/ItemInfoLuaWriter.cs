@@ -205,9 +205,28 @@ public class ItemInfoLuaWriter
     private List<string> BuildDescriptionLines(ItemEntry item)
     {
         var lines = new List<string>();
-        lines.Add("A custom item.");
-        lines.Add("^777777________________________^000000");
 
+        // Custom lore: use item.Description when present (multi-line, split by newlines)
+        if (!string.IsNullOrWhiteSpace(item.Description))
+        {
+            foreach (var line in item.Description.Split(new[] { "\r\n", "\r", "\n" }, System.StringSplitOptions.None))
+                lines.Add(line.TrimEnd());
+            if (lines.Count > 0)
+                lines.Add("^777777________________________^000000");
+        }
+        else
+        {
+            // Auto-generated lore when no explicit description is provided.
+            lines.Add("A custom item.");
+            lines.Add("^777777________________________^000000");
+        }
+
+        AppendEquipmentDetails(item, lines);
+        return lines;
+    }
+
+    private static void AppendEquipmentDetails(ItemEntry item, List<string> lines)
+    {
         var typeLine = $"^0000CCType:^000000 {item.Type}";
         if (!string.IsNullOrEmpty(item.SubType))
             typeLine += $" / {item.SubType}";
@@ -260,7 +279,5 @@ public class ItemInfoLuaWriter
 
         if (item.Slots.HasValue && item.Slots.Value > 0)
             lines.Add($"^0000CCSlots:^000000 {item.Slots.Value}");
-
-        return lines;
     }
 }

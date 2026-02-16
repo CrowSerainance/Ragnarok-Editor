@@ -266,6 +266,15 @@ public class ItemDbService
         var path = ResolveItemFilePath(item);
         if (string.IsNullOrEmpty(path)) return null;
 
+        // When routing official items to import, create import file if it doesn't exist
+        if (!File.Exists(path) && path.Contains("import", StringComparison.OrdinalIgnoreCase) && path.EndsWith("item_db.yml", StringComparison.OrdinalIgnoreCase))
+        {
+            var dir = Path.GetDirectoryName(path);
+            if (!string.IsNullOrEmpty(dir))
+                Directory.CreateDirectory(dir);
+            File.WriteAllText(path, "Header:\n  Type: ITEM_DB\n  Version: 3\nBody: []\n");
+        }
+
         try
         {
             var deserializer = new DeserializerBuilder()
@@ -394,14 +403,24 @@ public class ItemDbService
         {
             // SourceFile may be just filename or full path
             if (File.Exists(item.SourceFile))
-                return item.SourceFile;
+            {
+                var p = item.SourceFile;
+                if (IsOfficialItemPath(p))
+                    return GetImportItemDbPathForWrite();
+                return p;
+            }
 
             // Search common locations
             var candidates = GetDbFolders()
                 .Select(f => Path.Combine(f, item.SourceFile))
                 .Where(File.Exists);
             var found = candidates.FirstOrDefault();
-            if (found != null) return found;
+            if (found != null)
+            {
+                if (IsOfficialItemPath(found))
+                    return GetImportItemDbPathForWrite();
+                return found;
+            }
         }
 
         // For new items or unknown source, use db/import/item_db.yml (custom items file)
@@ -423,6 +442,22 @@ public class ItemDbService
         if (string.IsNullOrEmpty(_dataPath)) return null;
         var importPath = Path.Combine(_dataPath, "db", "import", "item_db.yml");
         return File.Exists(importPath) ? importPath : null;
+    }
+
+    /// <summary>Returns import item_db path for writing (used when routing official item edits to import overlay).</summary>
+    private string? GetImportItemDbPathForWrite()
+    {
+        if (string.IsNullOrEmpty(_dataPath)) return null;
+        return Path.Combine(_dataPath, "db", "import", "item_db.yml");
+    }
+
+    /// <summary>True if path is under db/re/ or db/pre-re/ (official item DB, not import).</summary>
+    private static bool IsOfficialItemPath(string path)
+    {
+        if (string.IsNullOrEmpty(path)) return false;
+        var normalized = path.Replace('/', Path.DirectorySeparatorChar);
+        return normalized.Contains("db" + Path.DirectorySeparatorChar + "re" + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
+            || normalized.Contains("db" + Path.DirectorySeparatorChar + "pre-re" + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
     }
 
     private IEnumerable<string> GetDbFolders()

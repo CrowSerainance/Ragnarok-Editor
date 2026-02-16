@@ -10,6 +10,8 @@ using ICSharpCode.AvalonEdit.Highlighting.Xshd;
 using RoDbEditor.Config;
 using RoDbEditor.Core;
 using RoDbEditor.Services;
+using RoDbEditor.Services.Blueprint;
+using RoDbEditor.Services.Client;
 using Utilities.Parsers.Lua;
 
 namespace RoDbEditor;
@@ -35,12 +37,18 @@ public partial class App : System.Windows.Application
     public static ExtractedAssetService ExtractedAssetService { get; private set; } = null!;
     public static GrfWriterService GrfWriterService { get; private set; } = null!;
     public static SpriteAssignmentService SpriteAssignmentService { get; private set; } = null!;
-    public static ItemInfoLuaWriter? ItemInfoLuaWriter { get; private set; }
-    public static AccessoryIdWriter? AccessoryIdWriter { get; private set; }
-    public static ClientAssetWriter? ClientAssetWriter { get; private set; }
-    public static MobInfoLuaWriter? MobInfoLuaWriter { get; private set; }
+    public static ItemInfoLuaWriter? ItemInfoLuaWriter { get; set; }
+    public static AccessoryIdWriter? AccessoryIdWriter { get; set; }
+    public static ClientAssetWriter? ClientAssetWriter { get; set; }
+    public static MobInfoLuaWriter? MobInfoLuaWriter { get; set; }
     public static NpcScriptWriter? NpcScriptWriter { get; private set; }
     public static EntityDesignationService EntityDesignationService { get; private set; } = null!;
+    public static BlueprintExportService BlueprintExportService { get; private set; } = null!;
+    public static ClientItemInfoService ClientItemInfoService { get; private set; } = null!;
+    public static ClientItemInfoWriter ClientItemInfoWriter { get; private set; } = null!;
+    public static MobAvailService MobAvailService { get; private set; } = null!;
+    public static ClientNpcIdentityService ClientNpcIdentityService { get; private set; } = null!;
+    public static ClientJobNameService ClientJobNameService { get; private set; } = null!;
     public static IReadOnlyDictionary<int, string> ItemInfoDescriptions { get; set; } = new Dictionary<int, string>();
     public static IHighlightingDefinition? RagnarokScriptHighlighting { get; private set; }
 
@@ -149,6 +157,7 @@ public partial class App : System.Windows.Application
         SkillDbMiniService.LoadFromDataPath(dataPath);
         MobSkillWriteService = new MobSkillWriteService(dataPath);
         EntityDesignationService = new EntityDesignationService(NpcIndexService, MobDbService);
+        MobAvailService.LoadFromDataPath(dataPath);
 
         var lubPath = Path.Combine(dataPath, "system", "iteminfo.lub");
         if (!File.Exists(lubPath))
@@ -195,6 +204,7 @@ public partial class App : System.Windows.Application
         // Re-init dependent services
         ItemPathService = new ItemPathService(newItemDb, GrfService, SpriteLookupService);
         EntityDesignationService = new EntityDesignationService(newNpcIndex, newMobDb);
+        MobAvailService.LoadFromDataPath(dataPath);
 
         // Reload GRF items if needed (fallback)
         if (GrfService != null && GrfService.IsLoaded)
@@ -220,6 +230,20 @@ public partial class App : System.Windows.Application
         ImageConverterManager.AddConverter(new GrfImageToWpfConverter());
 
         Config = RoDbEditorConfig.Load();
+
+        // Auto-configure paths when not set but directories exist (no-headache setup)
+        var extractedPath = @"F:\MMORPG\EXTRACTED ASSETS";
+        var clientPath = @"F:\MMORPG\RAGNAROK ONLINE\client";
+        var changed = false;
+        if (string.IsNullOrEmpty(Config.ExtractedAssetsPath) && Directory.Exists(extractedPath))
+        { Config.ExtractedAssetsPath = extractedPath; changed = true; }
+        if (string.IsNullOrEmpty(Config.ClientRootPath) && Directory.Exists(clientPath))
+        { Config.ClientRootPath = clientPath; changed = true; }
+        if (string.IsNullOrEmpty(Config.ClientPatchRoot) && Directory.Exists(clientPath))
+        { Config.ClientPatchRoot = clientPath; changed = true; }
+        if (changed)
+            Config.Save();
+
         GrfService = new GrfService();
         GrfService.LoadFromConfig(Config);
 
@@ -246,14 +270,26 @@ public partial class App : System.Windows.Application
         ExtractedAssetService = new ExtractedAssetService(() => FileSystemSpriteSource?.RootPath);
         GrfWriterService = new GrfWriterService();
         SpriteAssignmentService = new SpriteAssignmentService(GrfWriterService);
-        var clientRoot = @"F:\MMORPG\RAGNAROK ONLINE\client";
-        ItemInfoLuaWriter = new ItemInfoLuaWriter(clientRoot);
-        AccessoryIdWriter = new AccessoryIdWriter(clientRoot);
-        ClientAssetWriter = new ClientAssetWriter(clientRoot);
-        MobInfoLuaWriter = new MobInfoLuaWriter(clientRoot);
-        NpcScriptWriter = new NpcScriptWriter(Config.DataPath ?? clientRoot);
+        var defaultClient = @"F:\MMORPG\RAGNAROK ONLINE\client";
+        var clientRoot = !string.IsNullOrEmpty(Config.ClientRootPath) && Directory.Exists(Config.ClientRootPath)
+            ? Config.ClientRootPath
+            : (Directory.Exists(defaultClient) ? defaultClient : null);
+        if (!string.IsNullOrEmpty(clientRoot))
+        {
+            ItemInfoLuaWriter = new ItemInfoLuaWriter(clientRoot);
+            AccessoryIdWriter = new AccessoryIdWriter(clientRoot);
+            ClientAssetWriter = new ClientAssetWriter(clientRoot);
+            MobInfoLuaWriter = new MobInfoLuaWriter(clientRoot);
+        }
+        NpcScriptWriter = new NpcScriptWriter(Config.DataPath ?? clientRoot ?? defaultClient);
         EntityDesignationService = new EntityDesignationService(NpcIndexService, MobDbService);
-        
+        BlueprintExportService = new BlueprintExportService();
+        ClientItemInfoService = new ClientItemInfoService();
+        ClientItemInfoWriter = new ClientItemInfoWriter();
+        MobAvailService = new MobAvailService();
+        ClientNpcIdentityService = new ClientNpcIdentityService();
+        ClientJobNameService = new ClientJobNameService();
+
         // Wire up condition text resolvers
         MobSkillConditionText.SkillNameResolver = id => SkillDbMiniService.ResolveDisplayName(id);
         
@@ -263,6 +299,17 @@ public partial class App : System.Windows.Application
         if (!string.IsNullOrEmpty(Config.DataPath))
         {
             ReloadDataPath(Config.DataPath);
+        }
+
+        if (!string.IsNullOrEmpty(Config.ClientRootPath))
+        {
+            var clientSys = Path.Combine(Config.ClientRootPath, "System");
+            if (Directory.Exists(clientSys))
+            {
+                ClientItemInfoService.LoadFromClientSystem(clientSys);
+                ClientNpcIdentityService.LoadFromClientSystem(clientSys);
+                ClientJobNameService.LoadFromClientSystem(clientSys);
+            }
         }
 
         // When GRF is loaded, load items/mobs from GRF. This runs either as primary source

@@ -16,8 +16,10 @@ using RoDbEditor.Data;
 using RoDbEditor.Models;
 using RoDbEditor.Services;
 using RoDbEditor.Services.Analysis;
+using RoDbEditor.Services.Blueprint;
 using RoDbEditor.Services.Export;
 using RoDbEditor.UI;
+using RoDbEditor.UI.Dialogs;
 
 namespace RoDbEditor;
 
@@ -163,6 +165,11 @@ public partial class MainWindow : Window
         UpdateExtractedPreviewPanels();
         RefreshList();
     }
+
+        private void RefreshListButton_Click(object sender, RoutedEventArgs e)
+        {
+            RefreshList();
+        }
 
         private void RefreshList()
         {
@@ -556,8 +563,9 @@ public partial class MainWindow : Window
 
         SetPreviewMode(PreviewMode.Sprite);
 
-        // Debug: Log sprite lookup attempt
-        System.Diagnostics.Debug.WriteLine($"[ShowMonsterDetails] Looking for sprite: AegisName={mob.AegisName}");
+        // Effective sprite: mob_avail override or AegisName
+        var effectiveSprite = App.MobAvailService?.Get(mob.AegisName)?.Sprite ?? mob.AegisName;
+        System.Diagnostics.Debug.WriteLine($"[ShowMonsterDetails] Looking for sprite: AegisName={mob.AegisName}, effectiveSprite={effectiveSprite}");
         System.Diagnostics.Debug.WriteLine($"[ShowMonsterDetails] Sprite cache count: {App.SpriteLookupService?.CachedSpriteCount ?? 0}");
 
         if (App.SpriteLookupService == null)
@@ -567,7 +575,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        var (actPath, sprPath) = App.SpriteLookupService.FindMonsterSprite(mob.AegisName);
+        var (actPath, sprPath) = App.SpriteLookupService.FindMonsterSprite(effectiveSprite);
         System.Diagnostics.Debug.WriteLine($"[ShowMonsterDetails] Found paths: ACT={actPath ?? "NULL"}, SPR={sprPath ?? "NULL"}");
 
         var (actData, sprData) = App.SpriteLookupService.GetSpriteData(actPath, sprPath);
@@ -1212,7 +1220,7 @@ public partial class MainWindow : Window
         PopulateItemEditJobCheckboxes(item.Jobs ?? new Dictionary<string, bool>());
         PopulateItemEditLocationCheckboxes(item.Locations ?? new Dictionary<string, bool>());
 
-        DetailDescription.Text = App.ItemInfoDescriptions.TryGetValue(item.Id, out var desc) ? desc : "";
+        DetailDescription.Text = !string.IsNullOrEmpty(item.Description) ? item.Description : (App.ItemInfoDescriptions.TryGetValue(item.Id, out var desc) ? desc : "");
         _originalItemScript = item.Script ?? "";
         if (ItemEditBonusCombo != null)
             ItemEditBonusCombo.ItemsSource = BonusEffectRegistry.All;
@@ -1289,7 +1297,10 @@ public partial class MainWindow : Window
         bool hasSpritePreview = false;
         if (App.SpriteLookupService != null)
         {
-            var (actPath, sprPath) = App.SpriteLookupService.FindMonsterSprite(item.AegisName);
+            var resourceName = GetItemResourceNameForIcon(item);
+            var (actPath, sprPath) = App.SpriteLookupService.FindMonsterSprite(resourceName);
+            if (actPath == null && sprPath == null)
+                (actPath, sprPath) = App.SpriteLookupService.FindMonsterSprite(item.AegisName);
             if (actPath == null && sprPath == null)
                 (actPath, sprPath) = App.SpriteLookupService.FindMonsterSprite(item.Id.ToString());
             if (actPath != null || sprPath != null)
@@ -1311,12 +1322,26 @@ public partial class MainWindow : Window
         }
     }
 
+    private static string GetItemResourceNameForIcon(ItemEntry item)
+    {
+        if (item == null) return "";
+        if (App.ClientItemInfoService != null && App.ClientItemInfoService.TryGet(item.Id, out var entry) && entry != null)
+        {
+            var r = entry.IdentifiedResourceName ?? entry.UnidentifiedResourceName;
+            if (!string.IsNullOrWhiteSpace(r)) return r;
+        }
+        return string.IsNullOrWhiteSpace(item.ResourceName) ? (item.AegisName ?? "") : item.ResourceName;
+    }
+
     private BitmapSource? LoadItemIcon(ItemEntry item)
     {
+        var resourceName = GetItemResourceNameForIcon(item);
         // Try extracted filesystem textures first
         if (App.FileSystemSpriteSource != null)
         {
-            var iconPath = App.FileSystemSpriteSource.FindItemIcon(item.Id, item.AegisName);
+            var iconPath = App.FileSystemSpriteSource.FindItemIcon(item.Id, resourceName);
+            if (iconPath == null)
+                iconPath = App.FileSystemSpriteSource.FindItemIcon(item.Id, item.AegisName);
             if (iconPath != null)
             {
                 var iconData = App.FileSystemSpriteSource.GetTextureData(iconPath);
@@ -1341,10 +1366,13 @@ public partial class MainWindow : Window
         {
             $"data\\texture\\effect\\{item.Id}.bmp",
             $"data\\texture\\effect\\{item.AegisName}.bmp",
+            $"data\\texture\\effect\\{resourceName}.bmp",
             $"data\\texture\\effect\\item\\{item.Id}.bmp",
             $"data\\texture\\effect\\collection\\{item.Id}.bmp",
             $"data\\texture\\effect\\collection\\{item.AegisName}.bmp",
+            $"data\\texture\\effect\\collection\\{resourceName}.bmp",
             $@"data\texture\유저인터페이스\item\{item.Id}.bmp",
+            $@"data\texture\유저인터페이스\item\{resourceName}.bmp",
         };
         foreach (var rel in paths)
         {
@@ -1950,6 +1978,7 @@ public partial class MainWindow : Window
         item.Script = string.IsNullOrWhiteSpace(ItemEditScript?.Text) ? null : ItemEditScript.Text.Trim();
         item.EquipScript = string.IsNullOrWhiteSpace(ItemEditEquipScript?.Text) ? null : ItemEditEquipScript.Text.Trim();
         item.UnEquipScript = string.IsNullOrWhiteSpace(ItemEditUnEquipScript?.Text) ? null : ItemEditUnEquipScript.Text.Trim();
+        item.Description = string.IsNullOrWhiteSpace(DetailDescription?.Text) ? null : DetailDescription.Text.Trim();
 
         item.Jobs = new Dictionary<string, bool>();
         if (ItemEditJobsPanel != null)
@@ -2007,7 +2036,7 @@ public partial class MainWindow : Window
             }
             try
             {
-                if ((item.View ?? 0) > 0)
+                if (IsHeadgearWithView(item))
                     App.AccessoryIdWriter?.WriteEntry(item);
                 App.ClientAssetWriter?.EnsureItemIcon(item);
                 App.ClientAssetWriter?.EnsureCollectionIcon(item);
@@ -2031,7 +2060,7 @@ public partial class MainWindow : Window
         {
             Description = "Select destination root folder",
             UseDescriptionForTitle = true,
-            SelectedPath = @"F:\MMORPG\RAGNAROK ONLINE\client"
+            SelectedPath = GetClientRootForAssignment() ?? @"F:\MMORPG\RAGNAROK ONLINE\client"
         };
         if (dlg.ShowDialog() != System.Windows.Forms.DialogResult.OK)
             return;
@@ -2370,6 +2399,23 @@ public partial class MainWindow : Window
             var custom = App.EntityDesignationService.CreateOrUpdateCustomMonsterFrom(mob, targetKey);
             designation = $"Custom monster created: {custom.Id} ({custom.AegisName}) in db/import/mob_db.yml";
         }
+        else if (entityType == SpriteAssignmentEntityType.Item && selectedTarget?.Payload is ItemEntry assignedItem)
+        {
+            assignedItem.ResourceName = targetKey;
+            try
+            {
+                var saveResult = App.ItemDbService?.SaveItem(assignedItem);
+                if (saveResult != null)
+                    designation = $"Item {assignedItem.Id} ({assignedItem.AegisName}): ResourceName set to '{targetKey}' and saved to db/import/item_db.yml.";
+                else
+                    designation = $"Item {assignedItem.Id} ({assignedItem.AegisName}): ResourceName set to '{targetKey}' (in memory; save to item_db manually if needed).";
+            }
+            catch
+            {
+                designation = $"Item {assignedItem.Id}: ResourceName set to '{targetKey}' in memory.";
+            }
+            RefreshList();
+        }
 
         var warningText = result.Warnings.Count > 0
             ? Environment.NewLine + "Warnings:" + Environment.NewLine + string.Join(Environment.NewLine, result.Warnings)
@@ -2492,6 +2538,20 @@ public partial class MainWindow : Window
         return paths?.Any(p => textureExts.Contains(Path.GetExtension(p), StringComparer.OrdinalIgnoreCase)) ?? false;
     }
 
+    private static bool IsHeadgearWithView(ItemEntry? item)
+    {
+        if (item == null || !item.View.HasValue || item.View.Value <= 0)
+            return false;
+
+        if (item.Locations == null || item.Locations.Count == 0)
+            return false;
+
+        return item.Locations.Any(kv =>
+            kv.Value &&
+            (kv.Key.StartsWith("Head_", StringComparison.OrdinalIgnoreCase) ||
+             kv.Key.StartsWith("Costume_Head_", StringComparison.OrdinalIgnoreCase)));
+    }
+
     private void ExtractAllRelatedButton_Click(object sender, RoutedEventArgs e)
     {
         if (_currentCategory != "EXTRACTED_ASSETS")
@@ -2501,7 +2561,7 @@ public partial class MainWindow : Window
         {
             Description = "Select destination root folder for all related extracted files",
             UseDescriptionForTitle = true,
-            SelectedPath = @"F:\MMORPG\RAGNAROK ONLINE\client"
+            SelectedPath = GetClientRootForAssignment() ?? @"F:\MMORPG\RAGNAROK ONLINE\client"
         };
         if (dlg.ShowDialog() != System.Windows.Forms.DialogResult.OK)
             return;
@@ -2652,6 +2712,7 @@ public partial class MainWindow : Window
 
         App.FileSystemSpriteSource = new FileSystemSpriteSource(path);
         App.Config.ExtractedAssetsPath = path;
+        App.Config.Save();
         App.SpriteLookupService.ClearCache();
         App.SpriteLookupService = new SpriteLookupService(App.GrfService, App.FileSystemSpriteSource);
         App.ExtractedAssetService?.ClearCache();
@@ -2698,6 +2759,146 @@ public partial class MainWindow : Window
         UpdateSourceIndicators();
         SetupFileWatcher(path);
         System.Windows.MessageBox.Show(this, $"Data folder set.\nItems: {App.ItemDbService?.Items?.Count ?? 0}, Mobs: {App.MobDbService?.Mobs?.Count ?? 0}, NPCs: {App.NpcIndexService?.All?.Count ?? 0}.", "RoDbEditor", MessageBoxButton.OK);
+    }
+
+    private void OpenClientFolder_Click(object sender, RoutedEventArgs e)
+    {
+        using var dlg = new System.Windows.Forms.FolderBrowserDialog
+        {
+            Description = "Select Ragnarok Client Root Folder (contains System/)",
+            UseDescriptionForTitle = true
+        };
+        if (dlg.ShowDialog() != System.Windows.Forms.DialogResult.OK) return;
+        var clientRoot = dlg.SelectedPath;
+        App.Config!.ClientRootPath = clientRoot;
+        App.Config.Save();
+
+        // Re-create writers so they use the new client path
+        if (!string.IsNullOrEmpty(clientRoot) && Directory.Exists(clientRoot))
+        {
+            App.ItemInfoLuaWriter = new ItemInfoLuaWriter(clientRoot);
+            App.AccessoryIdWriter = new AccessoryIdWriter(clientRoot);
+            App.ClientAssetWriter = new ClientAssetWriter(clientRoot);
+            App.MobInfoLuaWriter = new MobInfoLuaWriter(clientRoot);
+        }
+
+        var sys = Path.Combine(App.Config.ClientRootPath!, "System");
+        if (Directory.Exists(sys))
+        {
+            App.ClientItemInfoService.LoadFromClientSystem(sys);
+            App.ClientNpcIdentityService.LoadFromClientSystem(sys);
+            App.ClientJobNameService.LoadFromClientSystem(sys);
+        }
+        System.Windows.MessageBox.Show(this, "Client System files loaded.", "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Information);
+    }
+
+    private void SetClientPatchOutput_Click(object sender, RoutedEventArgs e)
+    {
+        using var dlg = new System.Windows.Forms.FolderBrowserDialog
+        {
+            Description = "Select Patch Output Root (RoDbEditor will write System/ + data/ here)",
+            UseDescriptionForTitle = true
+        };
+        if (dlg.ShowDialog() != System.Windows.Forms.DialogResult.OK) return;
+        App.Config!.ClientPatchRoot = dlg.SelectedPath;
+        App.Config.Save();
+        System.Windows.MessageBox.Show(this, "Patch output root set.", "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Information);
+    }
+
+    private void WriteItemInfoOverlay_Click(object sender, RoutedEventArgs e)
+    {
+        if (string.IsNullOrWhiteSpace(App.Config?.ClientPatchRoot))
+        {
+            System.Windows.MessageBox.Show(this, "Set Client Patch Output first (Tools > Set Client Patch Output...).", "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        var list = new List<ClientItemInfoEntry>();
+
+        foreach (var item in App.ItemDbService.Items.Where(i => i.Id >= 50000))
+        {
+            if (!App.ClientItemInfoService.TryGet(item.Id, out var c) || c == null)
+            {
+                c = new ClientItemInfoEntry
+                {
+                    Id = item.Id,
+                    IdentifiedDisplayName = item.DisplayName,
+                    IdentifiedResourceName = item.ResourceName ?? item.AegisName,
+                    UnidentifiedDisplayName = "????",
+                    UnidentifiedResourceName = item.ResourceName ?? item.AegisName,
+                    SlotCount = item.Slots ?? 0,
+                    ClassNum = item.View ?? 0,
+                };
+                c.IdentifiedDescriptionName.Add("TODO: description");
+                c.UnidentifiedDescriptionName.Add("Unidentified item.");
+            }
+            else
+            {
+                c.IdentifiedResourceName ??= item.AegisName;
+                c.UnidentifiedResourceName ??= c.IdentifiedResourceName;
+                c.ClassNum = item.View ?? c.ClassNum;
+                c.SlotCount = item.Slots ?? c.SlotCount;
+            }
+
+            list.Add(c);
+        }
+
+        var path = App.ClientItemInfoWriter.WriteCustomFile(App.Config.ClientPatchRoot!, list);
+        System.Windows.MessageBox.Show(this, $"Wrote: {path}", "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Information);
+    }
+
+    private void AppendMobAvail_Click(object sender, RoutedEventArgs e)
+    {
+        if (AssetListBox.SelectedItem is not MobEntry mob)
+        {
+            System.Windows.MessageBox.Show(this, "Select a monster first.", "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(App.Config?.DataPath))
+        {
+            System.Windows.MessageBox.Show(this, "Select rAthena folder first (File > Select rAthena folder...).", "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        var entry = new MobAvailEntry
+        {
+            Mob = mob.AegisName,
+            Sprite = mob.AegisName
+        };
+
+        var importPath = App.MobAvailService.AppendOrReplaceImportEntry(App.Config.DataPath, entry);
+        System.Windows.MessageBox.Show(this, $"Appended to: {importPath}", "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Information);
+    }
+
+    private void AppendNpcIdentity_Click(object sender, RoutedEventArgs e)
+    {
+        if (string.IsNullOrWhiteSpace(App.Config?.ClientPatchRoot))
+        {
+            System.Windows.MessageBox.Show(this, "Set Client Patch Output first (Tools > Set Client Patch Output...).", "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        if (AssetListBox.SelectedItem is not NpcScriptEntry npc)
+        {
+            System.Windows.MessageBox.Show(this, "Select an NPC first.", "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        var spriteName = !string.IsNullOrWhiteSpace(npc.SpriteId) ? npc.SpriteId : npc.Name;
+        if (string.IsNullOrWhiteSpace(spriteName))
+        {
+            System.Windows.MessageBox.Show(this, "NPC has no SpriteId or Name.", "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        var npcId = 30000;
+        if (!string.IsNullOrWhiteSpace(npc.SpriteId) && int.TryParse(npc.SpriteId, out var parsed))
+            npcId = parsed;
+
+        var p1 = App.ClientNpcIdentityService.AppendToPatchSystem(App.Config.ClientPatchRoot!, spriteName, npcId);
+        var p2 = App.ClientJobNameService.AppendToPatchSystem(App.Config.ClientPatchRoot!, spriteName);
+
+        System.Windows.MessageBox.Show(this, $"Wrote:\n{p1}\n{p2}", "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Information);
     }
 
     // This duplicate code block for MAPS/QUESTS asset listing in RefreshList appears to be an accidental copy-paste.
@@ -2859,12 +3060,17 @@ public partial class MainWindow : Window
             return;
         }
 
-        item.Script = string.IsNullOrWhiteSpace(ItemEditScript?.Text) ? item.Script : ItemEditScript.Text.Trim();
-        item.EquipScript = string.IsNullOrWhiteSpace(ItemEditEquipScript?.Text) ? item.EquipScript : ItemEditEquipScript.Text.Trim();
-        item.UnEquipScript = string.IsNullOrWhiteSpace(ItemEditUnEquipScript?.Text) ? item.UnEquipScript : ItemEditUnEquipScript.Text.Trim();
+        var script = string.IsNullOrWhiteSpace(ItemEditScript?.Text) ? item.Script : ItemEditScript.Text.Trim();
+        var text = App.BlueprintExportService.BuildItemBlueprint(item, script);
 
-        var bundle = BuildCustomBundleExporter().BuildForItem(item, includeClient: true, includeAssetNotes: true);
-        CopyBundleToClipboard(bundle, "custom item bundle");
+        var dlg = new TextExportDialog(
+            this,
+            title: "Item Blueprint",
+            header: $"Item {item.Id} — {item.DisplayName}",
+            content: text,
+            defaultFileName: $"item_{item.Id}_{item.AegisName}_blueprint.txt");
+
+        dlg.ShowDialog();
     }
 
     private void CopyCustomOutputMob_Click(object sender, RoutedEventArgs e)
@@ -2875,12 +3081,18 @@ public partial class MainWindow : Window
             return;
         }
 
-        var bundle = BuildCustomBundleExporter().BuildForMob(
-            mob,
-            includeMobAvail: false,
-            includeMobSkills: true,
-            includeAssetNotes: true);
-        CopyBundleToClipboard(bundle, "custom monster bundle");
+        var drops = MonsterDropsGrid.Items.Cast<MobDropEntry>().ToList();
+        var mvpDrops = MonsterMvpDropsGrid.Items.Cast<MobDropEntry>().ToList();
+        var text = App.BlueprintExportService.BuildMobBlueprint(mob, drops, mvpDrops);
+
+        var dlg = new TextExportDialog(
+            this,
+            title: "Mob Blueprint",
+            header: $"Mob {mob.Id} — {mob.DisplayName}",
+            content: text,
+            defaultFileName: $"mob_{mob.Id}_{mob.AegisName}_blueprint.txt");
+
+        dlg.ShowDialog();
     }
 
     private void CopyCustomOutputNpc_Click(object sender, RoutedEventArgs e)
@@ -2891,13 +3103,16 @@ public partial class MainWindow : Window
             return;
         }
 
-        var editedText = NpcScriptEditor?.Text;
-        var bundle = BuildCustomBundleExporter().BuildForNpc(
-            npc,
-            editedText,
-            includeClientIdentity: false,
-            includeAssetNotes: true);
-        CopyBundleToClipboard(bundle, "custom NPC bundle");
+        var text = App.BlueprintExportService.BuildNpcBlueprint(npc);
+
+        var dlg = new TextExportDialog(
+            this,
+            title: "NPC Blueprint",
+            header: $"NPC — {npc.Name}",
+            content: text,
+            defaultFileName: $"npc_{npc.Name}_blueprint.txt");
+
+        dlg.ShowDialog();
     }
 
     private CustomBundleExporter BuildCustomBundleExporter()
@@ -3703,7 +3918,7 @@ public partial class MainWindow : Window
         if (string.IsNullOrWhiteSpace(clientRoot) || !Directory.Exists(clientRoot))
         {
             System.Windows.MessageBox.Show(this,
-                "Client root not found. Open a GRF first (File > Open GRF) or ensure the client folder exists.",
+                "Client root not found. Ensure the client folder exists and GRFs are configured (RoDbEditor.ini or auto-load from client).",
                 "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
@@ -3784,6 +3999,22 @@ public partial class MainWindow : Window
                     var custom = App.EntityDesignationService.CreateOrUpdateCustomMonsterFrom(mob, targetKey);
                     designation = $"Custom monster created: {custom.Id} ({custom.AegisName}) in db/import/mob_db.yml";
                 }
+                else if (entityType == SpriteAssignmentEntityType.Item && selectedTarget?.Payload is ItemEntry assignedItemExt)
+                {
+                    assignedItemExt.ResourceName = targetKey;
+                    try
+                    {
+                        var saveResult = App.ItemDbService?.SaveItem(assignedItemExt);
+                        designation = saveResult != null
+                            ? $"Item {assignedItemExt.Id} ({assignedItemExt.AegisName}): ResourceName set to '{targetKey}' and saved to db/import/item_db.yml."
+                            : $"Item {assignedItemExt.Id}: ResourceName set to '{targetKey}' (in memory).";
+                    }
+                    catch
+                    {
+                        designation = $"Item {assignedItemExt.Id}: ResourceName set to '{targetKey}' in memory.";
+                    }
+                    RefreshList();
+                }
                 else
                     designation = $"Added to data\\sprite\\{entityType.ToString().ToLowerInvariant()} in GRF";
                 System.Windows.MessageBox.Show(this,
@@ -3838,6 +4069,8 @@ public partial class MainWindow : Window
 
     private static string? GetClientRootForAssignment()
     {
+        if (!string.IsNullOrEmpty(App.Config?.ClientRootPath) && Directory.Exists(App.Config.ClientRootPath))
+            return App.Config.ClientRootPath;
         var firstGrf = App.GrfService?.GrfPaths?.FirstOrDefault();
         if (!string.IsNullOrWhiteSpace(firstGrf) && File.Exists(firstGrf))
             return Path.GetDirectoryName(firstGrf);
@@ -4014,7 +4247,7 @@ public partial class MainWindow : Window
             try
             {
                 App.ItemInfoLuaWriter?.WriteEntry(item);
-                if (item.View.HasValue && item.View.Value > 0)
+                if (IsHeadgearWithView(item))
                     App.AccessoryIdWriter?.WriteEntry(item);
                 App.ClientAssetWriter?.EnsureItemIcon(item);
                 App.ClientAssetWriter?.EnsureCollectionIcon(item);
@@ -4155,7 +4388,7 @@ public partial class MainWindow : Window
                 if (record.EntityKind == OperationEntityKind.Item)
                 {
                     var item = App.ItemDbService?.Items?.FirstOrDefault(i => i.Id == record.Id);
-                    if (item?.View.HasValue == true && item.View.Value > 0)
+                    if (IsHeadgearWithView(item))
                         App.AccessoryIdWriter?.RemoveEntry(item.View.Value, item.AegisName);
                     App.ItemDbService?.RemoveEntryAt(record.FilePath, record.BodyIndex);
                     App.ItemInfoLuaWriter?.RemoveEntry(record.Id);
