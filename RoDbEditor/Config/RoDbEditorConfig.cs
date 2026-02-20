@@ -5,28 +5,15 @@ namespace RoDbEditor.Config;
 
 /// <summary>
 /// Loads and holds RoDbEditor configuration (GRF paths, etc.).
-/// Config file: RoDbEditor.ini in app directory or %AppData%\RoDbEditor\RoDbEditor.ini
+/// Config file: %AppData%\RoDbEditor\RoDbEditor.ini only (per-user, so the app folder stays portable).
 /// </summary>
 public class RoDbEditorConfig
 {
     public const string ConfigFileName = "RoDbEditor.ini";
     public const string SectionGrf = "GRF";
 
-    // User-specific default rAthena data path.
-    // This makes F:\MMORPG\RAGNAROK ONLINE\rathena-master the priority
-    // source for db (mob, item, skills, spawns, etc.) regardless of any
-    // DataPath value present in RoDbEditor.ini.
-    private const string DefaultDataPath = @"F:\MMORPG\RAGNAROK ONLINE\rathena-master";
-
-    /// <summary>
-    /// Default client folder for GRF files (matches DATA.ini load order).
-    /// When no GRF paths are configured, we auto-add these if they exist.
-    /// </summary>
-    private static readonly string DefaultClientPath = @"F:\MMORPG\RAGNAROK ONLINE\client";
-
     public List<string> GrfPaths { get; } = new();
     public string? DataPath { get; set; }
-    public string? ExtractedAssetsPath { get; set; }
 
     /// <summary>Target GRF filename for asset assignment (default: custom.grf).</summary>
     public string TargetGrfFileName { get; set; } = "custom.grf";
@@ -73,29 +60,16 @@ public class RoDbEditorConfig
                         if (!string.IsNullOrEmpty(value) && (File.Exists(value) || Directory.Exists(value)))
                             config.GrfPaths.Add(value);
                     }
-                    if (string.Equals(key, "DataPath", System.StringComparison.OrdinalIgnoreCase))
+                    if (string.Equals(key, "DataPath", System.StringComparison.OrdinalIgnoreCase) && !string.IsNullOrEmpty(value) && Directory.Exists(value))
                         config.DataPath = value;
-                    if (string.Equals(key, "ExtractedAssetsPath", System.StringComparison.OrdinalIgnoreCase))
-                    {
-                        if (!string.IsNullOrEmpty(value) && Directory.Exists(value))
-                            config.ExtractedAssetsPath = value;
-                    }
                     if (string.Equals(key, "TargetGrfFileName", System.StringComparison.OrdinalIgnoreCase) && !string.IsNullOrEmpty(value))
                         config.TargetGrfFileName = value;
                     if (string.Equals(key, "TargetGrfPath", System.StringComparison.OrdinalIgnoreCase) && !string.IsNullOrEmpty(value))
                         config.TargetGrfPath = value;
-                    if (string.Equals(key, "ClientRootPath", System.StringComparison.OrdinalIgnoreCase))
+                    if (string.Equals(key, "ClientRootPath", System.StringComparison.OrdinalIgnoreCase) && !string.IsNullOrEmpty(value) && Directory.Exists(value))
                         config.ClientRootPath = value;
-                    if (string.Equals(key, "ClientPatchRoot", System.StringComparison.OrdinalIgnoreCase))
+                    if (string.Equals(key, "ClientPatchRoot", System.StringComparison.OrdinalIgnoreCase) && !string.IsNullOrEmpty(value) && Directory.Exists(value))
                         config.ClientPatchRoot = value;
-                }
-
-                // After reading the INI, force the configured DataPath to the
-                // new rAthena folder when it exists so it is always used as
-                // the primary server database source.
-                if (Directory.Exists(DefaultDataPath))
-                {
-                    config.DataPath = DefaultDataPath;
                 }
             }
         }
@@ -104,13 +78,13 @@ public class RoDbEditorConfig
             // Keep default empty config
         }
 
-        // When no GRF paths configured, auto-add client GRFs (same order as DATA.ini)
-        if (config.GrfPaths.Count == 0 && Directory.Exists(DefaultClientPath))
+        // When no GRF paths configured, auto-discover GRFs in ClientRootPath if set
+        if (config.GrfPaths.Count == 0 && !string.IsNullOrEmpty(config.ClientRootPath) && Directory.Exists(config.ClientRootPath))
         {
             var grfOrder = new[] { "custom.grf", "en.grf", "official_data.grf", "data.grf" };
             foreach (var grf in grfOrder)
             {
-                var full = Path.Combine(DefaultClientPath, grf);
+                var full = Path.Combine(config.ClientRootPath, grf);
                 if (File.Exists(full))
                     config.GrfPaths.Add(full);
             }
@@ -138,8 +112,6 @@ public class RoDbEditorConfig
         sb.AppendLine("[" + SectionGrf + "]");
         if (!string.IsNullOrEmpty(DataPath))
             sb.AppendLine("DataPath=" + DataPath);
-        if (!string.IsNullOrEmpty(ExtractedAssetsPath))
-            sb.AppendLine("ExtractedAssetsPath=" + ExtractedAssetsPath);
         sb.AppendLine("TargetGrfFileName=" + (TargetGrfFileName ?? "custom.grf"));
         if (!string.IsNullOrEmpty(TargetGrfPath))
             sb.AppendLine("TargetGrfPath=" + TargetGrfPath);
@@ -157,12 +129,8 @@ public class RoDbEditorConfig
 
     private static string? FindConfigPath()
     {
-        var appDir = AppDomain.CurrentDomain.BaseDirectory;
-        var candidate = Path.Combine(appDir, ConfigFileName);
-        if (File.Exists(candidate))
-            return candidate;
+        // Use AppData only so the app folder can be copied without machine-specific paths.
         var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-        candidate = Path.Combine(appData, "RoDbEditor", ConfigFileName);
-        return candidate;
+        return Path.Combine(appData, "RoDbEditor", ConfigFileName);
     }
 }

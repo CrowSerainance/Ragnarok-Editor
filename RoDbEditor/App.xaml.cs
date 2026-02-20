@@ -34,7 +34,6 @@ public partial class App : System.Windows.Application
     public static SkillDbMiniService SkillDbMiniService { get; private set; } = null!;
     public static MobSkillPanelService MobSkillPanelService { get; private set; } = null!;
     public static MobSkillWriteService? MobSkillWriteService { get; private set; }
-    public static ExtractedAssetService ExtractedAssetService { get; private set; } = null!;
     public static GrfWriterService GrfWriterService { get; private set; } = null!;
     public static SpriteAssignmentService SpriteAssignmentService { get; private set; } = null!;
     public static ItemInfoLuaWriter? ItemInfoLuaWriter { get; set; }
@@ -231,27 +230,18 @@ public partial class App : System.Windows.Application
 
         Config = RoDbEditorConfig.Load();
 
-        // Auto-configure paths when not set but directories exist (no-headache setup)
-        var extractedPath = @"F:\MMORPG\EXTRACTED ASSETS";
-        var clientPath = @"F:\MMORPG\RAGNAROK ONLINE\client";
-        var changed = false;
-        if (string.IsNullOrEmpty(Config.ExtractedAssetsPath) && Directory.Exists(extractedPath))
-        { Config.ExtractedAssetsPath = extractedPath; changed = true; }
-        if (string.IsNullOrEmpty(Config.ClientRootPath) && Directory.Exists(clientPath))
-        { Config.ClientRootPath = clientPath; changed = true; }
-        if (string.IsNullOrEmpty(Config.ClientPatchRoot) && Directory.Exists(clientPath))
-        { Config.ClientPatchRoot = clientPath; changed = true; }
-        if (changed)
-            Config.Save();
-
         GrfService = new GrfService();
         GrfService.LoadFromConfig(Config);
 
-        // Create filesystem sprite source if extracted assets path is configured
-        if (!string.IsNullOrEmpty(Config.ExtractedAssetsPath) &&
-            Directory.Exists(Config.ExtractedAssetsPath))
+        // Create filesystem sprite source from client data folder for sprite preview in Items/Monsters tabs
+        if (!string.IsNullOrEmpty(Config.ClientRootPath))
         {
-            FileSystemSpriteSource = new FileSystemSpriteSource(Config.ExtractedAssetsPath);
+            var dataSprite = Path.Combine(Config.ClientRootPath, "data", "sprite");
+            var dataFolder = Path.Combine(Config.ClientRootPath, "data");
+            if (Directory.Exists(dataSprite))
+                FileSystemSpriteSource = new FileSystemSpriteSource(dataSprite);
+            else if (Directory.Exists(dataFolder))
+                FileSystemSpriteSource = new FileSystemSpriteSource(dataFolder);
         }
 
         SpriteLookupService = new SpriteLookupService(GrfService, FileSystemSpriteSource);
@@ -267,13 +257,11 @@ public partial class App : System.Windows.Application
         MobSkillDbService = new MobSkillDbService();
         SkillDbMiniService = new SkillDbMiniService();
         MobSkillPanelService = new MobSkillPanelService(MobSkillDbService, SkillDbMiniService, MobDbService);
-        ExtractedAssetService = new ExtractedAssetService(() => FileSystemSpriteSource?.RootPath);
         GrfWriterService = new GrfWriterService();
         SpriteAssignmentService = new SpriteAssignmentService(GrfWriterService);
-        var defaultClient = @"F:\MMORPG\RAGNAROK ONLINE\client";
         var clientRoot = !string.IsNullOrEmpty(Config.ClientRootPath) && Directory.Exists(Config.ClientRootPath)
             ? Config.ClientRootPath
-            : (Directory.Exists(defaultClient) ? defaultClient : null);
+            : null;
         if (!string.IsNullOrEmpty(clientRoot))
         {
             ItemInfoLuaWriter = new ItemInfoLuaWriter(clientRoot);
@@ -281,7 +269,7 @@ public partial class App : System.Windows.Application
             ClientAssetWriter = new ClientAssetWriter(clientRoot);
             MobInfoLuaWriter = new MobInfoLuaWriter(clientRoot);
         }
-        NpcScriptWriter = new NpcScriptWriter(Config.DataPath ?? clientRoot ?? defaultClient);
+        NpcScriptWriter = new NpcScriptWriter(Config.DataPath ?? clientRoot ?? string.Empty);
         EntityDesignationService = new EntityDesignationService(NpcIndexService, MobDbService);
         BlueprintExportService = new BlueprintExportService();
         ClientItemInfoService = new ClientItemInfoService();
@@ -317,7 +305,6 @@ public partial class App : System.Windows.Application
         if (GrfService.IsLoaded)
         {
             ReloadFromGrf();
-            ExtractedAssetService?.ClearCache();
         }
     }
 

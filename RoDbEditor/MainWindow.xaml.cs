@@ -1,5 +1,6 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Windows;
@@ -44,7 +45,6 @@ public partial class MainWindow : Window
     private string _originalNpcScript = "";
     private MobEntry? _currentMob;
     private MobEntry? _currentMobSnapshot;
-    private Models.ExtractedAssetEntry? _currentExtractedAsset;
     private TextMarkerService? _markerService;
     private WorkspaceIndex? _lastWorkspaceIndex;
     private readonly OperationsLogService _operationsLog = new();
@@ -57,8 +57,6 @@ public partial class MainWindow : Window
             RefreshList();
             UpdateListLabel();
             UpdateSourceIndicators();
-            if (AssignEntityTypeCombo != null)
-                AssignEntityTypeCombo.SelectedIndex = 0;
             SpriteViewer.SetBackgroundMode(Core.Controls.SpriteAnimationViewer.ViewerBackgroundMode.Checkered);
             if (!string.IsNullOrEmpty(App.Config?.DataPath))
                  SetupFileWatcher(App.Config.DataPath);
@@ -80,6 +78,7 @@ public partial class MainWindow : Window
         if (SourceIndicator1 == null || SourceIndicator2 == null || SourceIndicator3 == null)
             return;
 
+        // GRF and sprite assets: from config only (FILE ASSIGNMENT / GRF paths)
         var grf = App.GrfService;
         if (grf != null && grf.IsLoaded && grf.GrfPaths.Count > 0)
         {
@@ -94,21 +93,23 @@ public partial class MainWindow : Window
         else if (App.FileSystemSpriteSource != null)
             SourceIndicator1.Text = $"Assets: {App.FileSystemSpriteSource.CachedCount} sprites";
         else
-            SourceIndicator1.Text = "GRF: Not loaded";
+            SourceIndicator1.Text = "GRF: (not configured)";
 
+        // Server DB (rAthena) path: from config only; set via File -> Select rAthena folder or FILE ASSIGNMENT
         var dataPath = App.Config?.DataPath;
         if (!string.IsNullOrWhiteSpace(dataPath))
-            SourceIndicator2.Text = "rAthena: " + dataPath;
+            SourceIndicator2.Text = "Server DB: " + dataPath;
         else
-            SourceIndicator2.Text = "rAthena: Not set";
+            SourceIndicator2.Text = "Server DB: (not configured)";
 
+        // Items: from configured server YAML or GRF iteminfo, not hardcoded
         var itemSvc = App.ItemDbService;
         if (itemSvc != null && itemSvc.Items.Count > 0)
             SourceIndicator3.Text = itemSvc.IsLoadedFromYaml
-                ? $"Items: YAML (rAthena) ({itemSvc.Items.Count:N0})"
-                : $"Items: iteminfo.lub ({itemSvc.Items.Count:N0})";
+                ? $"Items: from server YAML ({itemSvc.Items.Count:N0})"
+                : $"Items: from GRF iteminfo ({itemSvc.Items.Count:N0})";
         else
-            SourceIndicator3.Text = "Items: None";
+            SourceIndicator3.Text = "Items: (none loaded)";
     }
 
     private void UpdateListLabel()
@@ -118,8 +119,8 @@ public partial class MainWindow : Window
             // optionally log or defer the update
             return;
         }
-        if (_currentCategory == "EXTRACTED_ASSETS")
-            CurrentListLabel.Text = "CURRENT LIST: Extracted Assets";
+        if (_currentCategory == "FILE_ASSIGNMENT")
+            CurrentListLabel.Text = "CURRENT LIST: File Assignment";
         else
             CurrentListLabel.Text = $"CURRENT LIST: {_currentCategory}";
     }
@@ -127,16 +128,26 @@ public partial class MainWindow : Window
     private void CategoryTabs_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (CategoryTabs == null || CategoryTabs.SelectedIndex < 0 || CategoryTabs.SelectedIndex > 5) return;
-        var headers = new[] { "ITEMS", "MONSTERS", "NPCs", "MAPS", "QUESTS", "EXTRACTED_ASSETS" };
+        var headers = new[] { "ITEMS", "MONSTERS", "NPCs", "MAPS", "QUESTS", "FILE_ASSIGNMENT" };
         _currentCategory = headers[CategoryTabs.SelectedIndex];
+
+        if (FileAssignmentPanel != null)
+            FileAssignmentPanel.Visibility = Visibility.Collapsed;
 
         if (NpcMapFilterPanel != null)
             NpcMapFilterPanel.Visibility = _currentCategory == "NPCs" ? Visibility.Visible : Visibility.Collapsed;
 
-        if (ExtractedAssetSubCategoryPanel != null)
-            ExtractedAssetSubCategoryPanel.Visibility = _currentCategory == "EXTRACTED_ASSETS" ? Visibility.Visible : Visibility.Collapsed;
-        if (ExtractedAssignmentPanel != null)
-            ExtractedAssignmentPanel.Visibility = _currentCategory == "EXTRACTED_ASSETS" ? Visibility.Visible : Visibility.Collapsed;
+        if (_currentCategory == "FILE_ASSIGNMENT")
+        {
+            if (CurrentListLabel != null)
+                CurrentListLabel.Text = "CURRENT LIST: File Assignment";
+            if (FileAssignmentPanel != null)
+                FileAssignmentPanel.Visibility = Visibility.Visible;
+            PopulateFileAssignmentPaths();
+            UpdateListLabel();
+            RefreshList();
+            return;
+        }
 
         if (_currentCategory == "NPCs")
         {
@@ -162,7 +173,6 @@ public partial class MainWindow : Window
         }
 
         UpdateListLabel();
-        UpdateExtractedPreviewPanels();
         RefreshList();
     }
 
@@ -176,15 +186,9 @@ public partial class MainWindow : Window
             if (SearchBox == null || AssetListBox == null)
                 return;
 
-            if (_currentCategory == "EXTRACTED_ASSETS")
+            if (_currentCategory == "FILE_ASSIGNMENT")
             {
-                var filter = SearchBox.Text?.Trim();
-                var assets = App.ExtractedAssetService?.Search("", filter)
-                    ?? (IReadOnlyList<Models.ExtractedAssetEntry>)Array.Empty<Models.ExtractedAssetEntry>();
-                assets = ApplyExtractedModeFilter(assets).ToList();
                 AssetListBox.ItemsSource = null;
-                AssetListBox.ItemsSource = assets;
-                AssetListBox.DisplayMemberPath = "DisplayName";
                 return;
             }
 
@@ -272,8 +276,8 @@ public partial class MainWindow : Window
 
     private void AssetListBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (ExtractedAssetPropertiesPanel != null)
-            ExtractedAssetPropertiesPanel.Visibility = Visibility.Collapsed;
+        if (FileAssignmentPanel != null)
+            FileAssignmentPanel.Visibility = Visibility.Collapsed;
 
         if (AssetListBox.SelectedItem is ItemEntry itemEntry)
         {
@@ -311,60 +315,30 @@ public partial class MainWindow : Window
         return;
     }
 
-    if (AssetListBox.SelectedItem is Models.ExtractedAssetEntry extractedEntry)
-    {
-        ItemDetailsPanel.Visibility = Visibility.Collapsed;
-        MonsterDetailsPanel.Visibility = Visibility.Collapsed;
-        NpcDetailsPanel.Visibility = Visibility.Collapsed;
-        if (ExtractedAssetPropertiesPanel != null)
-            ExtractedAssetPropertiesPanel.Visibility = Visibility.Visible;
-        ShowExtractedAssetDetails(extractedEntry);
-        return;
-    }
-
         // No selection: show the correct detail panel for current tab
         NpcDetailsPanel.Visibility = Visibility.Collapsed;
-        if (_currentCategory == "MONSTERS")
+        if (_currentCategory == "FILE_ASSIGNMENT")
+        {
+            ItemDetailsPanel.Visibility = Visibility.Collapsed;
+            MonsterDetailsPanel.Visibility = Visibility.Collapsed;
+            if (FileAssignmentPanel != null)
+                FileAssignmentPanel.Visibility = Visibility.Visible;
+        }
+        else if (_currentCategory == "MONSTERS")
         {
             ItemDetailsPanel.Visibility = Visibility.Collapsed;
             MonsterDetailsPanel.Visibility = Visibility.Visible;
+            if (FileAssignmentPanel != null)
+                FileAssignmentPanel.Visibility = Visibility.Collapsed;
         }
         else
         {
             ItemDetailsPanel.Visibility = Visibility.Visible;
             MonsterDetailsPanel.Visibility = Visibility.Collapsed;
+            if (FileAssignmentPanel != null)
+                FileAssignmentPanel.Visibility = Visibility.Collapsed;
         }
         ClearDetails();
-    }
-
-    private void UpdateExtractedPreviewPanels()
-    {
-        if (StaticPreviewPanel == null || SpritePreviewPanel == null || CenterPreviewGrid == null)
-            return;
-
-        if (_currentCategory == "EXTRACTED_ASSETS")
-        {
-            // Remove bottom pane: collapse SpritePreviewPanel and zero out its rows so BMP/PAL viewer expands to bottom
-            SpritePreviewPanel.Visibility = Visibility.Collapsed;
-            SpritePreviewPanel.Height = 0;
-            if (CenterPreviewGrid.RowDefinitions.Count >= 3)
-            {
-                CenterPreviewGrid.RowDefinitions[1].Height = new GridLength(0);
-                CenterPreviewGrid.RowDefinitions[2].Height = new GridLength(0);
-            }
-            StaticPreviewPanel.Visibility = Visibility.Visible;
-        }
-        else
-        {
-            // Restore layout for ITEMS/MONSTERS/NPCs
-            if (CenterPreviewGrid.RowDefinitions.Count >= 3)
-            {
-                CenterPreviewGrid.RowDefinitions[1].Height = new GridLength(8);
-                CenterPreviewGrid.RowDefinitions[2].Height = new GridLength(1, GridUnitType.Star);
-            }
-            SpritePreviewPanel.Height = double.NaN; // Auto
-            StaticPreviewPanel.Visibility = Visibility.Visible;
-        }
     }
 
     private void SetPreviewMode(PreviewMode mode)
@@ -373,19 +347,6 @@ public partial class MainWindow : Window
             return;
 
         SpriteViewer.Stop();
-        if (_currentCategory == "EXTRACTED_ASSETS")
-        {
-            if (StaticPreviewPanel == null || SpritePreviewPanel == null)
-                return;
-
-            // For extracted assets: static BMP/PAL preview only — SpritePreviewPanel removed from layout
-            StaticPreviewPanel.Visibility = Visibility.Visible;
-            SpritePreviewPanel.Visibility = Visibility.Collapsed;
-            if (mode == PreviewMode.None)
-                CenterPreviewImage.Source = null;
-            return;
-        }
-
         switch (mode)
         {
             case PreviewMode.Sprite:
@@ -407,8 +368,6 @@ public partial class MainWindow : Window
 
     private void ShowNpcDetails(NpcScriptEntry npc)
     {
-        if (ExtractedAssignmentPanel != null)
-            ExtractedAssignmentPanel.Visibility = Visibility.Collapsed;
         NpcDetailName.Text = "NAME: " + npc.DisplayName;
         NpcDetailMapPos.Text = "Map (X,Y): " + npc.Map + " (" + npc.X + ", " + npc.Y + ")";
         NpcDetailType.Text = "TYPE: " + npc.Type;
@@ -544,8 +503,6 @@ public partial class MainWindow : Window
 
     private void ShowMonsterDetails(MobEntry mob)
     {
-        if (ExtractedAssignmentPanel != null)
-            ExtractedAssignmentPanel.Visibility = Visibility.Collapsed;
         _currentMob = mob;
         _currentMobSnapshot = CloneMob(mob);
         var vm = new ViewModels.MobDetailsViewModel(
@@ -1190,8 +1147,6 @@ public partial class MainWindow : Window
     private void ShowItemDetails(ItemEntry item)
     {
         _currentItemForEdit = item;
-        if (ExtractedAssignmentPanel != null)
-            ExtractedAssignmentPanel.Visibility = Visibility.Collapsed;
 
         ItemEditId.Text = item.Id.ToString();
         ItemEditAegisName.Text = item.AegisName ?? "";
@@ -1371,8 +1326,8 @@ public partial class MainWindow : Window
             $"data\\texture\\effect\\collection\\{item.Id}.bmp",
             $"data\\texture\\effect\\collection\\{item.AegisName}.bmp",
             $"data\\texture\\effect\\collection\\{resourceName}.bmp",
-            $@"data\texture\유저인터페이스\item\{item.Id}.bmp",
-            $@"data\texture\유저인터페이스\item\{resourceName}.bmp",
+            $@"data\texture\���저���터���������\item\{item.Id}.bmp",
+            $@"data\texture\���저���터���������\item\{resourceName}.bmp",
         };
         foreach (var rel in paths)
         {
@@ -1476,92 +1431,7 @@ public partial class MainWindow : Window
         CenterPreviewImage.Source = preview;
     }
 
-    private void ShowExtractedAssetDetails(Models.ExtractedAssetEntry entry)
-    {
-        _currentExtractedAsset = entry;
 
-        // Populate new panel metadata
-        if (ExtractedBaseName != null) ExtractedBaseName.Text = "Base: " + entry.BaseName;
-        if (ExtractedFolder != null) ExtractedFolder.Text = "Folder: " + entry.DataRelativeFolder;
-        if (ExtractedExtensions != null) ExtractedExtensions.Text = "Extensions: " + entry.ExtensionsSummary;
-        if (ExtractedCategory != null) ExtractedCategory.Text = "Suggested: " + entry.SuggestedCategory;
-
-        // Populate related files in new panel
-        if (ExtractedRelatedFilesListBox != null && ExtractedRelatedFilesExpander != null)
-        {
-            var sourceList = (entry.SourcePaths ?? new List<string>())
-                .Where(p => !string.IsNullOrWhiteSpace(p))
-                .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
-                .ToList();
-            ExtractedRelatedFilesListBox.ItemsSource = sourceList;
-            ExtractedRelatedFilesExpander.Header = $"Related files ({sourceList.Count})";
-            ExtractedRelatedFilesExpander.IsExpanded = sourceList.Count > 0;
-        }
-
-        // Populate Assign-to combo with items/monsters/NPCs based on entity type
-        PopulateExtractedAssignTargets();
-
-        // Auto-select entity type from SuggestedCategory
-        if (ExtractedEntityTypeCombo != null)
-        {
-            var suggestedIndex = entry.SuggestedCategory switch
-            {
-                "MONSTERS" => 1,
-                "NPCs" => 2,
-                _ => 0
-            };
-            ExtractedEntityTypeCombo.SelectedIndex = suggestedIndex;
-        }
-
-        // Show entity-specific properties
-        UpdateExtractedEntityProperties(entry);
-
-        // Preview (static only)
-        CenterPreviewImage.Source = null;
-        var hasStatic = TryPreviewRelatedFile(entry.PreviewPath);
-        if (!hasStatic)
-            TryPreviewRelatedFile(entry.SprPath);
-    }
-
-    private static string BuildExtractedTextPreview(Models.ExtractedAssetEntry entry)
-    {
-        var textExts = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-        {
-            ".txt", ".lua", ".lub", ".json", ".xml", ".csv", ".log", ".ini", ".conf", ".yml", ".yaml"
-        };
-
-        foreach (var path in entry.SourcePaths ?? new List<string>())
-        {
-            if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
-                continue;
-
-            var ext = Path.GetExtension(path);
-            if (!textExts.Contains(ext))
-                continue;
-
-            try
-            {
-                var bytes = File.ReadAllBytes(path);
-                if (bytes.Length == 0)
-                    continue;
-
-                // If it looks binary, just show metadata for now.
-                if (bytes.Take(Math.Min(bytes.Length, 256)).Any(b => b == 0))
-                    return $"Binary-like file: {Path.GetFileName(path)} ({bytes.Length} bytes)";
-
-                var text = File.ReadAllText(path);
-                if (text.Length > 4000)
-                    text = text[..4000] + Environment.NewLine + "... (truncated)";
-                return text;
-            }
-            catch
-            {
-                // Try next candidate.
-            }
-        }
-
-        return "";
-    }
 
     private BitmapSource? LoadBitmapFromFile(string filePath)
     {
@@ -1589,19 +1459,11 @@ public partial class MainWindow : Window
         if (string.IsNullOrWhiteSpace(filePath) || !File.Exists(filePath))
             return false;
 
-        var splitExtracted = _currentCategory == "EXTRACTED_ASSETS";
         var ext = Path.GetExtension(filePath)?.ToLowerInvariant() ?? "";
         if (ext == ".spr" || ext == ".act")
         {
             var actPath = ext == ".act" ? filePath : Path.ChangeExtension(filePath, ".act");
             var sprPath = ext == ".spr" ? filePath : Path.ChangeExtension(filePath, ".spr");
-
-            if (AssetListBox.SelectedItem is Models.ExtractedAssetEntry selected)
-            {
-                actPath = !string.IsNullOrWhiteSpace(selected.ActPath) ? selected.ActPath : actPath;
-                sprPath = !string.IsNullOrWhiteSpace(selected.SprPath) ? selected.SprPath : sprPath;
-            }
-
             var (actData, sprData) = App.SpriteLookupService.GetSpriteData(actPath, sprPath);
             if (sprData == null || sprData.Length == 0)
                 return false;
@@ -1611,9 +1473,7 @@ public partial class MainWindow : Window
             SpriteViewer.Play();
             if (!SpriteViewer.LastLoadSucceeded)
                 return false;
-            if (splitExtracted)
-                SpritePreviewPanel.Visibility = Visibility.Visible;
-            return true;
+                        return true;
         }
 
         if (ext == ".pal")
@@ -1623,9 +1483,7 @@ public partial class MainWindow : Window
                 return false;
             SetPreviewMode(PreviewMode.Image);
             CenterPreviewImage.Source = swatch;
-            if (splitExtracted)
-                StaticPreviewPanel.Visibility = Visibility.Visible;
-            return true;
+                        return true;
         }
 
         var preview = LoadBitmapFromFile(filePath);
@@ -1633,9 +1491,7 @@ public partial class MainWindow : Window
             return false;
         SetPreviewMode(PreviewMode.Image);
         CenterPreviewImage.Source = preview;
-        if (splitExtracted)
-            StaticPreviewPanel.Visibility = Visibility.Visible;
-        return true;
+                    return true;
     }
 
     private BitmapSource? LoadPalettePreviewFromFile(string filePath)
@@ -1720,7 +1576,6 @@ public partial class MainWindow : Window
 
     private void ClearDetails()
     {
-        _currentExtractedAsset = null;
         _currentItemForEdit = null;
         SetPreviewMode(PreviewMode.None);
         if (ItemRelatedFilesListBox != null)
@@ -1768,8 +1623,6 @@ public partial class MainWindow : Window
             ExtractAllRelatedButton.Visibility = Visibility.Collapsed;
         if (OpenInGrfEditorButton != null)
             OpenInGrfEditorButton.Visibility = Visibility.Collapsed;
-        if (ExtractedAssignmentPanel != null)
-            ExtractedAssignmentPanel.Visibility = Visibility.Collapsed;
         ItemDiffExpander.Visibility = Visibility.Collapsed;
     }
 
@@ -1872,11 +1725,6 @@ public partial class MainWindow : Window
         {
             SaveItemFromEditForm(selectedItem);
             return;
-        }
-
-        if (AssetListBox.SelectedItem is Models.ExtractedAssetEntry extracted)
-        {
-            SaveExtractedAssetSelection(extracted);
         }
     }
 
@@ -2054,99 +1902,9 @@ public partial class MainWindow : Window
         }
     }
 
-    private void SaveExtractedAssetSelection(Models.ExtractedAssetEntry entry)
-    {
-        using var dlg = new System.Windows.Forms.FolderBrowserDialog
-        {
-            Description = "Select destination root folder",
-            UseDescriptionForTitle = true,
-            SelectedPath = GetClientRootForAssignment() ?? @"F:\MMORPG\RAGNAROK ONLINE\client"
-        };
-        if (dlg.ShowDialog() != System.Windows.Forms.DialogResult.OK)
-            return;
 
-        var destinationRoot = dlg.SelectedPath;
-        if (string.IsNullOrWhiteSpace(destinationRoot))
-            return;
 
-        var pairingMode = GetSelectedExtractedPairingMode();
-        try
-        {
-            var batch = (AssetListBox.ItemsSource as IEnumerable<Models.ExtractedAssetEntry>)?.ToList()
-                        ?? new List<Models.ExtractedAssetEntry>();
-            if (batch.Count == 0)
-                batch.Add(entry);
 
-            var totalCopied = 0;
-            var manifests = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var asset in batch)
-            {
-                var result = App.ExtractedAssetService.SavePairedFilesPreserveLayout(asset, destinationRoot, pairingMode);
-                totalCopied += result.CopiedCount;
-                if (!string.IsNullOrWhiteSpace(result.ManifestPath))
-                    manifests.Add(result.ManifestPath);
-            }
-
-            System.Windows.MessageBox.Show(this,
-                $"Saved {totalCopied} file(s).{Environment.NewLine}" +
-                $"Entries processed: {batch.Count}{Environment.NewLine}" +
-                $"Mode: {pairingMode}{Environment.NewLine}" +
-                $"Root: {destinationRoot}{Environment.NewLine}" +
-                $"Manifest: {manifests.FirstOrDefault() ?? "(none)"}",
-                "RoDbEditor",
-                MessageBoxButton.OK,
-                MessageBoxImage.Information);
-        }
-        catch (Exception ex)
-        {
-            System.Windows.MessageBox.Show(this,
-                "Failed to save paired files:" + Environment.NewLine + ex.Message,
-                "RoDbEditor",
-                MessageBoxButton.OK,
-                MessageBoxImage.Error);
-        }
-    }
-
-    private string GetSelectedExtractedPairingMode()
-    {
-        if (ExtractedPairingModeCombo?.SelectedItem is ComboBoxItem item &&
-            item.Content is string s && !string.IsNullOrWhiteSpace(s))
-        {
-            return s.Trim();
-        }
-
-        return "SORT_FILE_TYPE";
-    }
-
-    private IEnumerable<Models.ExtractedAssetEntry> ApplyExtractedModeFilter(IEnumerable<Models.ExtractedAssetEntry> assets)
-    {
-        var mode = GetSelectedExtractedPairingMode();
-        var key = (mode ?? "").Trim().ToUpperInvariant();
-        if (key.Contains("ACT_SPR_ONLY"))
-        {
-            return assets.Where(a => (a.SourcePaths ?? new List<string>())
-                .Any(p =>
-                {
-                    var e = Path.GetExtension(p);
-                    return e.Equals(".act", StringComparison.OrdinalIgnoreCase) ||
-                           e.Equals(".spr", StringComparison.OrdinalIgnoreCase);
-                }));
-        }
-
-        if (key.Contains("PAL_ONLY"))
-        {
-            return assets.Where(a => (a.SourcePaths ?? new List<string>())
-                .Any(p => Path.GetExtension(p).Equals(".pal", StringComparison.OrdinalIgnoreCase)));
-        }
-
-        return assets;
-    }
-
-    private void ExtractedPairingModeCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        if (_currentCategory == "EXTRACTED_ASSETS")
-            RefreshList();
-    }
 
     private void ItemRelatedFilesListBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
@@ -2165,9 +1923,7 @@ public partial class MainWindow : Window
     private string? TryGetSelectedRelatedFilePath()
     {
         string? selected = null;
-        if (_currentExtractedAsset != null && ExtractedRelatedFilesListBox?.SelectedItem is string extSel)
-            selected = extSel;
-        else if (ItemRelatedFilesListBox?.SelectedItem is string itemSel)
+        if (ItemRelatedFilesListBox?.SelectedItem is string itemSel)
             selected = itemSel;
 
         if (string.IsNullOrWhiteSpace(selected))
@@ -2188,82 +1944,9 @@ public partial class MainWindow : Window
         return null;
     }
 
-    private void AssignEntityTypeCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        PopulateAssignmentTargets();
-        UpdateAssignmentDestinationHint();
-    }
 
-    private void PopulateAssignmentTargets()
-    {
-        if (AssignTargetCombo == null)
-            return;
 
-        var options = new List<AssignmentTargetOption>();
-        var selectedType = GetSelectedAssignmentEntityType();
-        switch (selectedType)
-        {
-            case SpriteAssignmentEntityType.Npc:
-                options.AddRange(App.NpcIndexService.All.Select(n => new AssignmentTargetOption
-                {
-                    Payload = n,
-                    Key = string.IsNullOrWhiteSpace(n.SpriteId) ? n.Name : n.SpriteId,
-                    Display = $"{n.Name} [{n.SpriteId}] ({Path.GetFileName(n.FilePath)})"
-                }));
-                break;
-            case SpriteAssignmentEntityType.Monster:
-                options.AddRange(App.MobDbService.Mobs.Select(m => new AssignmentTargetOption
-                {
-                    Payload = m,
-                    Key = m.AegisName,
-                    Display = $"{m.Id} - {m.DisplayName} [{m.AegisName}]"
-                }));
-                break;
-            default:
-                options.AddRange(App.ItemDbService.Items.Select(i => new AssignmentTargetOption
-                {
-                    Payload = i,
-                    Key = i.AegisName,
-                    Display = $"{i.Id} - {i.DisplayName} [{i.AegisName}]"
-                }));
-                break;
-        }
 
-        AssignTargetCombo.ItemsSource = options.OrderBy(o => o.Display, StringComparer.OrdinalIgnoreCase).Take(2000).ToList();
-        AssignTargetCombo.DisplayMemberPath = nameof(AssignmentTargetOption.Display);
-        AssignTargetCombo.SelectedValuePath = nameof(AssignmentTargetOption.Key);
-        if (AssignTargetCombo.Items.Count > 0 && AssignTargetCombo.SelectedIndex < 0)
-            AssignTargetCombo.SelectedIndex = 0;
-    }
-
-    private void UpdateAssignmentDestinationHint()
-    {
-        if (AssignDestinationHint == null)
-            return;
-
-        var selectedType = GetSelectedAssignmentEntityType();
-        var folder = selectedType switch
-        {
-            SpriteAssignmentEntityType.Npc => @"data\sprite\npc",
-            SpriteAssignmentEntityType.Monster => @"data\sprite\monster",
-            _ => @"data\sprite\item"
-        };
-        AssignDestinationHint.Text = $"Destination: {folder}";
-    }
-
-    private SpriteAssignmentEntityType GetSelectedAssignmentEntityType()
-    {
-        if (AssignEntityTypeCombo?.SelectedItem is ComboBoxItem item &&
-            item.Content is string raw)
-        {
-            var key = raw.Trim().ToUpperInvariant();
-            if (key.Contains("NPC")) return SpriteAssignmentEntityType.Npc;
-            if (key.Contains("MONSTER")) return SpriteAssignmentEntityType.Monster;
-            return SpriteAssignmentEntityType.Item;
-        }
-
-        return SpriteAssignmentEntityType.Npc;
-    }
 
     private static string BuildSpriteKeyFromAssetBase(string? baseName)
     {
@@ -2291,226 +1974,32 @@ public partial class MainWindow : Window
         return key;
     }
 
-    private void AssignSpriteButton_Click(object sender, RoutedEventArgs e)
-    {
-        if (_currentExtractedAsset == null)
-        {
-            System.Windows.MessageBox.Show(this, "Select an extracted asset first.", "RoDbEditor",
-                MessageBoxButton.OK, MessageBoxImage.Information);
-            return;
-        }
-
-        var sprPath = _currentExtractedAsset.SprPath;
-        var actPath = _currentExtractedAsset.ActPath;
-        if (string.IsNullOrWhiteSpace(sprPath) || !File.Exists(sprPath))
-        {
-            System.Windows.MessageBox.Show(this, "Selected extracted entry does not contain a valid SPR file.", "RoDbEditor",
-                MessageBoxButton.OK, MessageBoxImage.Warning);
-            return;
-        }
-
-        var entityType = GetSelectedAssignmentEntityType();
-        var selectedTarget = AssignTargetCombo?.SelectedItem as AssignmentTargetOption;
-        var fallbackKey = BuildSpriteKeyFromAssetBase(_currentExtractedAsset.BaseName);
-        var targetKey = selectedTarget?.Key;
-        if (string.IsNullOrWhiteSpace(targetKey))
-            targetKey = fallbackKey;
-
-        if (entityType == SpriteAssignmentEntityType.Monster)
-            targetKey = BuildUniqueMonsterAegis(BuildSpriteKeyFromAssetBase(targetKey));
-
-        var related = new List<string>();
-        if (AssignIncludeRelatedCheckBox?.IsChecked == true)
-        {
-            related = (_currentExtractedAsset.SourcePaths ?? new List<string>())
-                .Where(p =>
-                {
-                    var ext = Path.GetExtension(p).ToLowerInvariant();
-                    return ext is ".wav" or ".bmp" or ".png" or ".tga" or ".jpg" or ".jpeg" or ".pal";
-                })
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList();
-            // Also include .bmp/.png etc. with same base name from other folders (e.g. texture/effect)
-            var crossFolderTextures = App.ExtractedAssetService?.FindTextureFilesForBase(_currentExtractedAsset.BaseName) ?? Array.Empty<string>();
-            foreach (var p in crossFolderTextures)
-            {
-                if (!string.IsNullOrWhiteSpace(p) && File.Exists(p) && !related.Contains(p, StringComparer.OrdinalIgnoreCase))
-                    related.Add(p);
-            }
-        }
-
-        var isHeadgear = entityType == SpriteAssignmentEntityType.Item && selectedTarget?.Payload is ItemEntry itemEntry
-            && itemEntry.Locations != null
-            && itemEntry.Locations.Keys.Any(k => k.StartsWith("Head_", StringComparison.OrdinalIgnoreCase) || k.StartsWith("Costume_Head_", StringComparison.OrdinalIgnoreCase));
-
-        var clientRoot = GetClientRootForAssignment() ?? @"F:\MMORPG\RAGNAROK ONLINE\client";
-        var targetGrfPath = App.Config?.TargetGrfPath ?? Path.Combine(clientRoot, App.Config?.TargetGrfFileName ?? "custom.grf");
-
-        var safeBaseForPaths = string.Join("", targetKey.Trim().Select(c => Path.GetInvalidFileNameChars().Contains(c) ? '_' : c));
-        if (string.IsNullOrWhiteSpace(safeBaseForPaths)) safeBaseForPaths = "custom_sprite";
-
-        var showGrfEditorOfferAfterSuccess = false;
-        if (entityType == SpriteAssignmentEntityType.Item && !HasTextureInRelatedPaths(related))
-        {
-            var noBmpMsg = "The .spr and .act you chose has no .bmp with them. Items need an icon for the inventory." +
-                Environment.NewLine + Environment.NewLine +
-                "We can proceed with .spr and .act only. You will need to add the .bmp manually. Drop it into these GRF paths:" +
-                Environment.NewLine + Environment.NewLine +
-                "• data\\texture\\유저인터페이스\\item\\" + safeBaseForPaths + ".bmp" +
-                Environment.NewLine +
-                "• data\\texture\\유저인터페이스\\collection\\" + safeBaseForPaths + ".bmp" +
-                Environment.NewLine + Environment.NewLine +
-                "I can open GRF Editor with your target GRF so you can transfer the file.";
-            var noBmpResult = System.Windows.MessageBox.Show(this, noBmpMsg, "No .bmp found for this item",
-                MessageBoxButton.OKCancel, MessageBoxImage.Warning);
-            if (noBmpResult == MessageBoxResult.Cancel)
-                return;
-            showGrfEditorOfferAfterSuccess = true;
-        }
-
-        var req = new SpriteAssignmentRequest
-        {
-            EntityType = entityType,
-            TargetKey = targetKey,
-            SourceActPath = actPath ?? "",
-            SourceSprPath = sprPath,
-            RelatedPaths = related,
-            ClientRootPath = clientRoot,
-            TargetGrfPath = targetGrfPath,
-            IsHeadgear = isHeadgear
-        };
-
-        var result = App.SpriteAssignmentService.ExecuteAssignment(req);
-        if (!result.Success)
-        {
-            System.Windows.MessageBox.Show(this,
-                "Assignment failed:" + Environment.NewLine + string.Join(Environment.NewLine, result.Errors),
-                "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Error);
-            return;
-        }
-
-        string designation = "Asset files added to GRF.";
-        if (entityType == SpriteAssignmentEntityType.Npc && selectedTarget?.Payload is NpcScriptEntry npc)
-        {
-            designation = App.EntityDesignationService.ApplyNpcSprite(npc, targetKey);
-        }
-        else if (entityType == SpriteAssignmentEntityType.Monster && selectedTarget?.Payload is MobEntry mob)
-        {
-            var custom = App.EntityDesignationService.CreateOrUpdateCustomMonsterFrom(mob, targetKey);
-            designation = $"Custom monster created: {custom.Id} ({custom.AegisName}) in db/import/mob_db.yml";
-        }
-        else if (entityType == SpriteAssignmentEntityType.Item && selectedTarget?.Payload is ItemEntry assignedItem)
-        {
-            assignedItem.ResourceName = targetKey;
-            try
-            {
-                var saveResult = App.ItemDbService?.SaveItem(assignedItem);
-                if (saveResult != null)
-                    designation = $"Item {assignedItem.Id} ({assignedItem.AegisName}): ResourceName set to '{targetKey}' and saved to db/import/item_db.yml.";
-                else
-                    designation = $"Item {assignedItem.Id} ({assignedItem.AegisName}): ResourceName set to '{targetKey}' (in memory; save to item_db manually if needed).";
-            }
-            catch
-            {
-                designation = $"Item {assignedItem.Id}: ResourceName set to '{targetKey}' in memory.";
-            }
-            RefreshList();
-        }
-
-        var warningText = result.Warnings.Count > 0
-            ? Environment.NewLine + "Warnings:" + Environment.NewLine + string.Join(Environment.NewLine, result.Warnings)
-            : "";
-        System.Windows.MessageBox.Show(this,
-            $"Assignment complete.{Environment.NewLine}" +
-            $"Entity: {entityType}{Environment.NewLine}" +
-            $"Target key: {targetKey}{Environment.NewLine}" +
-            $"Added to GRF: {result.CopiedFiles.Count} files{Environment.NewLine}" +
-            $"{designation}{Environment.NewLine}" +
-            $"Manifest: {result.ManifestPath}{warningText}",
-            "RoDbEditor",
-            MessageBoxButton.OK,
-            MessageBoxImage.Information);
-
-        if (showGrfEditorOfferAfterSuccess)
-        {
-            var launchResult = System.Windows.MessageBox.Show(this,
-                "Added .spr and .act to GRF. Would you like me to open GRF Editor so you can add the .bmp manually?",
-                "Open GRF Editor?", MessageBoxButton.YesNo, MessageBoxImage.Question);
-            if (launchResult == MessageBoxResult.Yes)
-            {
-                var editorPath = FindGrfEditorExecutable();
-                if (!string.IsNullOrEmpty(editorPath) && File.Exists(targetGrfPath))
-                {
-                    try
-                    {
-                        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
-                        {
-                            FileName = editorPath,
-                            UseShellExecute = true,
-                            Arguments = $"\"{targetGrfPath}\""
-                        });
-                    }
-                    catch (Exception ex)
-                    {
-                        System.Windows.MessageBox.Show(this, "Failed to launch GRF Editor: " + ex.Message,
-                            "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Warning);
-                    }
-                }
-                else
-                {
-                    System.Windows.MessageBox.Show(this,
-                        "GRF Editor.exe not found, or target GRF does not exist.",
-                        "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Warning);
-                }
-            }
-        }
-    }
 
     private void OpenInGrfEditorButton_Click(object sender, RoutedEventArgs e)
     {
-        if (AssetListBox.SelectedItem is not Models.ExtractedAssetEntry entry)
+        var cfg = App.Config;
+        var grfPath = !string.IsNullOrEmpty(cfg?.TargetGrfPath) ? cfg.TargetGrfPath
+            : (string.IsNullOrEmpty(cfg?.ClientRootPath) ? null : Path.Combine(cfg.ClientRootPath, cfg?.TargetGrfFileName ?? "custom.grf"));
+        if (string.IsNullOrEmpty(grfPath) || !File.Exists(grfPath))
         {
-            System.Windows.MessageBox.Show(this, "Select an extracted asset first.", "RoDbEditor",
-                MessageBoxButton.OK, MessageBoxImage.Information);
+            var folder = Path.GetDirectoryName(grfPath ?? "");
+            if (!string.IsNullOrEmpty(folder)) OpenFolderInExplorer(folder);
             return;
         }
-
         var editorPath = FindGrfEditorExecutable();
         if (string.IsNullOrEmpty(editorPath))
         {
-            System.Windows.MessageBox.Show(this,
-                "GRF Editor.exe not found." + Environment.NewLine +
-                "Expected path example:" + Environment.NewLine +
-                @"F:\MMORPG\RAGNAROK ONLINE\EDITORS\GRF EDITOR\GRF Editor.exe",
-                "RoDbEditor",
-                MessageBoxButton.OK,
-                MessageBoxImage.Warning);
+            System.Windows.MessageBox.Show(this, "GRF Editor not found.", "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Warning);
+            OpenFolderInExplorer(Path.GetDirectoryName(grfPath) ?? "");
             return;
         }
-
-        var target = TryGetSelectedRelatedFilePath()
-                     ?? entry.SprPath
-                     ?? entry.ActPath
-                     ?? entry.PreviewPath
-                     ?? entry.SourcePaths.FirstOrDefault();
-
         try
         {
-            var psi = new System.Diagnostics.ProcessStartInfo
-            {
-                FileName = editorPath,
-                UseShellExecute = true,
-                Arguments = !string.IsNullOrWhiteSpace(target) ? $"\"{target}\"" : ""
-            };
-            System.Diagnostics.Process.Start(psi);
+            Process.Start(new ProcessStartInfo { FileName = editorPath, UseShellExecute = true, Arguments = $"\"{grfPath}\"" });
         }
         catch (Exception ex)
         {
-            System.Windows.MessageBox.Show(this,
-                "Failed to launch GRF Editor:" + Environment.NewLine + ex.Message,
-                "RoDbEditor",
-                MessageBoxButton.OK,
-                MessageBoxImage.Error);
+            System.Windows.MessageBox.Show(this, "Failed to launch GRF Editor: " + ex.Message, "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
     }
 
@@ -2518,8 +2007,6 @@ public partial class MainWindow : Window
     {
         var candidates = new[]
         {
-            @"F:\MMORPG\RAGNAROK ONLINE\EDITORS\GRF EDITOR\GRF Editor.exe",
-            @"F:\MMORPG\RAGNAROK ONLINE\EDITORS\GRF EDITOR\GRFEditor-main\GRF Editor.exe",
             Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "GRF Editor.exe"),
         };
 
@@ -2530,6 +2017,96 @@ public partial class MainWindow : Window
         }
 
         return null;
+    }
+
+    private void PopulateFileAssignmentPaths()
+    {
+        var cfg = App.Config;
+        FileAssignRathenaPath.Text = !string.IsNullOrEmpty(cfg?.DataPath) ? cfg.DataPath : "(not configured)";
+        var clientRoot = cfg?.ClientRootPath ?? "";
+        var itemInfoPath = string.IsNullOrEmpty(clientRoot) ? "(not configured)" : Path.Combine(clientRoot, "SystemEN");
+        FileAssignItemInfoPath.Text = itemInfoPath;
+        var accessoryPath = string.IsNullOrEmpty(clientRoot) ? "(not configured)" : Path.Combine(clientRoot, "data", "luafiles514", "lua files", "datainfo");
+        FileAssignAccessoryPath.Text = accessoryPath;
+        var spritePath = string.IsNullOrEmpty(clientRoot) ? "(not configured)" : Path.Combine(clientRoot, "data", "sprite");
+        if (!string.IsNullOrEmpty(clientRoot) && !Directory.Exists(spritePath))
+            spritePath = Path.Combine(clientRoot, "data");
+        FileAssignSpritePath.Text = spritePath;
+        var grfPath = !string.IsNullOrEmpty(cfg?.TargetGrfPath) ? cfg.TargetGrfPath
+            : (!string.IsNullOrEmpty(clientRoot) ? Path.Combine(clientRoot, cfg?.TargetGrfFileName ?? "custom.grf") : null);
+        FileAssignGrfPath.Text = !string.IsNullOrEmpty(grfPath) ? grfPath : "(not configured)";
+    }
+
+    private static void OpenFolderInExplorer(string folderPath)
+    {
+        if (string.IsNullOrEmpty(folderPath)) return;
+        if (Directory.Exists(folderPath))
+            Process.Start("explorer.exe", folderPath);
+        else
+            System.Windows.MessageBox.Show(System.Windows.Application.Current.MainWindow, "Folder does not exist: " + folderPath, "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Warning);
+    }
+
+    private void FileAssignOpenRathena_Click(object sender, RoutedEventArgs e)
+    {
+        var dataPath = App.Config?.DataPath;
+        if (string.IsNullOrEmpty(dataPath))
+        {
+            System.Windows.MessageBox.Show(this, "RAthena location is not configured.", "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+        OpenFolderInExplorer(Path.Combine(dataPath, "db", "import"));
+    }
+
+    private void FileAssignOpenItemInfo_Click(object sender, RoutedEventArgs e)
+    {
+        var root = App.Config?.ClientRootPath;
+        OpenFolderInExplorer(string.IsNullOrEmpty(root) ? "" : Path.Combine(root, "SystemEN"));
+    }
+
+    private void FileAssignOpenAccessory_Click(object sender, RoutedEventArgs e)
+    {
+        var root = App.Config?.ClientRootPath;
+        OpenFolderInExplorer(string.IsNullOrEmpty(root) ? "" : Path.Combine(root, "data", "luafiles514", "lua files", "datainfo"));
+    }
+
+    private void FileAssignOpenSprite_Click(object sender, RoutedEventArgs e)
+    {
+        var root = App.Config?.ClientRootPath;
+        if (string.IsNullOrEmpty(root)) { OpenFolderInExplorer(""); return; }
+        var sprite = Path.Combine(root, "data", "sprite");
+        OpenFolderInExplorer(Directory.Exists(sprite) ? sprite : Path.Combine(root, "data"));
+    }
+
+    private void FileAssignOpenGrf_Click(object sender, RoutedEventArgs e)
+    {
+        var cfg = App.Config;
+        var grfPath = !string.IsNullOrEmpty(cfg?.TargetGrfPath) ? cfg.TargetGrfPath
+            : (string.IsNullOrEmpty(cfg?.ClientRootPath) ? null : Path.Combine(cfg.ClientRootPath, cfg?.TargetGrfFileName ?? "custom.grf"));
+        if (string.IsNullOrEmpty(grfPath))
+        {
+            System.Windows.MessageBox.Show(this, "Custom GRF path is not configured.", "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+        if (!File.Exists(grfPath))
+        {
+            OpenFolderInExplorer(Path.GetDirectoryName(grfPath) ?? "");
+            return;
+        }
+        var editorPath = FindGrfEditorExecutable();
+        if (string.IsNullOrEmpty(editorPath))
+        {
+            System.Windows.MessageBox.Show(this, "GRF Editor not found. Open folder instead.", "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Warning);
+            OpenFolderInExplorer(Path.GetDirectoryName(grfPath) ?? "");
+            return;
+        }
+        try
+        {
+            Process.Start(new ProcessStartInfo { FileName = editorPath, UseShellExecute = true, Arguments = $"\"{grfPath}\"" });
+        }
+        catch (Exception ex)
+        {
+            System.Windows.MessageBox.Show(this, "Failed to launch GRF Editor: " + ex.Message, "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
     }
 
     private static bool HasTextureInRelatedPaths(IEnumerable<string>? paths)
@@ -2554,69 +2131,7 @@ public partial class MainWindow : Window
 
     private void ExtractAllRelatedButton_Click(object sender, RoutedEventArgs e)
     {
-        if (_currentCategory != "EXTRACTED_ASSETS")
-            return;
-
-        using var dlg = new System.Windows.Forms.FolderBrowserDialog
-        {
-            Description = "Select destination root folder for all related extracted files",
-            UseDescriptionForTitle = true,
-            SelectedPath = GetClientRootForAssignment() ?? @"F:\MMORPG\RAGNAROK ONLINE\client"
-        };
-        if (dlg.ShowDialog() != System.Windows.Forms.DialogResult.OK)
-            return;
-
-        var destinationRoot = dlg.SelectedPath;
-        if (string.IsNullOrWhiteSpace(destinationRoot))
-            return;
-
-        var extractedService = App.ExtractedAssetService;
-        if (extractedService == null)
-        {
-            System.Windows.MessageBox.Show(this, "Extracted asset service is not available.", "RoDbEditor",
-                MessageBoxButton.OK, MessageBoxImage.Warning);
-            return;
-        }
-
-        var assets = (AssetListBox.ItemsSource as IEnumerable<Models.ExtractedAssetEntry>)?.ToList()
-                     ?? extractedService.Search("", SearchBox?.Text?.Trim())?.ToList()
-                     ?? new List<Models.ExtractedAssetEntry>();
-        if (assets.Count == 0)
-        {
-            System.Windows.MessageBox.Show(this, "No extracted assets to export.", "RoDbEditor",
-                MessageBoxButton.OK, MessageBoxImage.Information);
-            return;
-        }
-
-        int totalCopied = 0;
-        int failed = 0;
-        string? manifestPath = null;
-
-        foreach (var asset in assets)
-        {
-            try
-            {
-                var result = extractedService.SavePairedFilesPreserveLayout(asset, destinationRoot, "ALL_RELATED");
-                totalCopied += result.CopiedCount;
-                if (!string.IsNullOrWhiteSpace(result.ManifestPath))
-                    manifestPath = result.ManifestPath;
-            }
-            catch
-            {
-                failed++;
-            }
-        }
-
-        System.Windows.MessageBox.Show(this,
-            $"Extracted all related files.{Environment.NewLine}" +
-            $"Entries processed: {assets.Count}{Environment.NewLine}" +
-            $"Files copied: {totalCopied}{Environment.NewLine}" +
-            $"Failed entries: {failed}{Environment.NewLine}" +
-            $"Root: {destinationRoot}{Environment.NewLine}" +
-            $"Manifest: {manifestPath ?? "(none)"}",
-            "RoDbEditor",
-            MessageBoxButton.OK,
-            failed == 0 ? MessageBoxImage.Information : MessageBoxImage.Warning);
+        return;
     }
 
     private void SearchButton_Click(object sender, RoutedEventArgs e)
@@ -2676,7 +2191,6 @@ public partial class MainWindow : Window
         }
 
         App.ReloadFromGrf();
-        App.ExtractedAssetService?.ClearCache();
 
         RefreshList();
         UpdateSourceIndicators();
@@ -2699,32 +2213,6 @@ public partial class MainWindow : Window
     }
 
 
-    private void MenuOpenExtractedAssets_Click(object sender, RoutedEventArgs e)
-    {
-        using var dlg = new System.Windows.Forms.FolderBrowserDialog
-        {
-            Description = "Select extracted assets root folder (contains server variant subfolders)",
-            UseDescriptionForTitle = true
-        };
-        if (dlg.ShowDialog() != System.Windows.Forms.DialogResult.OK) return;
-        var path = dlg.SelectedPath;
-        if (string.IsNullOrEmpty(path)) return;
-
-        App.FileSystemSpriteSource = new FileSystemSpriteSource(path);
-        App.Config.ExtractedAssetsPath = path;
-        App.Config.Save();
-        App.SpriteLookupService.ClearCache();
-        App.SpriteLookupService = new SpriteLookupService(App.GrfService, App.FileSystemSpriteSource);
-        App.ExtractedAssetService?.ClearCache();
-
-        RefreshList();
-        UpdateSourceIndicators();
-        System.Windows.MessageBox.Show(this,
-            "Extracted assets loaded." + Environment.NewLine +
-            $"Sprite files indexed: {App.FileSystemSpriteSource.CachedCount}" + Environment.NewLine +
-            $"Paired asset groups: {App.ExtractedAssetService?.TotalCount ?? 0}",
-            "RoDbEditor", MessageBoxButton.OK);
-    }
 
     private void MenuSpriteDiagnostic_Click(object sender, RoutedEventArgs e)
     {
@@ -3538,171 +3026,7 @@ public partial class MainWindow : Window
         }
     }
 
-    // ═══════════════════════════════════════════════════════════════════
-    // Extracted Asset Properties Panel — event handlers (Steps 1/4/5)
-    // ═══════════════════════════════════════════════════════════════════
-
-    private readonly List<(string bonusType, int value)> _extractedBonusList = new();
-
-    private void PopulateExtractedAssignTargets()
-    {
-        if (ExtractedAssignTargetCombo == null) return;
-        var options = new List<AssignmentTargetOption>();
-        var entityType = GetExtractedEntityType();
-        switch (entityType)
-        {
-            case SpriteAssignmentEntityType.Npc:
-                if (App.NpcIndexService?.All != null)
-                    options.AddRange(App.NpcIndexService.All.Select(n => new AssignmentTargetOption
-                    {
-                        Payload = n,
-                        Key = string.IsNullOrWhiteSpace(n.SpriteId) ? n.Name : n.SpriteId,
-                        Display = $"{n.Name} [{n.SpriteId ?? "—"}] ({Path.GetFileName(n.FilePath)})"
-                    }));
-                break;
-            case SpriteAssignmentEntityType.Monster:
-                if (App.MobDbService?.Mobs != null)
-                    options.AddRange(App.MobDbService.Mobs.Select(m => new AssignmentTargetOption
-                    {
-                        Payload = m,
-                        Key = m.AegisName,
-                        Display = $"{m.Id} - {m.DisplayName} [{m.AegisName}]"
-                    }));
-                break;
-            default:
-                if (App.ItemDbService?.Items != null)
-                    options.AddRange(App.ItemDbService.Items.Select(i => new AssignmentTargetOption
-                    {
-                        Payload = i,
-                        Key = i.AegisName,
-                        Display = $"{i.Id} - {i.DisplayName} [{i.AegisName}]"
-                    }));
-                break;
-        }
-        ExtractedAssignTargetCombo.ItemsSource = options.OrderBy(o => o.Display, StringComparer.OrdinalIgnoreCase).Take(2000).ToList();
-        ExtractedAssignTargetCombo.DisplayMemberPath = nameof(AssignmentTargetOption.Display);
-        if (options.Count > 0 && ExtractedAssignTargetCombo.SelectedIndex < 0)
-            ExtractedAssignTargetCombo.SelectedIndex = 0;
-    }
-
-    private void ExtractedEntityTypeCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        PopulateExtractedAssignTargets();
-        UpdateExtractedEntityProperties(_currentExtractedAsset);
-    }
-
-    private void UpdateExtractedEntityProperties(Models.ExtractedAssetEntry? entry)
-    {
-        if (ExtractedItemPropertiesPanel == null) return;
-
-        var entityType = GetExtractedEntityType();
-        ExtractedItemPropertiesPanel.Visibility = entityType == SpriteAssignmentEntityType.Item
-            ? Visibility.Visible : Visibility.Collapsed;
-        if (ExtractedMonsterPropertiesPanel != null)
-            ExtractedMonsterPropertiesPanel.Visibility = entityType == SpriteAssignmentEntityType.Monster
-                ? Visibility.Visible : Visibility.Collapsed;
-        if (ExtractedNpcPropertiesPanel != null)
-            ExtractedNpcPropertiesPanel.Visibility = entityType == SpriteAssignmentEntityType.Npc
-                ? Visibility.Visible : Visibility.Collapsed;
-
-        // Update destination hint
-        if (ExtractedDestinationHint != null)
-        {
-            var folder = entityType switch
-            {
-                SpriteAssignmentEntityType.Npc => @"data\sprite\npc",
-                SpriteAssignmentEntityType.Monster => @"data\sprite\몬스터",
-                _ => @"data\sprite\아이템"
-            };
-            ExtractedDestinationHint.Text = $"Destination: {folder}";
-        }
-
-        // Pre-populate fields
-        if (entityType == SpriteAssignmentEntityType.Item)
-            PrepopulateItemFields(entry);
-        else if (entityType == SpriteAssignmentEntityType.Monster)
-            PrepopulateMonsterFields(entry);
-        else
-            PrepopulateNpcFields(entry);
-    }
-
-    private SpriteAssignmentEntityType GetExtractedEntityType()
-    {
-        if (ExtractedEntityTypeCombo?.SelectedItem is ComboBoxItem item &&
-            item.Content is string raw)
-        {
-            var key = raw.Trim().ToUpperInvariant();
-            if (key.Contains("MONSTER")) return SpriteAssignmentEntityType.Monster;
-            if (key.Contains("NPC")) return SpriteAssignmentEntityType.Npc;
-        }
-        return SpriteAssignmentEntityType.Item;
-    }
-
-    private void PrepopulateItemFields(Models.ExtractedAssetEntry? entry)
-    {
-        if (ExtItemId == null) return;
-        var nextId = App.ItemDbService?.GetNextCustomItemId() ?? 50000;
-        ExtItemId.Text = nextId.ToString();
-        var baseName = entry?.BaseName ?? "Custom_Item";
-        var aegis = string.Concat(baseName.Select(c => char.IsLetterOrDigit(c) || c == '_' ? c : '_'));
-        ExtItemAegisName.Text = aegis;
-        ExtItemName.Text = baseName.Replace('_', ' ');
-        ExtItemBuy.Text = "0";
-        ExtItemSell.Text = "0";
-        ExtItemWeight.Text = "10";
-        ExtItemAttack.Text = "0";
-        ExtItemDefense.Text = "0";
-        ExtItemReqLevel.Text = "1";
-        ExtItemSlots.Text = "0";
-        if (ExtItemMagicAttack != null) ExtItemMagicAttack.Text = "0";
-        if (ExtItemRange != null) ExtItemRange.Text = "0";
-        if (ExtItemEquipLevelMax != null) ExtItemEquipLevelMax.Text = "0";
-        if (ExtItemWeaponLevel != null) ExtItemWeaponLevel.Text = "0";
-        if (ExtItemArmorLevel != null) ExtItemArmorLevel.Text = "0";
-        if (ExtItemRefineable != null) ExtItemRefineable.IsChecked = false;
-        if (ExtItemGradable != null) ExtItemGradable.IsChecked = false;
-        if (ExtItemView != null) ExtItemView.Text = "0";
-        if (ExtItemAliasName != null) ExtItemAliasName.Text = "";
-        if (ExtItemEquipScript != null) ExtItemEquipScript.Text = "";
-        if (ExtItemUnEquipScript != null) ExtItemUnEquipScript.Text = "";
-
-        // Populate bonus combo
-        if (ExtItemBonusCombo != null)
-            ExtItemBonusCombo.ItemsSource = BonusEffectRegistry.All;
-
-        // Populate Jobs checkboxes
-        PopulateExtractedJobCheckboxes();
-        PopulateExtractedLocationCheckboxes();
-
-        // Clear bonus list
-        _extractedBonusList.Clear();
-        RefreshExtractedBonusListUI();
-        if (ExtItemScript != null) ExtItemScript.Text = "";
-    }
-
-    private void PrepopulateMonsterFields(Models.ExtractedAssetEntry? entry)
-    {
-        if (ExtMobId == null) return;
-        ExtMobId.Text = "3000";
-        var baseName = entry?.BaseName ?? "Custom_Monster";
-        var aegis = string.Concat(baseName.Select(c => char.IsLetterOrDigit(c) || c == '_' ? c : '_'));
-        ExtMobAegisName.Text = aegis.ToUpperInvariant();
-        ExtMobName.Text = baseName.Replace('_', ' ');
-        ExtMobLevel.Text = "1";
-        ExtMobHp.Text = "100";
-        ExtMobBaseExp.Text = "10";
-        ExtMobJobExp.Text = "5";
-    }
-
-    private void PrepopulateNpcFields(Models.ExtractedAssetEntry? entry)
-    {
-        if (ExtNpcName == null) return;
-        var baseName = entry?.BaseName ?? "Custom_NPC";
-        ExtNpcName.Text = baseName.Replace('_', ' ');
-        ExtNpcSpriteId.Text = baseName;
-        ExtNpcMap.Text = "prontera";
-    }
-
+    //������������������������������������������������������������������������������������������������������������������������������������
     private static readonly string[] _jobNames = new[]
     {
         "All", "Acolyte", "Alchemist", "Archer", "Assassin", "BardDancer",
@@ -3722,55 +3046,8 @@ public partial class MainWindow : Window
         "Shadow_Right_Accessory", "Shadow_Left_Accessory"
     };
 
-    private void PopulateExtractedJobCheckboxes()
-    {
-        if (ExtItemJobsPanel == null) return;
-        ExtItemJobsPanel.Children.Clear();
-        foreach (var job in _jobNames)
-        {
-            var cb = new System.Windows.Controls.CheckBox { Content = job, Margin = new Thickness(0, 2, 12, 2) };
-            if (job == "All") cb.IsChecked = true;
-            ExtItemJobsPanel.Children.Add(cb);
-        }
-    }
 
-    private void PopulateExtractedLocationCheckboxes()
-    {
-        if (ExtItemLocationsPanel == null) return;
-        ExtItemLocationsPanel.Children.Clear();
-        foreach (var loc in _locationNames)
-        {
-            var cb = new System.Windows.Controls.CheckBox { Content = loc, Margin = new Thickness(0, 2, 12, 2) };
-            ExtItemLocationsPanel.Children.Add(cb);
-        }
-    }
 
-    private void ExtItemType_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        if (ExtItemSubType == null) return;
-        var type = (ExtItemType?.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "";
-        ExtItemSubType.Items.Clear();
-        ExtItemSubType.Text = "";
-        if (type == "Weapon")
-        {
-            foreach (var st in new[] { "Fist", "Dagger", "1hSword", "2hSword", "1hSpear", "2hSpear",
-                "1hAxe", "2hAxe", "Mace", "2hMace", "Staff", "Bow", "Knuckle", "Musical",
-                "Whip", "Book", "Katar", "Revolver", "Rifle", "Gatling", "Shotgun", "Grenade", "Huuma", "2hStaff" })
-                ExtItemSubType.Items.Add(new ComboBoxItem { Content = st });
-        }
-        else if (type == "Ammo")
-        {
-            foreach (var st in new[] { "Arrow", "Dagger", "Bullet", "Shell", "Grenade",
-                "Shuriken", "Kunai", "Cannonball", "ThrowWeapon" })
-                ExtItemSubType.Items.Add(new ComboBoxItem { Content = st });
-        }
-        else if (type == "Card")
-        {
-            foreach (var st in new[] { "Normal", "Enchant" })
-                ExtItemSubType.Items.Add(new ComboBoxItem { Content = st });
-        }
-        // Armor and other types: SubType not valid (rAthena rejects it). Use Locations for equip slot.
-    }
 
     private void PopulateItemEditSubTypes()
     {
@@ -3840,232 +3117,9 @@ public partial class MainWindow : Window
             ItemEditScript.Text = script;
     }
 
-    private void ExtItemAddBonus_Click(object sender, RoutedEventArgs e)
-    {
-        if (ExtItemBonusCombo?.SelectedItem is not BonusEffectDefinition def) return;
-        int.TryParse(ExtItemBonusValue?.Text, out var val);
-        _extractedBonusList.Add((def.BonusConstant, val));
-        RefreshExtractedBonusListUI();
-    }
 
-    private void ExtItemRemoveBonus_Click(object sender, RoutedEventArgs e)
-    {
-        if (ExtItemBonusList == null) return;
-        var idx = ExtItemBonusList.SelectedIndex;
-        if (idx >= 0 && idx < _extractedBonusList.Count)
-        {
-            _extractedBonusList.RemoveAt(idx);
-            RefreshExtractedBonusListUI();
-        }
-    }
 
-    private void RefreshExtractedBonusListUI()
-    {
-        if (ExtItemBonusList == null) return;
-        ExtItemBonusList.ItemsSource = null;
-        ExtItemBonusList.ItemsSource = _extractedBonusList
-            .Select(b =>
-            {
-                var def = BonusEffectRegistry.All.FirstOrDefault(d => d.BonusConstant == b.bonusType);
-                var label = def != null ? def.DisplayName : b.bonusType;
-                return def != null && !def.TakesValue ? label : $"{label} {b.value}";
-            })
-            .ToList();
 
-        var script = BonusEffectRegistry.BuildScript(_extractedBonusList);
-        if (ExtItemScriptPreview != null)
-            ExtItemScriptPreview.Text = script;
-        if (ExtItemScript != null)
-            ExtItemScript.Text = script;
-    }
-
-    private void ExtractedAssignSpriteButton_Click(object sender, RoutedEventArgs e)
-    {
-        if (_currentExtractedAsset == null)
-        {
-            System.Windows.MessageBox.Show(this, "Select an extracted asset first.", "RoDbEditor",
-                MessageBoxButton.OK, MessageBoxImage.Information);
-            return;
-        }
-
-        var entry = _currentExtractedAsset;
-        if (string.IsNullOrWhiteSpace(entry.SprPath) && string.IsNullOrWhiteSpace(entry.ActPath))
-        {
-            System.Windows.MessageBox.Show(this, "No .spr/.act file found for this asset.", "RoDbEditor",
-                MessageBoxButton.OK, MessageBoxImage.Warning);
-            return;
-        }
-
-        var entityType = GetExtractedEntityType();
-        var selectedTarget = ExtractedAssignTargetCombo?.SelectedItem as AssignmentTargetOption;
-        var targetKey = selectedTarget?.Key;
-        if (string.IsNullOrWhiteSpace(targetKey))
-        {
-            targetKey = entityType switch
-            {
-                SpriteAssignmentEntityType.Item => ExtItemAegisName?.Text?.Trim(),
-                SpriteAssignmentEntityType.Monster => ExtMobAegisName?.Text?.Trim(),
-                SpriteAssignmentEntityType.Npc => ExtNpcSpriteId?.Text?.Trim(),
-                _ => null
-            };
-        }
-        if (string.IsNullOrWhiteSpace(targetKey))
-            targetKey = BuildSpriteKeyFromAssetBase(entry.BaseName);
-        if (entityType == SpriteAssignmentEntityType.Monster)
-            targetKey = BuildUniqueMonsterAegis(targetKey);
-
-        var clientRoot = GetClientRootForAssignment();
-        if (string.IsNullOrWhiteSpace(clientRoot) || !Directory.Exists(clientRoot))
-        {
-            System.Windows.MessageBox.Show(this,
-                "Client root not found. Ensure the client folder exists and GRFs are configured (RoDbEditor.ini or auto-load from client).",
-                "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Warning);
-            return;
-        }
-
-        var relatedPaths = new List<string>();
-        if (ExtractedIncludeRelatedCheckBox?.IsChecked == true && entry.SourcePaths != null)
-        {
-            var includeExts = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { ".wav", ".bmp", ".png", ".tga", ".jpg", ".jpeg", ".pal" };
-            relatedPaths.AddRange(entry.SourcePaths.Where(p =>
-                !string.IsNullOrWhiteSpace(p) && includeExts.Contains(Path.GetExtension(p))));
-            // Also include .bmp/.png etc. with same base name from other folders (e.g. texture/effect)
-            var crossFolderTextures = App.ExtractedAssetService?.FindTextureFilesForBase(entry.BaseName) ?? Array.Empty<string>();
-            foreach (var p in crossFolderTextures)
-            {
-                if (!string.IsNullOrWhiteSpace(p) && File.Exists(p) && !relatedPaths.Contains(p, StringComparer.OrdinalIgnoreCase))
-                    relatedPaths.Add(p);
-            }
-        }
-
-        var isHeadgear = false;
-        if (entityType == SpriteAssignmentEntityType.Item && selectedTarget?.Payload is ItemEntry extItemEntry
-            && extItemEntry.Locations != null)
-        {
-            isHeadgear = extItemEntry.Locations.Keys.Any(k => k.StartsWith("Head_", StringComparison.OrdinalIgnoreCase) || k.StartsWith("Costume_Head_", StringComparison.OrdinalIgnoreCase));
-        }
-
-        var targetGrfPath = App.Config?.TargetGrfPath ?? Path.Combine(clientRoot, App.Config?.TargetGrfFileName ?? "custom.grf");
-
-        var safeBaseForPaths = string.Join("", targetKey.Trim().Select(c => Path.GetInvalidFileNameChars().Contains(c) ? '_' : c));
-        if (string.IsNullOrWhiteSpace(safeBaseForPaths)) safeBaseForPaths = "custom_sprite";
-
-        var showGrfEditorOfferAfterSuccess = false;
-        if (entityType == SpriteAssignmentEntityType.Item && !HasTextureInRelatedPaths(relatedPaths))
-        {
-            var noBmpMsg = "The .spr and .act you chose has no .bmp with them. Items need an icon for the inventory." +
-                Environment.NewLine + Environment.NewLine +
-                "We can proceed with .spr and .act only. You will need to add the .bmp manually. Drop it into these GRF paths:" +
-                Environment.NewLine + Environment.NewLine +
-                "• data\\texture\\유저인터페이스\\item\\" + safeBaseForPaths + ".bmp" +
-                Environment.NewLine +
-                "• data\\texture\\유저인터페이스\\collection\\" + safeBaseForPaths + ".bmp" +
-                Environment.NewLine + Environment.NewLine +
-                "I can open GRF Editor with your target GRF so you can transfer the file.";
-            var noBmpResult = System.Windows.MessageBox.Show(this, noBmpMsg, "No .bmp found for this item",
-                MessageBoxButton.OKCancel, MessageBoxImage.Warning);
-            if (noBmpResult == MessageBoxResult.Cancel)
-                return;
-            showGrfEditorOfferAfterSuccess = true;
-        }
-
-        var req = new SpriteAssignmentRequest
-        {
-            EntityType = entityType,
-            TargetKey = targetKey,
-            SourceActPath = entry.ActPath ?? "",
-            SourceSprPath = entry.SprPath ?? "",
-            RelatedPaths = relatedPaths,
-            ClientRootPath = clientRoot,
-            TargetGrfPath = targetGrfPath,
-            IsHeadgear = isHeadgear
-        };
-
-        try
-        {
-            var result = App.SpriteAssignmentService?.ExecuteAssignment(req);
-            if (result == null)
-            {
-                System.Windows.MessageBox.Show(this, "SpriteAssignmentService not available.", "RoDbEditor");
-                return;
-            }
-            if (result.Success)
-            {
-                var designation = "";
-                if (entityType == SpriteAssignmentEntityType.Npc && selectedTarget?.Payload is NpcScriptEntry npc)
-                    designation = App.EntityDesignationService.ApplyNpcSprite(npc, targetKey);
-                else if (entityType == SpriteAssignmentEntityType.Monster && selectedTarget?.Payload is MobEntry mob)
-                {
-                    var custom = App.EntityDesignationService.CreateOrUpdateCustomMonsterFrom(mob, targetKey);
-                    designation = $"Custom monster created: {custom.Id} ({custom.AegisName}) in db/import/mob_db.yml";
-                }
-                else if (entityType == SpriteAssignmentEntityType.Item && selectedTarget?.Payload is ItemEntry assignedItemExt)
-                {
-                    assignedItemExt.ResourceName = targetKey;
-                    try
-                    {
-                        var saveResult = App.ItemDbService?.SaveItem(assignedItemExt);
-                        designation = saveResult != null
-                            ? $"Item {assignedItemExt.Id} ({assignedItemExt.AegisName}): ResourceName set to '{targetKey}' and saved to db/import/item_db.yml."
-                            : $"Item {assignedItemExt.Id}: ResourceName set to '{targetKey}' (in memory).";
-                    }
-                    catch
-                    {
-                        designation = $"Item {assignedItemExt.Id}: ResourceName set to '{targetKey}' in memory.";
-                    }
-                    RefreshList();
-                }
-                else
-                    designation = $"Added to data\\sprite\\{entityType.ToString().ToLowerInvariant()} in GRF";
-                System.Windows.MessageBox.Show(this,
-                    $"Sprite assigned successfully.\nAdded {result.CopiedFiles?.Count ?? 0} files to GRF.\n{designation}\nManifest: {result.ManifestPath}",
-                    "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Information);
-
-                if (showGrfEditorOfferAfterSuccess)
-                {
-                    var launchResult = System.Windows.MessageBox.Show(this,
-                        "Added .spr and .act to GRF. Would you like me to open GRF Editor so you can add the .bmp manually?",
-                        "Open GRF Editor?", MessageBoxButton.YesNo, MessageBoxImage.Question);
-                    if (launchResult == MessageBoxResult.Yes)
-                    {
-                        var editorPath = FindGrfEditorExecutable();
-                        if (!string.IsNullOrEmpty(editorPath) && File.Exists(targetGrfPath))
-                        {
-                            try
-                            {
-                                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
-                                {
-                                    FileName = editorPath,
-                                    UseShellExecute = true,
-                                    Arguments = $"\"{targetGrfPath}\""
-                                });
-                            }
-                            catch (Exception ex)
-                            {
-                                System.Windows.MessageBox.Show(this, "Failed to launch GRF Editor: " + ex.Message,
-                                    "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Warning);
-                            }
-                        }
-                        else
-                        {
-                            System.Windows.MessageBox.Show(this,
-                                "GRF Editor.exe not found, or target GRF does not exist.",
-                                "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Warning);
-                        }
-                    }
-                }
-            }
-            else
-                System.Windows.MessageBox.Show(this,
-                    "Assignment failed:\n" + string.Join("\n", result.Errors ?? new List<string>()),
-                    "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Error);
-        }
-        catch (Exception ex)
-        {
-            System.Windows.MessageBox.Show(this, "Error during assignment: " + ex.Message, "RoDbEditor",
-                MessageBoxButton.OK, MessageBoxImage.Error);
-        }
-    }
 
     private static string? GetClientRootForAssignment()
     {
@@ -4074,297 +3128,13 @@ public partial class MainWindow : Window
         var firstGrf = App.GrfService?.GrfPaths?.FirstOrDefault();
         if (!string.IsNullOrWhiteSpace(firstGrf) && File.Exists(firstGrf))
             return Path.GetDirectoryName(firstGrf);
-        var defaultClient = @"F:\MMORPG\RAGNAROK ONLINE\client";
-        return Directory.Exists(defaultClient) ? defaultClient : null;
+        return null;
     }
 
-    private void ExtractedViewInGrfButton_Click(object sender, RoutedEventArgs e)
-    {
-        if (AssetListBox.SelectedItem is not Models.ExtractedAssetEntry entry)
-        {
-            System.Windows.MessageBox.Show(this, "Select an extracted asset first.", "RoDbEditor",
-                MessageBoxButton.OK, MessageBoxImage.Information);
-            return;
-        }
 
-        var target = TryGetSelectedRelatedFilePath()
-                     ?? entry.SprPath
-                     ?? entry.ActPath
-                     ?? entry.PreviewPath
-                     ?? entry.SourcePaths?.FirstOrDefault();
 
-        if (string.IsNullOrWhiteSpace(target) || !File.Exists(target))
-        {
-            System.Windows.MessageBox.Show(this, "No file to open.", "RoDbEditor",
-                MessageBoxButton.OK, MessageBoxImage.Information);
-            return;
-        }
 
-        var editorPath = FindGrfEditorExecutable();
-        if (!string.IsNullOrEmpty(editorPath))
-        {
-            try
-            {
-                var psi = new System.Diagnostics.ProcessStartInfo
-                {
-                    FileName = editorPath,
-                    UseShellExecute = true,
-                    Arguments = $"\"{target}\""
-                };
-                System.Diagnostics.Process.Start(psi);
-            }
-            catch (Exception ex)
-            {
-                System.Windows.MessageBox.Show(this, "Failed to launch GRF Editor: " + ex.Message,
-                    "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Error);
-            }
-        }
-        else
-        {
-            try
-            {
-                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
-                {
-                    FileName = "explorer.exe",
-                    UseShellExecute = true,
-                    Arguments = $"/select,\"{target}\""
-                });
-            }
-            catch (Exception ex)
-            {
-                System.Windows.MessageBox.Show(this, "Failed to open Explorer: " + ex.Message,
-                    "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Error);
-            }
-        }
-    }
 
-    private void ExtractedSaveButton_Click(object sender, RoutedEventArgs e)
-    {
-        if (_currentExtractedAsset == null)
-        {
-            System.Windows.MessageBox.Show(this, "Select an extracted asset first.", "RoDbEditor",
-                MessageBoxButton.OK, MessageBoxImage.Information);
-            return;
-        }
-
-        var entityType = GetExtractedEntityType();
-        switch (entityType)
-        {
-            case SpriteAssignmentEntityType.Item:
-                SaveExtractedAsItemEntry();
-                break;
-            case SpriteAssignmentEntityType.Monster:
-                SaveExtractedAsMobEntry();
-                break;
-            case SpriteAssignmentEntityType.Npc:
-                SaveExtractedAsNpcEntry();
-                break;
-        }
-    }
-
-    private void SaveExtractedAsItemEntry()
-    {
-        if (App.ItemDbService == null)
-        {
-            System.Windows.MessageBox.Show(this, "ItemDbService not available.", "RoDbEditor");
-            return;
-        }
-
-        var item = new ItemEntry
-        {
-            Id = int.TryParse(ExtItemId?.Text, out var id) ? id : App.ItemDbService.GetNextCustomItemId(),
-            AegisName = ExtItemAegisName?.Text?.Trim() ?? "Custom_Item",
-            Name = ExtItemName?.Text?.Trim() ?? "Custom Item",
-            Type = (ExtItemType?.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? ExtItemType?.Text ?? "Etc",
-            SubType = (ExtItemSubType?.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? ExtItemSubType?.Text,
-            Buy = int.TryParse(ExtItemBuy?.Text, out var buy) ? buy : (int?)null,
-            Sell = int.TryParse(ExtItemSell?.Text, out var sell) ? sell : (int?)null,
-            Weight = int.TryParse(ExtItemWeight?.Text, out var wt) ? wt : (int?)null,
-            Attack = int.TryParse(ExtItemAttack?.Text, out var atk) ? atk : (int?)null,
-            MagicAttack = int.TryParse(ExtItemMagicAttack?.Text, out var ma) ? ma : (int?)null,
-            Defense = int.TryParse(ExtItemDefense?.Text, out var def) ? def : (int?)null,
-            Range = int.TryParse(ExtItemRange?.Text, out var r) ? r : (int?)null,
-            EquipLevelMin = int.TryParse(ExtItemReqLevel?.Text, out var lvl) ? lvl : (int?)null,
-            EquipLevelMax = int.TryParse(ExtItemEquipLevelMax?.Text, out var elm) ? elm : (int?)null,
-            WeaponLevel = int.TryParse(ExtItemWeaponLevel?.Text, out var wl) ? wl : (int?)null,
-            ArmorLevel = int.TryParse(ExtItemArmorLevel?.Text, out var al) ? al : (int?)null,
-            Slots = int.TryParse(ExtItemSlots?.Text, out var slots) ? slots : (int?)null,
-            Gender = (ExtItemGender?.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "Both",
-            Refineable = ExtItemRefineable?.IsChecked == true,
-            Gradable = ExtItemGradable?.IsChecked == true,
-            View = int.TryParse(ExtItemView?.Text, out var v) ? v : (int?)null,
-            AliasName = ExtItemAliasName?.Text?.Trim(),
-            EquipScript = string.IsNullOrWhiteSpace(ExtItemEquipScript?.Text) ? null : ExtItemEquipScript.Text.Trim(),
-            UnEquipScript = string.IsNullOrWhiteSpace(ExtItemUnEquipScript?.Text) ? null : ExtItemUnEquipScript.Text.Trim(),
-        };
-
-        // Build Jobs dict from checkboxes
-        item.Jobs = new Dictionary<string, bool>();
-        if (ExtItemJobsPanel != null)
-        {
-            foreach (var child in ExtItemJobsPanel.Children)
-            {
-                if (child is System.Windows.Controls.CheckBox cb && cb.IsChecked == true)
-                    item.Jobs[cb.Content?.ToString() ?? ""] = true;
-            }
-        }
-
-        // Build Locations dict from checkboxes
-        item.Locations = new Dictionary<string, bool>();
-        if (ExtItemLocationsPanel != null)
-        {
-            foreach (var child in ExtItemLocationsPanel.Children)
-            {
-                if (child is System.Windows.Controls.CheckBox cb && cb.IsChecked == true)
-                    item.Locations[cb.Content?.ToString() ?? ""] = true;
-            }
-        }
-
-        // Script: authoritative source is the free-text ExtItemScript field
-        item.Script = string.IsNullOrWhiteSpace(ExtItemScript?.Text) ? null : ExtItemScript.Text.Trim();
-
-        // --- rAthena Validation ---
-        var validationWarnings = ValidateItemEntry(item);
-        if (validationWarnings.Count > 0)
-        {
-            var msg = "Issues found and auto-corrected:\n\n"
-                + string.Join("\n", validationWarnings.Select((w, i) => $"  {i + 1}. {w}"))
-                + "\n\nContinue saving?";
-            var result = System.Windows.MessageBox.Show(this, msg, "rAthena Validation",
-                MessageBoxButton.YesNo, MessageBoxImage.Warning);
-            if (result != MessageBoxResult.Yes) return;
-        }
-
-        try
-        {
-            App.ItemDbService.AddItem(item);
-            var result = App.ItemDbService.SaveItem(item);
-            if (result != null)
-            {
-                _operationsLog.RecordAdded(OperationEntityKind.Item, item.Id, item.AegisName, item.Name ?? "", result.Path, result.BodyIndex);
-                RefreshOperationsList();
-            }
-            try
-            {
-                App.ItemInfoLuaWriter?.WriteEntry(item);
-                if (IsHeadgearWithView(item))
-                    App.AccessoryIdWriter?.WriteEntry(item);
-                App.ClientAssetWriter?.EnsureItemIcon(item);
-                App.ClientAssetWriter?.EnsureCollectionIcon(item);
-            }
-            catch (Exception luaEx)
-            {
-                System.Windows.MessageBox.Show(this,
-                    "Item saved to YAML but failed to update client files:\n" + luaEx.Message,
-                    "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Warning);
-            }
-            System.Windows.MessageBox.Show(this,
-                $"Item saved: {item.Id} ({item.AegisName}) to db/import/item_db.yml",
-                "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Information);
-        }
-        catch (Exception ex)
-        {
-            System.Windows.MessageBox.Show(this, "Error saving item: " + ex.Message,
-                "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Error);
-        }
-    }
-
-    private void SaveExtractedAsNpcEntry()
-    {
-        if (App.NpcScriptWriter == null || string.IsNullOrWhiteSpace(App.Config.DataPath))
-        {
-            System.Windows.MessageBox.Show(this,
-                "rAthena DataPath not set. Use File > Select rAthena folder to set the server path.",
-                "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Warning);
-            return;
-        }
-
-        var name = ExtNpcName?.Text?.Trim() ?? "Custom NPC";
-        var spriteId = ExtNpcSpriteId?.Text?.Trim() ?? _currentExtractedAsset?.BaseName ?? "custom_npc";
-        var map = ExtNpcMap?.Text?.Trim() ?? "prontera";
-
-        var path = App.NpcScriptWriter.WriteEntry(map, 150, 150, 4, name, spriteId);
-        if (path == null)
-        {
-            System.Windows.MessageBox.Show(this, "Failed to create NPC script.", "RoDbEditor",
-                MessageBoxButton.OK, MessageBoxImage.Error);
-            return;
-        }
-
-        var clientRoot = GetClientRootForAssignment();
-        if (!string.IsNullOrWhiteSpace(clientRoot) && Directory.Exists(clientRoot) &&
-            _currentExtractedAsset != null && !string.IsNullOrWhiteSpace(_currentExtractedAsset.SprPath) &&
-            File.Exists(_currentExtractedAsset.SprPath))
-        {
-            var targetGrfPath = App.Config?.TargetGrfPath ?? Path.Combine(clientRoot, App.Config?.TargetGrfFileName ?? "custom.grf");
-            var req = new SpriteAssignmentRequest
-            {
-                EntityType = SpriteAssignmentEntityType.Npc,
-                TargetKey = spriteId,
-                SourceActPath = _currentExtractedAsset.ActPath ?? "",
-                SourceSprPath = _currentExtractedAsset.SprPath,
-                RelatedPaths = new List<string>(),
-                ClientRootPath = clientRoot,
-                TargetGrfPath = targetGrfPath
-            };
-            App.SpriteAssignmentService?.ExecuteAssignment(req);
-        }
-
-        App.NpcIndexService?.LoadFromDataPath(App.Config.DataPath);
-        RefreshList();
-        System.Windows.MessageBox.Show(this,
-            $"NPC script created: {Path.GetFileName(path)}\nMap: {map}, Sprite: {spriteId}",
-            "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Information);
-    }
-
-    private void SaveExtractedAsMobEntry()
-    {
-        if (App.MobDbService == null)
-        {
-            System.Windows.MessageBox.Show(this, "MobDbService not available.", "RoDbEditor");
-            return;
-        }
-
-        var mob = new MobEntry
-        {
-            Id = int.TryParse(ExtMobId?.Text, out var id) ? id : App.MobDbService.GetNextCustomMobId(),
-            AegisName = (ExtMobAegisName?.Text?.Trim() ?? "Custom_Monster").ToUpperInvariant(),
-            Name = ExtMobName?.Text?.Trim() ?? "Custom Monster",
-            Level = int.TryParse(ExtMobLevel?.Text, out var lvl) ? lvl : 1,
-            Hp = int.TryParse(ExtMobHp?.Text, out var hp) ? hp : 100,
-            BaseExp = int.TryParse(ExtMobBaseExp?.Text, out var bexp) ? bexp : 10,
-            JobExp = int.TryParse(ExtMobJobExp?.Text, out var jexp) ? jexp : 5,
-            Race = (ExtMobRace?.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? ExtMobRace?.Text ?? "Formless",
-            Element = (ExtMobElement?.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? ExtMobElement?.Text ?? "Neutral",
-            Size = (ExtMobSize?.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? ExtMobSize?.Text ?? "Medium",
-        };
-
-        try
-        {
-            App.MobDbService.AddMob(mob);
-            var result = App.MobDbService.SaveMob(mob);
-            if (result != null)
-            {
-                _operationsLog.RecordAdded(OperationEntityKind.Mob, mob.Id, mob.AegisName, mob.Name ?? "", result.Path, result.BodyIndex);
-                RefreshOperationsList();
-            }
-            try { App.MobInfoLuaWriter?.WriteEntry(mob); }
-            catch (Exception luaEx)
-            {
-                System.Windows.MessageBox.Show(this,
-                    "Monster saved to YAML but failed to update mobinfo_custom.lua:\n" + luaEx.Message,
-                    "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Warning);
-            }
-            System.Windows.MessageBox.Show(this,
-                $"Monster saved: {mob.Id} ({mob.AegisName}) to db/import/mob_db.yml",
-                "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Information);
-        }
-        catch (Exception ex)
-        {
-            System.Windows.MessageBox.Show(this, "Error saving monster: " + ex.Message,
-                "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Error);
-        }
-    }
 
     private void RefreshOperationsList()
     {
@@ -4488,19 +3258,7 @@ public partial class MainWindow : Window
         UpdateSourceIndicators();
     }
 
-    private void ExtractedExportButton_Click(object sender, RoutedEventArgs e)
-    {
-        // Reuse existing export logic
-        ItemExportButton_Click(sender, e);
-    }
 
-    private void ExtractedCancelButton_Click(object sender, RoutedEventArgs e)
-    {
-        if (ExtractedAssetPropertiesPanel != null)
-            ExtractedAssetPropertiesPanel.Visibility = Visibility.Collapsed;
-        ItemDetailsPanel.Visibility = Visibility.Visible;
-        ClearDetails();
-    }
 }
 
 public class AssetEntry
