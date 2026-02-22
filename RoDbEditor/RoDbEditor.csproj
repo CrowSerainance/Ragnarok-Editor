@@ -9,8 +9,13 @@
     <UseWindowsForms>true</UseWindowsForms>
     <RootNamespace>RoDbEditor</RootNamespace>
     <AssemblyName>RoDbEditor</AssemblyName>
-    <!-- Path to GRFEditor Libraries (override if your EDITORS folder is elsewhere) -->
-    <GrfEditorLibraries Condition="'$(GrfEditorLibraries)' == ''">F:\MMORPG\RAGNAROK ONLINE\EDITORS\GRF EDITOR\GRFEditor-main\Libraries</GrfEditorLibraries>
+    <!--
+      Path to GRF Editor Libraries folder (contains GRF.dll, Utilities.dll, etc.).
+      Override from command line:  dotnet build /p:GrfEditorLibraries="C:\path\to\Libraries"
+      Or set in a Directory.Build.props next to the .sln.
+      Default: Libraries subfolder next to the .csproj (copy DLLs there for portable builds).
+    -->
+    <GrfEditorLibraries Condition="'$(GrfEditorLibraries)' == ''">$(MSBuildProjectDirectory)\Libraries</GrfEditorLibraries>
   </PropertyGroup>
 
   <ItemGroup>

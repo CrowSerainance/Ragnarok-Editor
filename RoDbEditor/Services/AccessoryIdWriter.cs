@@ -2,7 +2,12 @@ using System;
 using System.IO;
 using System.Text;
 using System.Text.RegularExpressions;
+using GRF;
+using GRF.FileFormats.LubFormat;
+using RoDbEditor;
 using RoDbEditor.Models;
+using RoDbEditor.Core;
+using Utilities.Parsers.Lua;
 
 namespace RoDbEditor.Services;
 
@@ -13,12 +18,25 @@ namespace RoDbEditor.Services;
 public class AccessoryIdWriter
 {
     private readonly string _clientRoot;
+    private readonly GrfService? _grfService;
+    private readonly GrfWriterService? _grfWriter;
+
+    // In-memory cache of last-written content to avoid stale reads in the same session.
+    private string? _cachedAccessoryIdContent;
+    private string? _cachedAccNameContent;
+
     private const string AccIdPath = "data/luafiles514/lua files/datainfo/accessoryid.lua";
     private const string AccNamePath = "data/luafiles514/lua files/datainfo/accname.lua";
+    private const string AccIdGrfPath = @"data\luafiles514\lua files\datainfo\accessoryid.lua";
+    private const string AccIdLubGrfPath = @"data\luafiles514\lua files\datainfo\accessoryid.lub";
+    private const string AccNameGrfPath = @"data\luafiles514\lua files\datainfo\accname.lua";
+    private const string AccNameLubGrfPath = @"data\luafiles514\lua files\datainfo\accname.lub";
 
-    public AccessoryIdWriter(string clientRoot)
+    public AccessoryIdWriter(string clientRoot, GrfService? grfService = null, GrfWriterService? grfWriter = null)
     {
         _clientRoot = clientRoot ?? "";
+        _grfService = grfService;
+        _grfWriter = grfWriter;
     }
 
     public string GetAccessoryIdPath() => Path.Combine(_clientRoot, AccIdPath.Replace('/', Path.DirectorySeparatorChar));
@@ -27,9 +45,6 @@ public class AccessoryIdWriter
     /// <summary>Write or update accessoryid + accname entries for headgear with a View value.</summary>
     public void WriteEntry(ItemEntry item)
     {
-        if (string.IsNullOrWhiteSpace(_clientRoot) || !Directory.Exists(_clientRoot))
-            throw new InvalidOperationException("Client root is not set or does not exist.");
-
         var view = item.View ?? 0;
         if (view <= 0)
             return; // No View = not headgear with sprite mapping
@@ -38,18 +53,78 @@ public class AccessoryIdWriter
         var resourceName = NormalizeResourceName(string.IsNullOrWhiteSpace(rawName) ? "Custom_Item" : rawName!);
         var constName = ToAccessoryConstantName(resourceName);
 
-        WriteAccessoryId(constName, view);
-        WriteAccName(constName, resourceName);
+        var targetGrfPath = ResolveTargetGrfPath();
+        if (string.IsNullOrWhiteSpace(targetGrfPath))
+            throw new InvalidOperationException("Target GRF path is not configured.");
+
+        var accessoryIdContent = LoadContent(
+            ref _cachedAccessoryIdContent,
+            AccIdGrfPath,
+            AccIdLubGrfPath,
+            "ACCESSORY_IDs = {\n}\n");
+        accessoryIdContent = UpsertTableEntry(
+            accessoryIdContent,
+            "ACCESSORY_IDs",
+            constName,
+            $"{constName} = {view},");
+        WriteContentToGrf(targetGrfPath, AccIdGrfPath, accessoryIdContent);
+        _cachedAccessoryIdContent = accessoryIdContent;
+
+        var accNameContent = LoadContent(
+            ref _cachedAccNameContent,
+            AccNameGrfPath,
+            AccNameLubGrfPath,
+            "AccNameTable = {\n}\n");
+        accNameContent = UpsertTableEntry(
+            accNameContent,
+            "AccNameTable",
+            $"[ACCESSORY_IDs.{constName}]",
+            $"[ACCESSORY_IDs.{constName}] = \"_{EscapeLua(resourceName)}\",");
+        WriteContentToGrf(targetGrfPath, AccNameGrfPath, accNameContent);
+        _cachedAccNameContent = accNameContent;
     }
 
     /// <summary>Remove accessoryid + accname entry. Pass viewId and aegisName (for const name).</summary>
     public bool RemoveEntry(int viewId, string? aegisName = null)
     {
         if (viewId <= 0) return true;
-        var idOk = RemoveFromAccessoryId(viewId);
-        var constName = !string.IsNullOrEmpty(aegisName) ? ToAccessoryConstantName(aegisName) : null;
-        var nameOk = constName != null && RemoveFromAccName(constName);
-        return idOk || nameOk;
+        var targetGrfPath = ResolveTargetGrfPath();
+        if (string.IsNullOrWhiteSpace(targetGrfPath))
+            return false;
+
+        var changed = false;
+
+        var accessoryIdContent = LoadContent(
+            ref _cachedAccessoryIdContent,
+            AccIdGrfPath,
+            AccIdLubGrfPath,
+            "ACCESSORY_IDs = {\n}\n");
+        var updatedAccessoryId = RemoveAccessoryIdByView(accessoryIdContent, viewId);
+        if (!ReferenceEquals(updatedAccessoryId, accessoryIdContent))
+        {
+            WriteContentToGrf(targetGrfPath, AccIdGrfPath, updatedAccessoryId);
+            _cachedAccessoryIdContent = updatedAccessoryId;
+            changed = true;
+        }
+
+        var constName = !string.IsNullOrWhiteSpace(aegisName) ? ToAccessoryConstantName(aegisName) : null;
+        if (!string.IsNullOrWhiteSpace(constName))
+        {
+            var accNameContent = LoadContent(
+                ref _cachedAccNameContent,
+                AccNameGrfPath,
+                AccNameLubGrfPath,
+                "AccNameTable = {\n}\n");
+            var updatedAccName = RemoveAccNameByConstant(accNameContent, constName!);
+            if (!ReferenceEquals(updatedAccName, accNameContent))
+            {
+                WriteContentToGrf(targetGrfPath, AccNameGrfPath, updatedAccName);
+                _cachedAccNameContent = updatedAccName;
+                changed = true;
+            }
+        }
+
+        return changed;
     }
 
     private static string ToAccessoryConstantName(string aegisName)
@@ -65,110 +140,190 @@ public class AccessoryIdWriter
         return "ACCESSORY_" + name.Replace(" ", "_");
     }
 
-    private void WriteAccessoryId(string constName, int viewId)
+    private string? ResolveTargetGrfPath()
     {
-        var path = GetAccessoryIdPath();
-        var dir = Path.GetDirectoryName(path);
-        if (!string.IsNullOrEmpty(dir))
-            Directory.CreateDirectory(dir);
+        var config = App.Config;
+        if (!string.IsNullOrWhiteSpace(config?.TargetGrfPath))
+            return config.TargetGrfPath;
 
-        var content = File.Exists(path) ? File.ReadAllText(path, Encoding.UTF8) : "";
-        var line = $"{constName} = {viewId},";
+        if (string.IsNullOrWhiteSpace(_clientRoot))
+            return null;
 
-        var marker = $"{constName} = ";
-        var existingIdx = content.IndexOf(marker, StringComparison.Ordinal);
-        if (existingIdx >= 0)
-        {
-            var end = content.IndexOf('\n', existingIdx);
-            if (end < 0) end = content.Length;
-            content = content.Remove(existingIdx, end - existingIdx).Insert(existingIdx, line);
-        }
-        else
-        {
-            var header = string.IsNullOrWhiteSpace(content)
-                ? "-- Custom accessories (RoDbEditor)\n"
-                : "";
-            if (!content.TrimEnd().EndsWith(",") && !string.IsNullOrEmpty(content.Trim()))
-                content = content.TrimEnd() + "\n";
-            content = header + content.TrimEnd() + (string.IsNullOrEmpty(content.Trim()) ? "" : "\n") + line + "\n";
-        }
-
-        File.WriteAllText(path, content, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        var fileName = string.IsNullOrWhiteSpace(config?.TargetGrfFileName)
+            ? "custom.grf"
+            : config!.TargetGrfFileName;
+        return Path.Combine(_clientRoot, fileName);
     }
 
-    private bool RemoveFromAccessoryId(int viewId)
+    private string LoadContent(
+        ref string? cache,
+        string luaGrfPath,
+        string lubGrfPath,
+        string fallbackContent)
     {
-        var path = GetAccessoryIdPath();
-        if (!File.Exists(path)) return true;
+        if (!string.IsNullOrEmpty(cache))
+            return cache;
 
-        var content = File.ReadAllText(path, Encoding.UTF8);
-        var pattern = $"ACCESSORY_[\\w_]+\\s*=\\s*{viewId}\\s*,?\\s*";
-        var match = Regex.Match(content, pattern);
-        if (!match.Success) return false;
-
-        content = content.Remove(match.Index, match.Length);
-        File.WriteAllText(path, content, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
-        return true;
-    }
-
-    private void WriteAccName(string constName, string resourceName)
-    {
-        var path = GetAccNamePath();
-        var dir = Path.GetDirectoryName(path);
-        if (!string.IsNullOrEmpty(dir))
-            Directory.CreateDirectory(dir);
-
-        var spriteName = NormalizeResourceName(resourceName);
-        var content = File.Exists(path) ? File.ReadAllText(path, Encoding.UTF8) : "";
-
-        var marker = $"[ACCESSORY_IDs.{constName}]";
-        var existingIdx = content.IndexOf(marker, StringComparison.Ordinal);
-        var line = $"[ACCESSORY_IDs.{constName}] = \"{EscapeLua(spriteName)}\",";
-
-        if (existingIdx >= 0)
+        if (_grfService != null)
         {
-            var end = content.IndexOf('\n', existingIdx);
-            if (end < 0) end = content.Length;
-            content = content.Remove(existingIdx, end - existingIdx).Insert(existingIdx, line);
-        }
-        else
-        {
-            var header = string.IsNullOrWhiteSpace(content)
-                ? "-- Custom accessory names (RoDbEditor)\nACCESSORY_IDs = ACCESSORY_IDs or {}\n"
-                : "";
-            if (!content.Contains("ACCESSORY_IDs = ACCESSORY_IDs"))
+            var luaData = _grfService.GetData(luaGrfPath);
+            if (luaData != null && luaData.Length > 0)
             {
-                var idx = content.IndexOf("ACCESSORY_IDs", StringComparison.Ordinal);
-                if (idx < 0)
-                    content = header + content.TrimEnd() + "\n" + line + "\n";
-                else
-                    content = content.TrimEnd() + "\n" + line + "\n";
+                cache = DecompileToLua(luaData);
+                return cache;
             }
-            else
-                content = content.TrimEnd() + "\n" + line + "\n";
+
+            var lubData = _grfService.GetData(lubGrfPath);
+            if (lubData != null && lubData.Length > 0)
+            {
+                cache = DecompileToLua(lubData);
+                return cache;
+            }
         }
 
-        File.WriteAllText(path, content, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        cache = fallbackContent;
+        return cache;
     }
 
-    private bool RemoveFromAccName(string constName)
+    private void WriteContentToGrf(string grfPath, string grfInternalPath, string content)
     {
-        var path = GetAccNamePath();
-        if (!File.Exists(path)) return true;
+        if (_grfWriter == null)
+            throw new InvalidOperationException("GrfWriterService is not available.");
 
-        var content = File.ReadAllText(path, Encoding.UTF8);
-        var marker = $"[ACCESSORY_IDs.{constName}]";
-        var idx = content.IndexOf(marker, StringComparison.Ordinal);
-        if (idx < 0) return false;
+        var result = _grfWriter.AddContentToGrf(grfPath, grfInternalPath, content, new UTF8Encoding(false));
+        if (result.AddedPaths.Count == 0)
+        {
+            var details = result.Errors.Count > 0
+                ? string.Join("; ", result.Errors)
+                : "Unknown write failure";
+            throw new InvalidOperationException($"Failed writing '{grfInternalPath}' to '{grfPath}': {details}");
+        }
+    }
 
-        var end = content.IndexOf('\n', idx);
-        if (end < 0) end = content.Length;
-        var toRemove = content.Substring(idx, end - idx).TrimEnd();
-        content = content.Remove(idx, end - idx);
-        if (idx > 0 && content[idx - 1] == '\n' && idx < content.Length && content[idx] == '\n')
-            content = content.Remove(idx, 1);
-        File.WriteAllText(path, content, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
-        return true;
+    private static string UpsertTableEntry(string content, string tableName, string key, string fullLine)
+    {
+        if (!TryFindTableRange(content, tableName, out var openBrace, out var closeBrace))
+        {
+            var nl = DetectNewline(content);
+            var headerPrefix = string.IsNullOrWhiteSpace(content) ? "" : content.TrimEnd() + nl + nl;
+            return $"{headerPrefix}{tableName} = {{{nl}    {fullLine}{nl}}}{nl}";
+        }
+
+        var tableSection = content.Substring(openBrace + 1, closeBrace - openBrace - 1);
+        var lineRegex = new Regex(
+            @"(?m)^(?<indent>[ \t]*)" + Regex.Escape(key) + @"\s*=\s*.*?(?:\r?\n|$)");
+        var match = lineRegex.Match(tableSection);
+        if (match.Success)
+        {
+            var replacement = match.Groups["indent"].Value + fullLine + DetectNewline(content);
+            var updatedSection = lineRegex.Replace(tableSection, replacement, 1);
+            return content[..(openBrace + 1)] + updatedSection + content[closeBrace..];
+        }
+
+        var indent = DetectIndent(tableSection);
+        var nlInsert = DetectNewline(content);
+        var insertAt = closeBrace;
+        var prefix = insertAt > 0 && content[insertAt - 1] != '\n' && content[insertAt - 1] != '\r'
+            ? nlInsert
+            : string.Empty;
+        var insertion = $"{prefix}{indent}{fullLine}{nlInsert}";
+        return content.Insert(insertAt, insertion);
+    }
+
+    private static string RemoveAccessoryIdByView(string content, int viewId)
+    {
+        return RemoveTableLine(
+            content,
+            "ACCESSORY_IDs",
+            @"(?m)^[ \t]*ACCESSORY_[\w_]+\s*=\s*" + Regex.Escape(viewId.ToString()) + @"\s*,?\s*(?:\r?\n)?");
+    }
+
+    private static string RemoveAccNameByConstant(string content, string constName)
+    {
+        return RemoveTableLine(
+            content,
+            "AccNameTable",
+            @"(?m)^[ \t]*\[ACCESSORY_IDs\." + Regex.Escape(constName) + @"\]\s*=\s*.*?,?\s*(?:\r?\n)?");
+    }
+
+    private static string RemoveTableLine(string content, string tableName, string linePattern)
+    {
+        if (!TryFindTableRange(content, tableName, out var openBrace, out var closeBrace))
+            return content;
+
+        var tableSection = content.Substring(openBrace + 1, closeBrace - openBrace - 1);
+        var regex = new Regex(linePattern);
+        var match = regex.Match(tableSection);
+        if (!match.Success)
+            return content;
+
+        var updatedSection = tableSection.Remove(match.Index, match.Length);
+        return content[..(openBrace + 1)] + updatedSection + content[closeBrace..];
+    }
+
+    private static bool TryFindTableRange(string content, string tableName, out int openBrace, out int closeBrace)
+    {
+        openBrace = -1;
+        closeBrace = -1;
+        if (string.IsNullOrEmpty(content))
+            return false;
+
+        var tableStart = Regex.Match(content, Regex.Escape(tableName) + @"\s*=\s*\{");
+        if (!tableStart.Success)
+            return false;
+
+        openBrace = content.IndexOf('{', tableStart.Index);
+        if (openBrace < 0)
+            return false;
+
+        var depth = 0;
+        for (var i = openBrace; i < content.Length; i++)
+        {
+            var c = content[i];
+            if (c == '{') depth++;
+            else if (c == '}')
+            {
+                depth--;
+                if (depth == 0)
+                {
+                    closeBrace = i;
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static string DetectIndent(string tableSection)
+    {
+        var match = Regex.Match(tableSection, @"(?m)^(?<indent>[ \t]+)\S");
+        return match.Success ? match.Groups["indent"].Value : "    ";
+    }
+
+    private static string DetectNewline(string content)
+    {
+        return content.Contains("\r\n", StringComparison.Ordinal) ? "\r\n" : "\n";
+    }
+
+    private static string DecompileToLua(byte[] data)
+    {
+        try
+        {
+            if (LuaParser.IsLub(data))
+            {
+                MultiType mt = data;
+                var lub = new Lub(mt);
+                return lub.Decompile();
+            }
+            try { return Encoding.UTF8.GetString(data); }
+            catch { return Encoding.GetEncoding(949).GetString(data); }
+        }
+        catch
+        {
+            try { return Encoding.UTF8.GetString(data); }
+            catch { return Encoding.GetEncoding(949).GetString(data); }
+        }
     }
 
     private static string EscapeLua(string s)

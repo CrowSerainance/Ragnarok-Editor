@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -2265,7 +2265,7 @@ public partial class MainWindow : Window
         if (!string.IsNullOrEmpty(clientRoot) && Directory.Exists(clientRoot))
         {
             App.ItemInfoLuaWriter = new ItemInfoLuaWriter(clientRoot);
-            App.AccessoryIdWriter = new AccessoryIdWriter(clientRoot);
+            App.AccessoryIdWriter = new AccessoryIdWriter(clientRoot, App.GrfService, App.GrfWriterService);
             App.ClientAssetWriter = new ClientAssetWriter(clientRoot);
             App.MobInfoLuaWriter = new MobInfoLuaWriter(clientRoot);
         }

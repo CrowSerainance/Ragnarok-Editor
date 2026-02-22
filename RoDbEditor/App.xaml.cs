@@ -265,7 +265,7 @@ public partial class App : System.Windows.Application
         if (!string.IsNullOrEmpty(clientRoot))
         {
             ItemInfoLuaWriter = new ItemInfoLuaWriter(clientRoot);
-            AccessoryIdWriter = new AccessoryIdWriter(clientRoot);
+            AccessoryIdWriter = new AccessoryIdWriter(clientRoot, GrfService, GrfWriterService);
             ClientAssetWriter = new ClientAssetWriter(clientRoot);
             MobInfoLuaWriter = new MobInfoLuaWriter(clientRoot);
         }

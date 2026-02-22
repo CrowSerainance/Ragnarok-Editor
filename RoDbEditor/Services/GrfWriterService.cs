@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text;
 using GRF.Core;
 
 namespace RoDbEditor.Services;
@@ -86,6 +87,24 @@ public class GrfWriterService
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// Writes text content to a GRF file using a temp file intermediary.
+    /// </summary>
+    public AddResult AddContentToGrf(string grfPath, string grfInternalPath, string content, Encoding? encoding = null)
+    {
+        encoding ??= new UTF8Encoding(false);
+        var tempFile = Path.GetTempFileName();
+        try
+        {
+            File.WriteAllText(tempFile, content ?? string.Empty, encoding);
+            return AddFilesToGrf(grfPath, new[] { (grfInternalPath, tempFile) });
+        }
+        finally
+        {
+            try { File.Delete(tempFile); } catch { }
+        }
     }
 
     private static string NormalizeGrfPath(string path)
