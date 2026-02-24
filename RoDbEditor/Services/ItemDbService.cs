@@ -158,9 +158,11 @@ public class ItemDbService
             var doc = deserializer.Deserialize<ItemDbDocument>(yaml);
             if (doc?.Body != null)
             {
-                foreach (var item in doc.Body)
+                for (int bodyIdx = 0; bodyIdx < doc.Body.Count; bodyIdx++)
                 {
+                    var item = doc.Body[bodyIdx];
                     item.SourceFile = path;
+                    item.SourceIndex = bodyIdx;
 
                     // Check if item already exists (for import overrides)
                     var existing = _items.FindIndex(i => i.Id == item.Id);
@@ -390,10 +392,10 @@ public class ItemDbService
 
     private string? ResolveItemFilePath(ItemEntry item)
     {
-        // Custom entries should stay in import overlay whenever available.
+        // Custom entries should always go to import overlay.
         if (item.Id >= 50000)
         {
-            var importFirst = GetImportItemDbPath();
+            var importFirst = GetImportItemDbPathForWrite();
             if (!string.IsNullOrEmpty(importFirst))
                 return importFirst;
         }
@@ -424,7 +426,7 @@ public class ItemDbService
         }
 
         // For new items or unknown source, use db/import/item_db.yml (custom items file)
-        var importPath = GetImportItemDbPath();
+        var importPath = GetImportItemDbPathForWrite();
         if (importPath != null) return importPath;
 
         // Fallback: use first available item_db.yml

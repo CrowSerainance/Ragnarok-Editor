@@ -58,18 +58,7 @@ public class SpriteLookupService
 
         System.Diagnostics.Debug.WriteLine($"[SpriteLookupService] FindMonsterSprite: {aegisName}");
 
-        // Try extracted filesystem assets first (faster, custom sprites take priority)
-        if (_fileSystemSource != null)
-        {
-            var fsResult = _fileSystemSource.FindMonsterSprite(aegisName);
-            if (fsResult.actPath != null || fsResult.sprPath != null)
-            {
-                System.Diagnostics.Debug.WriteLine($"[SpriteLookupService] Found in filesystem: {fsResult.actPath}");
-                return fsResult;
-            }
-        }
-
-        // Try GRF cache (if we've successfully enumerated)
+        // Prefer GRF lookup first so custom.grf priority is preserved for preview.
         BuildCacheIfNeeded();
         var result = FindSpriteInCache(aegisName);
         if (result.actPath != null)
@@ -86,6 +75,17 @@ public class SpriteLookupService
             return result;
         }
 
+        // Fall back to extracted filesystem assets only if GRF lookup failed.
+        if (_fileSystemSource != null)
+        {
+            var fsResult = _fileSystemSource.FindMonsterSprite(aegisName);
+            if (fsResult.actPath != null || fsResult.sprPath != null)
+            {
+                System.Diagnostics.Debug.WriteLine($"[SpriteLookupService] Found in filesystem fallback: {fsResult.actPath}");
+                return fsResult;
+            }
+        }
+
         System.Diagnostics.Debug.WriteLine($"[SpriteLookupService] Not found: {aegisName}");
         return (null, null);
     }
@@ -96,18 +96,7 @@ public class SpriteLookupService
 
         System.Diagnostics.Debug.WriteLine($"[SpriteLookupService] FindNpcSprite: {spriteName}");
 
-        // Try extracted filesystem assets first
-        if (_fileSystemSource != null)
-        {
-            var fsResult = _fileSystemSource.FindNpcSprite(spriteName);
-            if (fsResult.actPath != null || fsResult.sprPath != null)
-            {
-                System.Diagnostics.Debug.WriteLine($"[SpriteLookupService] Found NPC in filesystem: {fsResult.actPath}");
-                return fsResult;
-            }
-        }
-
-        // Try GRF cache
+        // Prefer GRF lookup first so custom.grf priority is preserved for preview.
         BuildCacheIfNeeded();
         var result = FindSpriteInCache(spriteName);
         if (result.actPath != null) return result;
@@ -115,6 +104,17 @@ public class SpriteLookupService
         // Direct probing
         result = ProbeForSprite(spriteName, NpcFolderVariants);
         if (result.actPath != null) return result;
+
+        // Fall back to extracted filesystem assets only if GRF lookup failed.
+        if (_fileSystemSource != null)
+        {
+            var fsResult = _fileSystemSource.FindNpcSprite(spriteName);
+            if (fsResult.actPath != null || fsResult.sprPath != null)
+            {
+                System.Diagnostics.Debug.WriteLine($"[SpriteLookupService] Found NPC in filesystem fallback: {fsResult.actPath}");
+                return fsResult;
+            }
+        }
 
         return (null, null);
     }
@@ -297,34 +297,33 @@ public class SpriteLookupService
 
         try
         {
-            // Try to directly enumerate from GRF containers (bypassing path prefix issues)
-            if (_grfService.Reader.Containers != null)
+            // Enumerate containers in configured source priority order.
+            // We apply low -> high priority and overwrite by key so higher-priority GRFs
+            // (for example custom.grf) win for duplicate sprite names.
+            var orderedContainers = GetContainersInConfiguredPriority();
+            foreach (var (sourcePath, grf) in orderedContainers.AsEnumerable().Reverse())
             {
-                foreach (var containerKvp in _grfService.Reader.Containers)
+                if (grf?.FileTable?.Entries == null) continue;
+
+                System.Diagnostics.Debug.WriteLine($"[SpriteLookupService] Scanning container: {Path.GetFileName(sourcePath)} ({grf.FileTable.Entries.Count} entries)");
+
+                foreach (var entry in grf.FileTable.Entries)
                 {
-                    var grf = containerKvp.Value;
-                    if (grf?.FileTable?.Entries == null) continue;
+                    var path = entry.RelativePath;
+                    if (string.IsNullOrEmpty(path)) continue;
 
-                    System.Diagnostics.Debug.WriteLine($"[SpriteLookupService] Scanning container: {Path.GetFileName(containerKvp.Key)} ({grf.FileTable.Entries.Count} entries)");
+                    // Check if it's a .spr file in a sprite folder
+                    if (!path.EndsWith(".spr", StringComparison.OrdinalIgnoreCase)) continue;
+                    if (!path.Contains("sprite", StringComparison.OrdinalIgnoreCase)) continue;
 
-                    foreach (var entry in grf.FileTable.Entries)
-                    {
-                        var path = entry.RelativePath;
-                        if (string.IsNullOrEmpty(path)) continue;
+                    var name = Path.GetFileNameWithoutExtension(path).ToLowerInvariant();
+                    var basePath = path.Substring(0, path.Length - 4); // remove .spr
+                    _spriteCache[name] = basePath;
 
-                        // Check if it's a .spr file in a sprite folder
-                        if (!path.EndsWith(".spr", StringComparison.OrdinalIgnoreCase)) continue;
-                        if (!path.Contains("sprite", StringComparison.OrdinalIgnoreCase)) continue;
-
-                        var name = Path.GetFileNameWithoutExtension(path).ToLowerInvariant();
-                        var basePath = path.Substring(0, path.Length - 4); // remove .spr
-                        _spriteCache.TryAdd(name, basePath);
-
-                        // Track folder paths
-                        var dir = Path.GetDirectoryName(path);
-                        if (!string.IsNullOrEmpty(dir))
-                            _allSpriteFolders.Add(dir);
-                    }
+                    // Track folder paths
+                    var dir = Path.GetDirectoryName(path);
+                    if (!string.IsNullOrEmpty(dir))
+                        _allSpriteFolders.Add(dir);
                 }
             }
 
@@ -352,6 +351,50 @@ public class SpriteLookupService
         {
             System.Diagnostics.Debug.WriteLine($"[SpriteLookupService] Failed to build sprite cache: {ex.Message}\n{ex.StackTrace}");
         }
+    }
+
+    private List<(string SourcePath, GRF.Core.GrfHolder Grf)> GetContainersInConfiguredPriority()
+    {
+        var ordered = new List<(string SourcePath, GRF.Core.GrfHolder Grf)>();
+        if (_grfService.Reader?.Containers == null)
+            return ordered;
+
+        var containers = _grfService.Reader.Containers;
+        var added = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        // 1) Configured order from GrfService (earlier = higher priority)
+        foreach (var source in _grfService.GrfPaths)
+        {
+            if (!File.Exists(source))
+                continue;
+
+            if (containers.TryGetValue(source, out var exact) && exact?.FileTable != null)
+            {
+                ordered.Add((source, exact));
+                added.Add(source);
+                continue;
+            }
+
+            // Fallback when container dictionary key differs by normalization/casing.
+            var byFileName = containers.Values.FirstOrDefault(c =>
+                c?.FileTable != null &&
+                string.Equals(c.FileName, source, StringComparison.OrdinalIgnoreCase));
+            if (byFileName?.FileTable != null && added.Add(byFileName.FileName))
+                ordered.Add((byFileName.FileName, byFileName));
+        }
+
+        // 2) Any extra containers not present in configured list
+        foreach (var kvp in containers)
+        {
+            var path = kvp.Key;
+            var grf = kvp.Value;
+            if (grf?.FileTable == null)
+                continue;
+            if (added.Add(path))
+                ordered.Add((path, grf));
+        }
+
+        return ordered;
     }
 
     /// <summary>

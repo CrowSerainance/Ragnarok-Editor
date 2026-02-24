@@ -42,6 +42,13 @@ public class ItemInfoLuaWriter
 
         var content = File.Exists(path) ? File.ReadAllText(path, Encoding.UTF8) : "";
         var newContent = UpsertEntryInContent(content, item);
+
+        // Post-write sanity: catch Lua syntax problems BEFORE saving to disk
+        var syntaxIssue = CheckLuaSyntaxSanity(newContent);
+        if (syntaxIssue != null)
+            throw new InvalidOperationException(
+                $"[ItemInfoLuaWriter] BUG: Generated Lua has syntax issue: {syntaxIssue}. File NOT saved to prevent client breakage.");
+
         File.WriteAllText(path, newContent, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
     }
 
@@ -92,10 +99,13 @@ public class ItemInfoLuaWriter
         var insertPos = FindTblCustomClosingBrace(content, tblMatch.Index);
         if (insertPos < 0)
             insertPos = content.Length;
-        var betweenBraces = content.Substring(tblMatch.Index, insertPos - tblMatch.Index);
-        var hasExistingEntry = Regex.IsMatch(betweenBraces, @"\[\d+\]\s*=\s*\{");
-        var comma = hasExistingEntry ? ",\n" : "\n";
-        return content.Insert(insertPos, comma + block.TrimEnd());
+        // Check if the content before the closing brace already ends with a comma
+        // (BuildLuaEntry produces entries ending with "},") — avoid inserting a duplicate comma.
+        var beforeInsert = content[..insertPos].TrimEnd();
+        var separator = beforeInsert.EndsWith(",") || !Regex.IsMatch(content[tblMatch.Index..insertPos], @"\[\d+\]\s*=\s*\{")
+            ? "\n"
+            : ",\n";
+        return content.Insert(insertPos, separator + block.TrimEnd());
     }
 
     private static string? RemoveEntryFromContent(string content, int itemId)
@@ -279,5 +289,41 @@ public class ItemInfoLuaWriter
 
         if (item.Slots.HasValue && item.Slots.Value > 0)
             lines.Add($"^0000CCSlots:^000000 {item.Slots.Value}");
+    }
+
+    /// <summary>
+    /// Quick sanity check for common Lua syntax issues that would break the client.
+    /// Returns null if OK, or a description of the problem.
+    /// </summary>
+    private static string? CheckLuaSyntaxSanity(string content)
+    {
+        // Stray comma after opening brace: tbl_custom = { , — this was the original bug
+        if (Regex.IsMatch(content, @"\{\s*,\s*\["))
+            return "Stray comma after opening brace '{ ,' — would cause 'unexpected symbol near ,' error";
+
+        // Double comma between entries: },, [
+        if (Regex.IsMatch(content, @",\s*,"))
+            return "Double comma ',,' detected — would cause Lua parse error";
+
+        // Unmatched braces in tbl_custom
+        var tblMatch = Regex.Match(content, @"tbl_custom\s*=\s*\{");
+        if (tblMatch.Success)
+        {
+            int depth = 0;
+            bool foundClose = false;
+            for (int i = tblMatch.Index + tblMatch.Length - 1; i < content.Length; i++)
+            {
+                if (content[i] == '{') depth++;
+                else if (content[i] == '}')
+                {
+                    depth--;
+                    if (depth == 0) { foundClose = true; break; }
+                }
+            }
+            if (!foundClose)
+                return "tbl_custom has unmatched braces — missing closing '}'";
+        }
+
+        return null; // Looks OK
     }
 }

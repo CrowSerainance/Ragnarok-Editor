@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Windows;
@@ -70,6 +71,9 @@ public partial class MainWindow : Window
                 NpcScriptEditor.TextArea.TextView.BackgroundRenderers.Add(_markerService);
                 NpcScriptEditor.TextArea.TextView.LineTransformers.Add(_markerService);
             }
+
+            // Startup health check: warn about loose datainfo files that override GRF
+            CheckForLooseDatainfoFiles();
         };
     }
 
@@ -1795,6 +1799,30 @@ public partial class MainWindow : Window
         if (isWeapon && item.SubType == "Whip" && item.Gender != "Female")
         { warnings.Add("Whips forced to Gender=Female."); item.Gender = "Female"; }
 
+        // Headgear without View ID — sprite won't show in-game
+        bool hasHeadLocation = item.Locations != null && item.Locations.Any(kv =>
+            kv.Value &&
+            (kv.Key.StartsWith("Head_", StringComparison.OrdinalIgnoreCase) ||
+             kv.Key.StartsWith("Costume_Head_", StringComparison.OrdinalIgnoreCase)));
+        if (hasHeadLocation && (!item.View.HasValue || item.View.Value <= 0))
+        {
+            warnings.Add("Headgear has Head_ location but no View ID. The equipped sprite will NOT render in-game. "
+                + "Set View to a unique number (e.g. 32001) so accessoryid/accname entries are written.");
+        }
+        if (item.View.HasValue && item.View.Value > 0 && App.ItemDbService != null)
+        {
+            var clashes = App.ItemDbService.Items
+                .Where(i => i.Id != item.Id && i.View.HasValue && i.View.Value == item.View.Value)
+                .Take(3)
+                .Select(i => $"{i.AegisName}({i.Id})")
+                .ToList();
+            if (clashes.Count > 0)
+            {
+                warnings.Add($"View ID {item.View.Value} is already used by {string.Join(", ", clashes)}. "
+                    + "Headgear sprite View IDs should be unique to avoid wrong sprite mapping.");
+            }
+        }
+
         return warnings;
     }
 
@@ -1819,7 +1847,7 @@ public partial class MainWindow : Window
         item.WeaponLevel = int.TryParse(ItemEditWeaponLevel?.Text, out var wl) ? wl : (int?)null;
         item.ArmorLevel = int.TryParse(ItemEditArmorLevel?.Text, out var al) ? al : (int?)null;
         item.Gender = (ItemEditGender?.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "Both";
-        item.View = int.TryParse(ItemEditView?.Text, out var v) ? v : (int?)null;
+        item.View = ParseNullableIntLoose(ItemEditView?.Text);
         item.AliasName = ItemEditAliasName?.Text?.Trim();
         item.Refineable = ItemEditRefineable?.IsChecked == true;
         item.Gradable = ItemEditGradable?.IsChecked == true;
@@ -1867,14 +1895,19 @@ public partial class MainWindow : Window
                 snapshot = File.ReadAllBytes(path);
 
             var result = App.ItemDbService.SaveItem(item);
-            if (result != null)
+            if (result == null)
             {
-                if (result.IsUpdate)
-                    _operationsLog.RecordUpdated(OperationEntityKind.Item, item.Id, item.AegisName, item.Name ?? "", result.Path, result.BodyIndex, snapshot);
-                else
-                    _operationsLog.RecordAdded(OperationEntityKind.Item, item.Id, item.AegisName, item.Name ?? "", result.Path, result.BodyIndex);
-                RefreshOperationsList();
+                var reason = App.ItemDbService.LastError ?? "Could not resolve save target path (check DataPath in config).";
+                System.Windows.MessageBox.Show(this,
+                    "Failed to save item to YAML:\n" + reason,
+                    "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Error);
+                return;
             }
+            if (result.IsUpdate)
+                _operationsLog.RecordUpdated(OperationEntityKind.Item, item.Id, item.AegisName, item.Name ?? "", result.Path, result.BodyIndex, snapshot);
+            else
+                _operationsLog.RecordAdded(OperationEntityKind.Item, item.Id, item.AegisName, item.Name ?? "", result.Path, result.BodyIndex);
+            RefreshOperationsList();
             try { App.ItemInfoLuaWriter?.WriteEntry(item); }
             catch (Exception luaEx)
             {
@@ -1884,14 +1917,25 @@ public partial class MainWindow : Window
             }
             try
             {
-                if (IsHeadgearWithView(item))
-                    App.AccessoryIdWriter?.WriteEntry(item);
+                if (item.View.HasValue && item.View.Value > 0)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[SaveItem] View>0 for {item.AegisName}, View={item.View}, calling AccessoryIdWriter");
+                    if (App.AccessoryIdWriter == null)
+                        throw new InvalidOperationException("AccessoryIdWriter is not initialized. Check ClientRootPath in configuration.");
+                    App.AccessoryIdWriter.WriteEntry(item);
+                    System.Diagnostics.Debug.WriteLine($"[SaveItem] AccessoryIdWriter.WriteEntry completed for {item.AegisName}");
+                }
+                else
+                {
+                    System.Diagnostics.Debug.WriteLine($"[SaveItem] Skipped AccessoryIdWriter: View is empty/<=0 for {item.AegisName}");
+                }
                 App.ClientAssetWriter?.EnsureItemIcon(item);
                 App.ClientAssetWriter?.EnsureCollectionIcon(item);
             }
             catch (Exception assetEx)
             {
-                System.Windows.MessageBox.Show(this, "Client assets (accessoryid/icon): " + assetEx.Message,
+                System.Windows.MessageBox.Show(this,
+                    $"Item saved to YAML/itemInfo but failed writing client assets:\n\n{assetEx.Message}\n\nIf this was an accessoryid/accname error, re-save after closing GRF Editor or any tool that may lock the GRF file.",
                     "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Warning);
             }
             System.Windows.MessageBox.Show(this, "Item saved.", "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Information);
@@ -2115,18 +2159,100 @@ public partial class MainWindow : Window
         return paths?.Any(p => textureExts.Contains(Path.GetExtension(p), StringComparer.OrdinalIgnoreCase)) ?? false;
     }
 
+    /// <summary>
+    /// Startup health check: detect loose datainfo files on disk that override GRF content.
+    /// Loose files in client\data\ have HIGHEST priority above all GRFs, so stale/broken
+    /// fragments can silently break all headgear sprites.
+    /// </summary>
+    private void CheckForLooseDatainfoFiles()
+    {
+        var clientRoot = App.Config?.ClientRootPath;
+        if (string.IsNullOrWhiteSpace(clientRoot) || !Directory.Exists(clientRoot))
+            return;
+
+        var datainfoDir = Path.Combine(clientRoot, "data", "luafiles514", "lua files", "datainfo");
+        if (!Directory.Exists(datainfoDir))
+            return;
+
+        var dangerousFiles = new[] { "accessoryid.lua", "accessoryid.lub", "accname.lua", "accname.lub" };
+        var found = new List<string>();
+        foreach (var f in dangerousFiles)
+        {
+            var fullPath = Path.Combine(datainfoDir, f);
+            if (File.Exists(fullPath))
+                found.Add(fullPath);
+        }
+
+        if (found.Count == 0)
+            return;
+
+        var fileList = string.Join("\n", found.Select(f => "  • " + Path.GetFileName(f)));
+        var msg = "WARNING: Loose datainfo files detected on disk:\n\n"
+            + fileList
+            + "\n\nThese override GRF content and can break ALL headgear sprites. "
+            + "They were likely left behind by a previous tool or extraction.\n\n"
+            + "Delete them now? (RoDbEditor writes directly to custom.grf — loose files are not needed.)";
+
+        var result = System.Windows.MessageBox.Show(this, msg, "RoDbEditor — Loose File Hazard",
+            MessageBoxButton.YesNo, MessageBoxImage.Warning);
+
+        if (result == MessageBoxResult.Yes)
+        {
+            var deleted = 0;
+            foreach (var f in found)
+            {
+                try { File.Delete(f); deleted++; }
+                catch (Exception ex)
+                {
+                    System.Windows.MessageBox.Show(this, $"Could not delete {Path.GetFileName(f)}: {ex.Message}",
+                        "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Warning);
+                }
+            }
+            if (deleted > 0)
+                System.Windows.MessageBox.Show(this, $"Deleted {deleted} loose file(s). GRF content will now take effect.",
+                    "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+    }
+
     private static bool IsHeadgearWithView(ItemEntry? item)
     {
         if (item == null || !item.View.HasValue || item.View.Value <= 0)
             return false;
 
-        if (item.Locations == null || item.Locations.Count == 0)
-            return false;
-
-        return item.Locations.Any(kv =>
+        var hasHeadLocation = item.Locations != null && item.Locations.Any(kv =>
             kv.Value &&
             (kv.Key.StartsWith("Head_", StringComparison.OrdinalIgnoreCase) ||
              kv.Key.StartsWith("Costume_Head_", StringComparison.OrdinalIgnoreCase)));
+
+        if (hasHeadLocation)
+            return true;
+
+        // Compatibility fallback:
+        // many custom headgear entries are saved as Armor with View set,
+        // but their equip-location flags may be incomplete at first save.
+        return string.Equals(item.Type, "Armor", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static int? ParseNullableIntLoose(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return null;
+
+        var s = text.Trim();
+        if (int.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out var value))
+            return value;
+
+        // Accept common user input formats: "32,001", "+32001", "32001+"
+        s = s.Replace(",", "").Replace("_", "").Trim();
+        if (s.StartsWith("+", StringComparison.Ordinal))
+            s = s[1..].Trim();
+        if (s.EndsWith("+", StringComparison.Ordinal))
+            s = s[..^1].Trim();
+
+        if (int.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out value))
+            return value;
+
+        return null;
     }
 
     private void ExtractAllRelatedButton_Click(object sender, RoutedEventArgs e)
@@ -3158,7 +3284,7 @@ public partial class MainWindow : Window
                 if (record.EntityKind == OperationEntityKind.Item)
                 {
                     var item = App.ItemDbService?.Items?.FirstOrDefault(i => i.Id == record.Id);
-                    if (IsHeadgearWithView(item))
+                    if (item?.View.HasValue == true && item.View.Value > 0)
                         App.AccessoryIdWriter?.RemoveEntry(item.View.Value, item.AegisName);
                     App.ItemDbService?.RemoveEntryAt(record.FilePath, record.BodyIndex);
                     App.ItemInfoLuaWriter?.RemoveEntry(record.Id);

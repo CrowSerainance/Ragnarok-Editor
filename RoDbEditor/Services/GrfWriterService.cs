@@ -53,6 +53,15 @@ public class GrfWriterService
             return result;
         }
 
+        // Pre-flight: check if GRF file is locked by another process
+        if (File.Exists(grfPath) && IsFileLocked(grfPath))
+        {
+            result.Errors.Add(
+                $"GRF file is locked by another process: {Path.GetFileName(grfPath)}. "
+                + "Close GRF Editor, the RO client, or any tool that has the GRF open, then try again.");
+            return result;
+        }
+
         GrfHolder? grf = null;
         try
         {
@@ -87,6 +96,27 @@ public class GrfWriterService
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// Quick check whether a file is locked by another process.
+    /// Returns true if the file cannot be opened for writing (likely locked by GRF Editor, RO client, etc.).
+    /// </summary>
+    private static bool IsFileLocked(string filePath)
+    {
+        try
+        {
+            using var fs = new FileStream(filePath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+            return false; // Could open — not locked
+        }
+        catch (IOException)
+        {
+            return true; // Locked
+        }
+        catch
+        {
+            return false; // Other errors (permissions, etc.) — let GrfHolder handle it
+        }
     }
 
     /// <summary>
