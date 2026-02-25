@@ -1,7 +1,38 @@
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 
 namespace RoDbEditor.Config;
+
+/// <summary>
+/// A single workspace profile (rAthena + client + patch paths and GRF list).
+/// </summary>
+public class WorkspaceProfile
+{
+    public string Name { get; set; } = "Default";
+    public string? DataPath { get; set; }
+    public string? ClientRootPath { get; set; }
+    public string? ClientPatchRoot { get; set; }
+    public string? TargetGrfPath { get; set; }
+    public string TargetGrfFileName { get; set; } = "custom.grf";
+    public List<string> GrfPaths { get; } = new();
+
+    public WorkspaceProfile Clone()
+    {
+        var p = new WorkspaceProfile
+        {
+            Name = Name,
+            DataPath = DataPath,
+            ClientRootPath = ClientRootPath,
+            ClientPatchRoot = ClientPatchRoot,
+            TargetGrfPath = TargetGrfPath,
+            TargetGrfFileName = TargetGrfFileName
+        };
+        foreach (var path in GrfPaths)
+            p.GrfPaths.Add(path);
+        return p;
+    }
+}
 
 /// <summary>
 /// Loads and holds RoDbEditor configuration (GRF paths, etc.).
@@ -11,7 +42,15 @@ public class RoDbEditorConfig
 {
     public const string ConfigFileName = "RoDbEditor.ini";
     public const string SectionGrf = "GRF";
+    public const string SectionProfiles = "Profiles";
+    public const string ProfileSectionPrefix = "Profile:";
 
+    /// <summary>Workspace profiles; at least one is always present after Load.</summary>
+    public List<WorkspaceProfile> Profiles { get; } = new();
+    /// <summary>Name of the currently active profile.</summary>
+    public string? ActiveProfileName { get; set; }
+
+    /// <summary>Legacy single-profile fields; kept in sync with active profile for existing call sites.</summary>
     public List<string> GrfPaths { get; } = new();
     public string? DataPath { get; set; }
 
@@ -32,12 +71,18 @@ public class RoDbEditorConfig
         var config = new RoDbEditorConfig();
         var configPath = FindConfigPath();
         if (string.IsNullOrEmpty(configPath) || !File.Exists(configPath))
+        {
+            config.EnsureDefaultProfileFromLegacyFields();
             return config;
+        }
 
         try
         {
             var lines = File.ReadAllLines(configPath);
             string? currentSection = null;
+            WorkspaceProfile? buildingProfile = null;
+            var profileOrder = new List<string>(); // preserve order of profile names
+
             foreach (var raw in lines)
             {
                 var line = raw.Trim();
@@ -45,13 +90,42 @@ public class RoDbEditorConfig
                     continue;
                 if (line.StartsWith("[") && line.EndsWith("]"))
                 {
+                    if (buildingProfile != null)
+                    {
+                        config.Profiles.Add(buildingProfile);
+                        buildingProfile = null;
+                    }
                     currentSection = line[1..^1].Trim();
+                    if (currentSection.StartsWith(ProfileSectionPrefix, System.StringComparison.OrdinalIgnoreCase))
+                    {
+                        var name = currentSection.Substring(ProfileSectionPrefix.Length).Trim();
+                        if (!string.IsNullOrEmpty(name))
+                        {
+                            buildingProfile = new WorkspaceProfile { Name = name };
+                            if (!profileOrder.Contains(name, System.StringComparer.OrdinalIgnoreCase))
+                                profileOrder.Add(name);
+                        }
+                    }
                     continue;
                 }
                 var eq = line.IndexOf('=');
                 if (eq <= 0) continue;
                 var key = line[..eq].Trim();
                 var value = line[(eq + 1)..].Trim();
+
+                if (string.Equals(currentSection, SectionProfiles, System.StringComparison.OrdinalIgnoreCase))
+                {
+                    if (string.Equals(key, "ActiveProfileName", System.StringComparison.OrdinalIgnoreCase) && !string.IsNullOrEmpty(value))
+                        config.ActiveProfileName = value;
+                    continue;
+                }
+
+                if (buildingProfile != null && currentSection != null && currentSection.StartsWith(ProfileSectionPrefix, System.StringComparison.OrdinalIgnoreCase))
+                {
+                    ApplyProfileKey(buildingProfile, key, value);
+                    continue;
+                }
+
                 if (string.Equals(currentSection, SectionGrf, System.StringComparison.OrdinalIgnoreCase))
                 {
                     if (string.Equals(key, "Path", System.StringComparison.OrdinalIgnoreCase) ||
@@ -60,22 +134,34 @@ public class RoDbEditorConfig
                         if (!string.IsNullOrEmpty(value) && (File.Exists(value) || Directory.Exists(value)))
                             config.GrfPaths.Add(value);
                     }
-                    if (string.Equals(key, "DataPath", System.StringComparison.OrdinalIgnoreCase) && !string.IsNullOrEmpty(value) && Directory.Exists(value))
+                    if (string.Equals(key, "DataPath", System.StringComparison.OrdinalIgnoreCase))
                         config.DataPath = value;
                     if (string.Equals(key, "TargetGrfFileName", System.StringComparison.OrdinalIgnoreCase) && !string.IsNullOrEmpty(value))
                         config.TargetGrfFileName = value;
-                    if (string.Equals(key, "TargetGrfPath", System.StringComparison.OrdinalIgnoreCase) && !string.IsNullOrEmpty(value))
+                    if (string.Equals(key, "TargetGrfPath", System.StringComparison.OrdinalIgnoreCase))
                         config.TargetGrfPath = value;
-                    if (string.Equals(key, "ClientRootPath", System.StringComparison.OrdinalIgnoreCase) && !string.IsNullOrEmpty(value) && Directory.Exists(value))
+                    if (string.Equals(key, "ClientRootPath", System.StringComparison.OrdinalIgnoreCase))
                         config.ClientRootPath = value;
-                    if (string.Equals(key, "ClientPatchRoot", System.StringComparison.OrdinalIgnoreCase) && !string.IsNullOrEmpty(value) && Directory.Exists(value))
+                    if (string.Equals(key, "ClientPatchRoot", System.StringComparison.OrdinalIgnoreCase))
                         config.ClientPatchRoot = value;
                 }
             }
+
+            if (buildingProfile != null)
+                config.Profiles.Add(buildingProfile);
+
+            if (config.Profiles.Count > 0)
+            {
+                if (string.IsNullOrEmpty(config.ActiveProfileName) && profileOrder.Count > 0)
+                    config.ActiveProfileName = profileOrder[0];
+                config.ApplyActiveProfileToLegacyFields();
+            }
+            else
+                config.EnsureDefaultProfileFromLegacyFields();
         }
         catch
         {
-            // Keep default empty config
+            config.EnsureDefaultProfileFromLegacyFields();
         }
 
         // When no GRF paths configured, auto-discover GRFs in ClientRootPath if set
@@ -88,9 +174,32 @@ public class RoDbEditorConfig
                 if (File.Exists(full))
                     config.GrfPaths.Add(full);
             }
+            var active = config.GetActiveProfile();
+            if (active != null)
+            {
+                active.GrfPaths.Clear();
+                foreach (var path in config.GrfPaths)
+                    active.GrfPaths.Add(path);
+            }
         }
 
         return config;
+    }
+
+    private static void ApplyProfileKey(WorkspaceProfile profile, string key, string value)
+    {
+        if (string.Equals(key, "DataPath", System.StringComparison.OrdinalIgnoreCase))
+            profile.DataPath = value;
+        else if (string.Equals(key, "ClientRootPath", System.StringComparison.OrdinalIgnoreCase))
+            profile.ClientRootPath = value;
+        else if (string.Equals(key, "ClientPatchRoot", System.StringComparison.OrdinalIgnoreCase))
+            profile.ClientPatchRoot = value;
+        else if (string.Equals(key, "TargetGrfPath", System.StringComparison.OrdinalIgnoreCase))
+            profile.TargetGrfPath = value;
+        else if (string.Equals(key, "TargetGrfFileName", System.StringComparison.OrdinalIgnoreCase) && !string.IsNullOrEmpty(value))
+            profile.TargetGrfFileName = value;
+        else if ((string.Equals(key, "Path", System.StringComparison.OrdinalIgnoreCase) || string.Equals(key, "GrfPath", System.StringComparison.OrdinalIgnoreCase)) && !string.IsNullOrEmpty(value))
+            profile.GrfPaths.Add(value);
     }
 
     /// <summary>Persist config to INI file (creates directory if needed).</summary>
@@ -109,6 +218,35 @@ public class RoDbEditorConfig
             Directory.CreateDirectory(dirPath);
 
         var sb = new System.Text.StringBuilder();
+
+        // [Profiles] section: active profile name
+        sb.AppendLine("[" + SectionProfiles + "]");
+        sb.AppendLine("ActiveProfileName=" + (ActiveProfileName ?? GetActiveProfile()?.Name ?? "Default"));
+        sb.AppendLine();
+
+        // [Profile:Name] sections: one per profile
+        foreach (var profile in Profiles)
+        {
+            var name = string.IsNullOrEmpty(profile.Name) ? "Default" : profile.Name;
+            sb.AppendLine("[" + ProfileSectionPrefix + name + "]");
+            if (!string.IsNullOrEmpty(profile.DataPath))
+                sb.AppendLine("DataPath=" + profile.DataPath);
+            if (!string.IsNullOrEmpty(profile.ClientRootPath))
+                sb.AppendLine("ClientRootPath=" + profile.ClientRootPath);
+            if (!string.IsNullOrEmpty(profile.ClientPatchRoot))
+                sb.AppendLine("ClientPatchRoot=" + profile.ClientPatchRoot);
+            if (!string.IsNullOrEmpty(profile.TargetGrfPath))
+                sb.AppendLine("TargetGrfPath=" + profile.TargetGrfPath);
+            sb.AppendLine("TargetGrfFileName=" + (profile.TargetGrfFileName ?? "custom.grf"));
+            foreach (var path in profile.GrfPaths)
+            {
+                if (!string.IsNullOrEmpty(path))
+                    sb.AppendLine("Path=" + path);
+            }
+            sb.AppendLine();
+        }
+
+        // Legacy [GRF] section: mirror active profile for backward compatibility
         sb.AppendLine("[" + SectionGrf + "]");
         if (!string.IsNullOrEmpty(DataPath))
             sb.AppendLine("DataPath=" + DataPath);
@@ -125,6 +263,52 @@ public class RoDbEditorConfig
                 sb.AppendLine("Path=" + path);
         }
         File.WriteAllText(configPath, sb.ToString());
+    }
+
+    /// <summary>Returns the currently active profile, or null if none.</summary>
+    public WorkspaceProfile? GetActiveProfile()
+    {
+        if (string.IsNullOrEmpty(ActiveProfileName))
+            return Profiles.FirstOrDefault();
+        return Profiles.FirstOrDefault(p => string.Equals(p.Name, ActiveProfileName, System.StringComparison.OrdinalIgnoreCase))
+            ?? Profiles.FirstOrDefault();
+    }
+
+    /// <summary>If no profiles exist, creates a default profile from legacy [GRF] fields.</summary>
+    public void EnsureDefaultProfileFromLegacyFields()
+    {
+        if (Profiles.Count > 0)
+            return;
+        var legacy = new WorkspaceProfile
+        {
+            Name = "Default",
+            DataPath = DataPath,
+            ClientRootPath = ClientRootPath,
+            ClientPatchRoot = ClientPatchRoot,
+            TargetGrfPath = TargetGrfPath,
+            TargetGrfFileName = TargetGrfFileName ?? "custom.grf"
+        };
+        foreach (var path in GrfPaths)
+            legacy.GrfPaths.Add(path);
+        Profiles.Add(legacy);
+        if (string.IsNullOrEmpty(ActiveProfileName))
+            ActiveProfileName = legacy.Name;
+    }
+
+    /// <summary>Copies active profile values into legacy fields (DataPath, ClientRootPath, etc.) for existing call sites.</summary>
+    public void ApplyActiveProfileToLegacyFields()
+    {
+        var active = GetActiveProfile();
+        if (active == null)
+            return;
+        DataPath = active.DataPath;
+        ClientRootPath = active.ClientRootPath;
+        ClientPatchRoot = active.ClientPatchRoot;
+        TargetGrfPath = active.TargetGrfPath;
+        TargetGrfFileName = active.TargetGrfFileName ?? "custom.grf";
+        GrfPaths.Clear();
+        foreach (var path in active.GrfPaths)
+            GrfPaths.Add(path);
     }
 
     private static string? FindConfigPath()

@@ -13,6 +13,7 @@ using GRF.FileFormats.ActFormat;
 using GRF.FileFormats.SprFormat;
 using GRF.Image;
 using Microsoft.Win32;
+using RoDbEditor.Config;
 using RoDbEditor.Core;
 using RoDbEditor.Data;
 using RoDbEditor.Models;
@@ -147,6 +148,7 @@ public partial class MainWindow : Window
                 CurrentListLabel.Text = "CURRENT LIST: File Assignment";
             if (FileAssignmentPanel != null)
                 FileAssignmentPanel.Visibility = Visibility.Visible;
+            RefreshFileAssignProfileCombo();
             PopulateFileAssignmentPaths();
             UpdateListLabel();
             RefreshList();
@@ -2068,6 +2070,10 @@ public partial class MainWindow : Window
         var cfg = App.Config;
         FileAssignRathenaPath.Text = !string.IsNullOrEmpty(cfg?.DataPath) ? cfg.DataPath : "(not configured)";
         var clientRoot = cfg?.ClientRootPath ?? "";
+        if (FileAssignClientRootPath != null)
+            FileAssignClientRootPath.Text = !string.IsNullOrEmpty(clientRoot) ? clientRoot : "(not configured)";
+        if (FileAssignPatchRootPath != null)
+            FileAssignPatchRootPath.Text = !string.IsNullOrEmpty(cfg?.ClientPatchRoot) ? cfg.ClientPatchRoot : "(not configured)";
         var itemInfoPath = string.IsNullOrEmpty(clientRoot) ? "(not configured)" : Path.Combine(clientRoot, "SystemEN");
         FileAssignItemInfoPath.Text = itemInfoPath;
         var accessoryPath = string.IsNullOrEmpty(clientRoot) ? "(not configured)" : Path.Combine(clientRoot, "data", "luafiles514", "lua files", "datainfo");
@@ -2079,6 +2085,156 @@ public partial class MainWindow : Window
         var grfPath = !string.IsNullOrEmpty(cfg?.TargetGrfPath) ? cfg.TargetGrfPath
             : (!string.IsNullOrEmpty(clientRoot) ? Path.Combine(clientRoot, cfg?.TargetGrfFileName ?? "custom.grf") : null);
         FileAssignGrfPath.Text = !string.IsNullOrEmpty(grfPath) ? grfPath : "(not configured)";
+    }
+
+    private void RefreshFileAssignProfileCombo()
+    {
+        if (FileAssignProfileCombo == null) return;
+        var selected = FileAssignProfileCombo.SelectedItem as WorkspaceProfile;
+        FileAssignProfileCombo.ItemsSource = null;
+        FileAssignProfileCombo.ItemsSource = App.Config.Profiles;
+        FileAssignProfileCombo.SelectedItem = selected ?? App.Config.GetActiveProfile();
+    }
+
+    private void FileAssignProfileCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        // Combo selection change does not apply profile; user clicks Apply to switch.
+    }
+
+    private void FileAssignNewProfile_Click(object sender, RoutedEventArgs e)
+    {
+        var name = "Profile " + (App.Config.Profiles.Count + 1);
+        var profile = new WorkspaceProfile { Name = name };
+        App.Config.Profiles.Add(profile);
+        App.Config.ActiveProfileName = name;
+        App.Config.ApplyActiveProfileToLegacyFields();
+        App.Config.Save();
+        RefreshFileAssignProfileCombo();
+        PopulateFileAssignmentPaths();
+        System.Windows.MessageBox.Show(this, "New profile created. Set paths and click Apply to use it.", "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Information);
+    }
+
+    private void FileAssignSaveProfile_Click(object sender, RoutedEventArgs e)
+    {
+        var profile = FileAssignProfileCombo?.SelectedItem as WorkspaceProfile;
+        if (profile == null)
+        {
+            System.Windows.MessageBox.Show(this, "Select a profile first.", "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+        profile.DataPath = App.Config.DataPath;
+        profile.ClientRootPath = App.Config.ClientRootPath;
+        profile.ClientPatchRoot = App.Config.ClientPatchRoot;
+        profile.TargetGrfPath = App.Config.TargetGrfPath;
+        profile.TargetGrfFileName = App.Config.TargetGrfFileName ?? "custom.grf";
+        profile.GrfPaths.Clear();
+        foreach (var path in App.Config.GrfPaths)
+            profile.GrfPaths.Add(path);
+        App.Config.Save();
+        System.Windows.MessageBox.Show(this, "Profile saved.", "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Information);
+    }
+
+    private void FileAssignDeleteProfile_Click(object sender, RoutedEventArgs e)
+    {
+        if (App.Config.Profiles.Count <= 1)
+        {
+            System.Windows.MessageBox.Show(this, "Cannot delete the last profile.", "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+        var profile = FileAssignProfileCombo?.SelectedItem as WorkspaceProfile;
+        if (profile == null) return;
+        App.Config.Profiles.Remove(profile);
+        if (App.Config.Profiles.Count == 0) return;
+        App.Config.ActiveProfileName = App.Config.Profiles[0].Name;
+        var next = App.Config.GetActiveProfile();
+        if (next != null)
+        {
+            App.ApplyWorkspaceProfile(next);
+            RefreshList();
+            UpdateSourceIndicators();
+        }
+        App.Config.Save();
+        RefreshFileAssignProfileCombo();
+        PopulateFileAssignmentPaths();
+    }
+
+    private void FileAssignApplyProfile_Click(object sender, RoutedEventArgs e)
+    {
+        var profile = FileAssignProfileCombo?.SelectedItem as WorkspaceProfile;
+        if (profile == null)
+        {
+            System.Windows.MessageBox.Show(this, "Select a profile first.", "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+        App.ApplyWorkspaceProfile(profile);
+        RefreshList();
+        UpdateSourceIndicators();
+        PopulateFileAssignmentPaths();
+        SetupFileWatcher(App.Config.DataPath ?? "");
+        System.Windows.MessageBox.Show(this, "Profile applied.", "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Information);
+    }
+
+    private void FileAssignSetRathena_Click(object sender, RoutedEventArgs e)
+    {
+        using var dlg = new System.Windows.Forms.FolderBrowserDialog
+        {
+            Description = "Select server data folder (contains db/, npc/, system/)",
+            UseDescriptionForTitle = true
+        };
+        if (dlg.ShowDialog() != System.Windows.Forms.DialogResult.OK) return;
+        var path = dlg.SelectedPath;
+        if (string.IsNullOrEmpty(path)) return;
+        var active = App.Config.GetActiveProfile();
+        if (active == null) { App.Config.EnsureDefaultProfileFromLegacyFields(); active = App.Config.GetActiveProfile(); }
+        if (active != null) { active.DataPath = path; App.ApplyWorkspaceProfile(active); }
+        RefreshList();
+        UpdateSourceIndicators();
+        PopulateFileAssignmentPaths();
+        SetupFileWatcher(path);
+    }
+
+    private void FileAssignSetClientRoot_Click(object sender, RoutedEventArgs e)
+    {
+        using var dlg = new System.Windows.Forms.FolderBrowserDialog
+        {
+            Description = "Select Ragnarok Client Root Folder (contains System/)",
+            UseDescriptionForTitle = true
+        };
+        if (dlg.ShowDialog() != System.Windows.Forms.DialogResult.OK) return;
+        var clientRoot = dlg.SelectedPath;
+        var active = App.Config.GetActiveProfile();
+        if (active == null) { App.Config.EnsureDefaultProfileFromLegacyFields(); active = App.Config.GetActiveProfile(); }
+        if (active != null) { active.ClientRootPath = clientRoot; App.ApplyWorkspaceProfile(active); }
+        RefreshList();
+        UpdateSourceIndicators();
+        PopulateFileAssignmentPaths();
+    }
+
+    private void FileAssignSetPatchRoot_Click(object sender, RoutedEventArgs e)
+    {
+        using var dlg = new System.Windows.Forms.FolderBrowserDialog
+        {
+            Description = "Select Patch Output Root",
+            UseDescriptionForTitle = true
+        };
+        if (dlg.ShowDialog() != System.Windows.Forms.DialogResult.OK) return;
+        var path = dlg.SelectedPath;
+        var active = App.Config.GetActiveProfile();
+        if (active != null) { active.ClientPatchRoot = path; App.Config.ApplyActiveProfileToLegacyFields(); }
+        App.Config.Save();
+        PopulateFileAssignmentPaths();
+    }
+
+    private void FileAssignOpenClientRoot_Click(object sender, RoutedEventArgs e)
+    {
+        var root = App.Config?.ClientRootPath;
+        OpenFolderInExplorer(string.IsNullOrEmpty(root) ? "" : root);
+    }
+
+    private void FileAssignOpenPatchRoot_Click(object sender, RoutedEventArgs e)
+    {
+        var root = App.Config?.ClientPatchRoot;
+        OpenFolderInExplorer(string.IsNullOrEmpty(root) ? "" : root);
     }
 
     private static void OpenFolderInExplorer(string folderPath)
@@ -2367,10 +2523,21 @@ public partial class MainWindow : Window
         if (dlg.ShowDialog() != System.Windows.Forms.DialogResult.OK) return;
         var path = dlg.SelectedPath;
         if (string.IsNullOrEmpty(path)) return;
-        App.Config.DataPath = path;
-        App.ReloadDataPath(path);
+        var active = App.Config.GetActiveProfile();
+        if (active == null)
+        {
+            App.Config.EnsureDefaultProfileFromLegacyFields();
+            active = App.Config.GetActiveProfile();
+        }
+        if (active != null)
+        {
+            active.DataPath = path;
+            App.ApplyWorkspaceProfile(active);
+        }
         RefreshList();
         UpdateSourceIndicators();
+        if (FileAssignmentPanel != null && FileAssignmentPanel.Visibility == Visibility.Visible)
+            PopulateFileAssignmentPaths();
         SetupFileWatcher(path);
         System.Windows.MessageBox.Show(this, $"Data folder set.\nItems: {App.ItemDbService?.Items?.Count ?? 0}, Mobs: {App.MobDbService?.Mobs?.Count ?? 0}, NPCs: {App.NpcIndexService?.All?.Count ?? 0}.", "RoDbEditor", MessageBoxButton.OK);
     }
@@ -2384,25 +2551,21 @@ public partial class MainWindow : Window
         };
         if (dlg.ShowDialog() != System.Windows.Forms.DialogResult.OK) return;
         var clientRoot = dlg.SelectedPath;
-        App.Config!.ClientRootPath = clientRoot;
-        App.Config.Save();
-
-        // Re-create writers so they use the new client path
-        if (!string.IsNullOrEmpty(clientRoot) && Directory.Exists(clientRoot))
+        var active = App.Config.GetActiveProfile();
+        if (active == null)
         {
-            App.ItemInfoLuaWriter = new ItemInfoLuaWriter(clientRoot);
-            App.AccessoryIdWriter = new AccessoryIdWriter(clientRoot, App.GrfService, App.GrfWriterService);
-            App.ClientAssetWriter = new ClientAssetWriter(clientRoot);
-            App.MobInfoLuaWriter = new MobInfoLuaWriter(clientRoot);
+            App.Config.EnsureDefaultProfileFromLegacyFields();
+            active = App.Config.GetActiveProfile();
         }
-
-        var sys = Path.Combine(App.Config.ClientRootPath!, "System");
-        if (Directory.Exists(sys))
+        if (active != null)
         {
-            App.ClientItemInfoService.LoadFromClientSystem(sys);
-            App.ClientNpcIdentityService.LoadFromClientSystem(sys);
-            App.ClientJobNameService.LoadFromClientSystem(sys);
+            active.ClientRootPath = clientRoot;
+            App.ApplyWorkspaceProfile(active);
         }
+        RefreshList();
+        UpdateSourceIndicators();
+        if (FileAssignmentPanel != null && FileAssignmentPanel.Visibility == Visibility.Visible)
+            PopulateFileAssignmentPaths();
         System.Windows.MessageBox.Show(this, "Client System files loaded.", "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Information);
     }
 
@@ -2414,8 +2577,16 @@ public partial class MainWindow : Window
             UseDescriptionForTitle = true
         };
         if (dlg.ShowDialog() != System.Windows.Forms.DialogResult.OK) return;
-        App.Config!.ClientPatchRoot = dlg.SelectedPath;
+        var path = dlg.SelectedPath;
+        var active = App.Config.GetActiveProfile();
+        if (active != null)
+        {
+            active.ClientPatchRoot = path;
+            App.Config.ApplyActiveProfileToLegacyFields();
+        }
         App.Config.Save();
+        if (FileAssignmentPanel != null && FileAssignmentPanel.Visibility == Visibility.Visible)
+            PopulateFileAssignmentPaths();
         System.Windows.MessageBox.Show(this, "Patch output root set.", "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Information);
     }
 
@@ -2857,7 +3028,15 @@ public partial class MainWindow : Window
 
     private void SetupFileWatcher(string path)
     {
-        if (_watcher != null) return;
+        var normalizedPath = string.IsNullOrEmpty(path) ? "" : Path.GetFullPath(path);
+        if (_watcher != null)
+        {
+            var currentPath = _watcher.Path;
+            if (string.Equals(currentPath, normalizedPath, StringComparison.OrdinalIgnoreCase))
+                return;
+            try { _watcher.Dispose(); } catch { /* ignore */ }
+            _watcher = null;
+        }
         if (string.IsNullOrEmpty(path) || !Directory.Exists(path)) return;
 
         try

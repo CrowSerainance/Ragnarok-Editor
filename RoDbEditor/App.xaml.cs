@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Reflection;
 using System.Windows;
 using System.Xml;
@@ -50,6 +51,107 @@ public partial class App : System.Windows.Application
     public static ClientJobNameService ClientJobNameService { get; private set; } = null!;
     public static IReadOnlyDictionary<int, string> ItemInfoDescriptions { get; set; } = new Dictionary<int, string>();
     public static IHighlightingDefinition? RagnarokScriptHighlighting { get; private set; }
+
+    /// <summary>
+    /// Applies a workspace profile at runtime: syncs config, saves, and rebuilds all dependent services (GRF, sprites, writers, server/client data).
+    /// Call this when switching workspace without restart.
+    /// </summary>
+    public static void ApplyWorkspaceProfile(WorkspaceProfile profile)
+    {
+        if (profile == null) return;
+
+        var existing = Config.Profiles.FirstOrDefault(p => string.Equals(p.Name, profile.Name, StringComparison.OrdinalIgnoreCase));
+        if (existing != null)
+        {
+            existing.DataPath = profile.DataPath;
+            existing.ClientRootPath = profile.ClientRootPath;
+            existing.ClientPatchRoot = profile.ClientPatchRoot;
+            existing.TargetGrfPath = profile.TargetGrfPath;
+            existing.TargetGrfFileName = profile.TargetGrfFileName ?? "custom.grf";
+            existing.GrfPaths.Clear();
+            foreach (var path in profile.GrfPaths)
+                existing.GrfPaths.Add(path);
+        }
+        else
+        {
+            Config.Profiles.Add(profile.Clone());
+        }
+
+        Config.ActiveProfileName = profile.Name;
+        Config.ApplyActiveProfileToLegacyFields();
+
+        if (Config.GrfPaths.Count == 0 && !string.IsNullOrEmpty(Config.ClientRootPath) && Directory.Exists(Config.ClientRootPath))
+        {
+            var grfOrder = new[] { "custom.grf", "en.grf", "official_data.grf", "data.grf" };
+            foreach (var grf in grfOrder)
+            {
+                var full = Path.Combine(Config.ClientRootPath, grf);
+                if (File.Exists(full))
+                    Config.GrfPaths.Add(full);
+            }
+            var active = Config.GetActiveProfile();
+            if (active != null)
+            {
+                active.GrfPaths.Clear();
+                foreach (var path in Config.GrfPaths)
+                    active.GrfPaths.Add(path);
+            }
+        }
+
+        Config.Save();
+
+        GrfService.LoadFromConfig(Config);
+
+        FileSystemSpriteSource = null;
+        if (!string.IsNullOrEmpty(Config.ClientRootPath))
+        {
+            var dataSprite = Path.Combine(Config.ClientRootPath, "data", "sprite");
+            var dataFolder = Path.Combine(Config.ClientRootPath, "data");
+            if (Directory.Exists(dataSprite))
+                FileSystemSpriteSource = new FileSystemSpriteSource(dataSprite);
+            else if (Directory.Exists(dataFolder))
+                FileSystemSpriteSource = new FileSystemSpriteSource(dataFolder);
+        }
+
+        SpriteLookupService = new SpriteLookupService(GrfService, FileSystemSpriteSource);
+        SpriteLookupService.ClearCache();
+
+        ItemPathService = new ItemPathService(ItemDbService, GrfService, SpriteLookupService);
+
+        var clientRoot = !string.IsNullOrEmpty(Config.ClientRootPath) && Directory.Exists(Config.ClientRootPath) ? Config.ClientRootPath : null;
+        if (!string.IsNullOrEmpty(clientRoot))
+        {
+            ItemInfoLuaWriter = new ItemInfoLuaWriter(clientRoot);
+            AccessoryIdWriter = new AccessoryIdWriter(clientRoot, GrfService, GrfWriterService);
+            ClientAssetWriter = new ClientAssetWriter(clientRoot);
+            MobInfoLuaWriter = new MobInfoLuaWriter(clientRoot);
+        }
+        else
+        {
+            ItemInfoLuaWriter = null;
+            AccessoryIdWriter = null;
+            ClientAssetWriter = null;
+            MobInfoLuaWriter = null;
+        }
+        NpcScriptWriter = new NpcScriptWriter(Config.DataPath ?? clientRoot ?? string.Empty);
+
+        if (!string.IsNullOrEmpty(Config.ClientRootPath))
+        {
+            var clientSys = Path.Combine(Config.ClientRootPath, "System");
+            if (Directory.Exists(clientSys))
+            {
+                ClientItemInfoService.LoadFromClientSystem(clientSys);
+                ClientNpcIdentityService.LoadFromClientSystem(clientSys);
+                ClientJobNameService.LoadFromClientSystem(clientSys);
+            }
+        }
+
+        if (!string.IsNullOrEmpty(Config.DataPath))
+            ReloadDataPath(Config.DataPath);
+
+        if (GrfService.IsLoaded)
+            ReloadFromGrf();
+    }
 
     /// <summary>
     /// Reload item/mob data from GRF. Called when GRF is loaded.

@@ -31,6 +31,7 @@
             <MenuItem Header="_Tools">
                 <MenuItem Header="Analyze Workspace" Click="OnAnalyzeClicked"/>
                 <MenuItem Header="Analyze Folder..." Click="OnAnalyzeFolderClicked"/>
+                <MenuItem Header="Open GRF..." Click="MenuOpenGrf_Click"/>
                 <Separator/>
                 <MenuItem Header="Open Client Folder..." Click="OpenClientFolder_Click"/>
                 <MenuItem Header="Set Client Patch Output..." Click="SetClientPatchOutput_Click"/>
@@ -508,6 +509,14 @@
                         <ScrollViewer x:Name="FileAssignmentPanel" Visibility="Collapsed" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                             <StackPanel Margin="0,0,0,8">
                                 <TextBlock Text="FILE ASSIGNMENT" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                    <TextBlock Text="Workspace profile:" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                    <ComboBox x:Name="FileAssignProfileCombo" MinWidth="160" Margin="0,0,8,0" SelectionChanged="FileAssignProfileCombo_SelectionChanged" DisplayMemberPath="Name"/>
+                                    <Button Content="New Profile" Padding="8,4" Margin="0,0,4,0" Click="FileAssignNewProfile_Click"/>
+                                    <Button Content="Save Profile" Padding="8,4" Margin="0,0,4,0" Click="FileAssignSaveProfile_Click"/>
+                                    <Button Content="Delete Profile" Padding="8,4" Margin="0,0,4,0" Click="FileAssignDeleteProfile_Click"/>
+                                    <Button Content="Apply" Padding="8,4" Click="FileAssignApplyProfile_Click"/>
+                                </StackPanel>
                                 <Grid Margin="0,0,0,6">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="220"/>
@@ -520,22 +529,39 @@
                                         <RowDefinition Height="Auto"/>
                                         <RowDefinition Height="Auto"/>
                                         <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
                                     </Grid.RowDefinitions>
                                     <TextBlock Grid.Row="0" Grid.Column="0" Text="RAthena location:" VerticalAlignment="Center" Margin="0,4"/>
                                     <TextBox x:Name="FileAssignRathenaPath" Grid.Row="0" Grid.Column="1" IsReadOnly="True" Padding="4,2" Margin="0,4" VerticalContentAlignment="Center"/>
-                                    <Button Grid.Row="0" Grid.Column="2" Content="Open folder" Padding="8,4" Margin="4,4,0,4" Click="FileAssignOpenRathena_Click"/>
-                                    <TextBlock Grid.Row="1" Grid.Column="0" Text="Client-Side ItemInfo Lua:" VerticalAlignment="Center" Margin="0,4"/>
-                                    <TextBox x:Name="FileAssignItemInfoPath" Grid.Row="1" Grid.Column="1" IsReadOnly="True" Padding="4,2" Margin="0,4" VerticalContentAlignment="Center"/>
-                                    <Button Grid.Row="1" Grid.Column="2" Content="Open folder" Padding="8,4" Margin="4,4,0,4" Click="FileAssignOpenItemInfo_Click"/>
-                                    <TextBlock Grid.Row="2" Grid.Column="0" Text="Client-Side accessory:" VerticalAlignment="Center" Margin="0,4"/>
-                                    <TextBox x:Name="FileAssignAccessoryPath" Grid.Row="2" Grid.Column="1" IsReadOnly="True" Padding="4,2" Margin="0,4" VerticalContentAlignment="Center"/>
-                                    <Button Grid.Row="2" Grid.Column="2" Content="Open folder" Padding="8,4" Margin="4,4,0,4" Click="FileAssignOpenAccessory_Click"/>
-                                    <TextBlock Grid.Row="3" Grid.Column="0" Text="SPRITE ASSETS:" VerticalAlignment="Center" Margin="0,4"/>
-                                    <TextBox x:Name="FileAssignSpritePath" Grid.Row="3" Grid.Column="1" IsReadOnly="True" Padding="4,2" Margin="0,4" VerticalContentAlignment="Center"/>
-                                    <Button Grid.Row="3" Grid.Column="2" Content="Open folder" Padding="8,4" Margin="4,4,0,4" Click="FileAssignOpenSprite_Click"/>
-                                    <TextBlock Grid.Row="4" Grid.Column="0" Text="Custom GRF:" VerticalAlignment="Center" Margin="0,4"/>
-                                    <TextBox x:Name="FileAssignGrfPath" Grid.Row="4" Grid.Column="1" IsReadOnly="True" Padding="4,2" Margin="0,4" VerticalContentAlignment="Center"/>
-                                    <Button Grid.Row="4" Grid.Column="2" Content="Open in GRF Editor" Padding="8,4" Margin="4,4,0,4" Click="FileAssignOpenGrf_Click"/>
+                                    <StackPanel Grid.Row="0" Grid.Column="2" Orientation="Horizontal" Margin="4,4,0,4">
+                                        <Button Content="Set..." Padding="8,4" Margin="0,0,4,0" Click="FileAssignSetRathena_Click"/>
+                                        <Button Content="Open folder" Padding="8,4" Click="FileAssignOpenRathena_Click"/>
+                                    </StackPanel>
+                                    <TextBlock Grid.Row="1" Grid.Column="0" Text="Client root:" VerticalAlignment="Center" Margin="0,4"/>
+                                    <TextBox x:Name="FileAssignClientRootPath" Grid.Row="1" Grid.Column="1" IsReadOnly="True" Padding="4,2" Margin="0,4" VerticalContentAlignment="Center"/>
+                                    <StackPanel Grid.Row="1" Grid.Column="2" Orientation="Horizontal" Margin="4,4,0,4">
+                                        <Button Content="Set..." Padding="8,4" Margin="0,0,4,0" Click="FileAssignSetClientRoot_Click"/>
+                                        <Button Content="Open folder" Padding="8,4" Click="FileAssignOpenClientRoot_Click"/>
+                                    </StackPanel>
+                                    <TextBlock Grid.Row="2" Grid.Column="0" Text="Patch output:" VerticalAlignment="Center" Margin="0,4"/>
+                                    <TextBox x:Name="FileAssignPatchRootPath" Grid.Row="2" Grid.Column="1" IsReadOnly="True" Padding="4,2" Margin="0,4" VerticalContentAlignment="Center"/>
+                                    <StackPanel Grid.Row="2" Grid.Column="2" Orientation="Horizontal" Margin="4,4,0,4">
+                                        <Button Content="Set..." Padding="8,4" Margin="0,0,4,0" Click="FileAssignSetPatchRoot_Click"/>
+                                        <Button Content="Open folder" Padding="8,4" Click="FileAssignOpenPatchRoot_Click"/>
+                                    </StackPanel>
+                                    <TextBlock Grid.Row="3" Grid.Column="0" Text="Client-Side ItemInfo Lua:" VerticalAlignment="Center" Margin="0,4"/>
+                                    <TextBox x:Name="FileAssignItemInfoPath" Grid.Row="3" Grid.Column="1" IsReadOnly="True" Padding="4,2" Margin="0,4" VerticalContentAlignment="Center"/>
+                                    <Button Grid.Row="3" Grid.Column="2" Content="Open folder" Padding="8,4" Margin="4,4,0,4" Click="FileAssignOpenItemInfo_Click"/>
+                                    <TextBlock Grid.Row="4" Grid.Column="0" Text="Client-Side accessory:" VerticalAlignment="Center" Margin="0,4"/>
+                                    <TextBox x:Name="FileAssignAccessoryPath" Grid.Row="4" Grid.Column="1" IsReadOnly="True" Padding="4,2" Margin="0,4" VerticalContentAlignment="Center"/>
+                                    <Button Grid.Row="4" Grid.Column="2" Content="Open folder" Padding="8,4" Margin="4,4,0,4" Click="FileAssignOpenAccessory_Click"/>
+                                    <TextBlock Grid.Row="5" Grid.Column="0" Text="SPRITE ASSETS:" VerticalAlignment="Center" Margin="0,4"/>
+                                    <TextBox x:Name="FileAssignSpritePath" Grid.Row="5" Grid.Column="1" IsReadOnly="True" Padding="4,2" Margin="0,4" VerticalContentAlignment="Center"/>
+                                    <Button Grid.Row="5" Grid.Column="2" Content="Open folder" Padding="8,4" Margin="4,4,0,4" Click="FileAssignOpenSprite_Click"/>
+                                    <TextBlock Grid.Row="6" Grid.Column="0" Text="Custom GRF:" VerticalAlignment="Center" Margin="0,4"/>
+                                    <TextBox x:Name="FileAssignGrfPath" Grid.Row="6" Grid.Column="1" IsReadOnly="True" Padding="4,2" Margin="0,4" VerticalContentAlignment="Center"/>
+                                    <Button Grid.Row="6" Grid.Column="2" Content="Open in GRF Editor" Padding="8,4" Margin="4,4,0,4" Click="FileAssignOpenGrf_Click"/>
                                 </Grid>
                                 <Expander Header="Custom Item Pipeline Reference" Margin="0,12,0,0" IsExpanded="False">
                                     <TextBlock TextWrapping="Wrap" FontSize="11" Margin="0,4,0,4">
