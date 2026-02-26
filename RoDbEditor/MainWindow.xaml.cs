@@ -1808,8 +1808,18 @@ public partial class MainWindow : Window
              kv.Key.StartsWith("Costume_Head_", StringComparison.OrdinalIgnoreCase)));
         if (hasHeadLocation && (!item.View.HasValue || item.View.Value <= 0))
         {
-            warnings.Add("Headgear has Head_ location but no View ID. The equipped sprite will NOT render in-game. "
-                + "Set View to a unique number (e.g. 32001) so accessoryid/accname entries are written.");
+            if (App.ItemDbService != null)
+            {
+                var nextView = App.ItemDbService.GetNextCustomViewId(32000);
+                item.View = nextView;
+                warnings.Add($"Headgear has Head_ location but no View ID. Auto-assigned View={nextView} "
+                    + "so accessoryid/accname mapping can be written.");
+            }
+            else
+            {
+                warnings.Add("Headgear has Head_ location but no View ID. The equipped sprite will NOT render in-game. "
+                    + "Set View to a unique number (e.g. 32001) so accessoryid/accname entries are written.");
+            }
         }
         if (item.View.HasValue && item.View.Value > 0 && App.ItemDbService != null)
         {

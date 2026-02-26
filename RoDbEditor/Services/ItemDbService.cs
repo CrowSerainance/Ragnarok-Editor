@@ -247,6 +247,26 @@ public class ItemDbService
         return maxCustom + 1;
     }
 
+    /// <summary>
+    /// Get the next available custom headgear View ID.
+    /// Starts from 32000 by default and skips any IDs already used in loaded items.
+    /// </summary>
+    public int GetNextCustomViewId(int start = 32000)
+    {
+        if (start < 1)
+            start = 1;
+
+        var used = new HashSet<int>(_items
+            .Where(i => i.View.HasValue && i.View.Value > 0)
+            .Select(i => i.View!.Value));
+
+        var next = start;
+        while (used.Contains(next))
+            next++;
+
+        return next;
+    }
+
     /// <summary>Result of a save operation for operations log.</summary>
     public sealed class SaveResult
     {
