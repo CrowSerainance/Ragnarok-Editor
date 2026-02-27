@@ -23,13 +23,15 @@ If `data.grf` is first, your custom files are ignored.
 | Source | Purpose |
 |--------|---------|
 | **Server** | `db/import/item_db.yml` (custom) and `db/re/item_db_equip.yml` (official) |
-| **Client** | `System/itemInfo_C.lua` — names and descriptions |
-| **Assets** | Icons and sprites in GRFs (`custom.grf`, `data.grf`) |
+| **Client (LiveClient mode)** | `System/itemInfo_C.lua` — names and descriptions written directly into the client install |
+| **Client (PatchOnly mode)** | `System/itemInfo_rodbeditor.lua` under your patch output root — overlay that `dofile`s the base itemInfo and adds custom items |
+| **Assets** | Icons and sprites in GRFs (`custom.grf`, `data.grf`) and, in LiveClient mode, optional loose icons under `data/texture/유저인터페이스/...` |
 
 RoDbEditor writes to:
-- Server: `db/import/item_db.yml`
-- Client: `System/itemInfo_C.lua`, `accessoryid.lua`, `accname.lua`
-- Assets: `custom.grf` (or `TargetGrfPath` in config)
+- **Server**: `db/import/item_db.yml` (custom items and overrides; base DB stays read-only).
+- **Client scripts (LiveClient mode)**: `System/itemInfo_C.lua`, `accessoryid.lua`, `accname.lua`.
+- **Client scripts (PatchOnly mode)**: patch overlay files under your configured patch output root (e.g. `System/itemInfo_rodbeditor.lua`, `System/npcidentity_rodbeditor.lua`, `System/jobname_rodbeditor.lua`).
+- **Assets**: a writable custom GRF (default `custom.grf` under the client root, or `TargetGrfPath` in config). In LiveClient mode, RoDbEditor may also generate placeholder icons as loose BMPs for local testing.
 
 ---
 
@@ -67,6 +69,8 @@ RoDbEditor writes to:
    - **ResourceName** — Sprite base name (e.g. `MyHeadgear`)
    - **Description** — Custom lore (multi-line, supports `^000000` color codes)
 4. **SAVE** — Writes to server DB, client itemInfo, accessoryid, and placeholder icons.
+   - In **PatchOnly mode**, itemInfo is written as an overlay file under your patch output root and accessory tables go into your configured custom GRF.
+   - In **LiveClient mode**, itemInfo is written directly to `System/itemInfo_C.lua` under the client root and placeholder icons are created as loose files.
 5. **Add sprites** — Put `.spr`, `.act`, and `.bmp` into `custom.grf` or use EXTRACTED ASSETS → Assign to custom.grf.
 
 ### Path B: New item from extracted sprite
@@ -83,20 +87,20 @@ RoDbEditor writes to:
 
 1. **ITEMS tab** — Search for the official item.
 2. **Edit fields** including **Description** for custom lore.
-3. **SAVE** — Writes to `db/import/item_db.yml` (overlay; does not modify `item_db_equip.yml`) and `itemInfo_C.lua`.
+3. **SAVE** — Writes to `db/import/item_db.yml` (overlay; does not modify `item_db_equip.yml`) and updates client itemInfo according to the current write mode (LiveClient vs PatchOnly).
 
 ---
 
 ## Checklist: Item Works In-Game
 
-| Component | Where |
-|-----------|-------|
-| Server DB | `rathena-master/db/import/item_db.yml` |
-| Item name/desc | `client/System/itemInfo_C.lua` |
-| Headgear view ID | `accessoryid.lua` + `accname.lua` |
-| Item icon | `data/texture/유저인터페이스/item/<ResourceName>.bmp` |
-| Collection icon | `data/texture/유저인터페이스/collection/<ResourceName>.bmp` |
-| Sprite | `custom.grf` at `data/sprite/아이템/` or `data/sprite/악세사리/남`, `여` (headgear) |
+| Component | Where (PatchOnly mode) | Where (LiveClient mode) |
+|-----------|------------------------|-------------------------|
+| Server DB | `rathena-master/db/import/item_db.yml` | `rathena-master/db/import/item_db.yml` |
+| Item name/desc | Patch output `System/itemInfo_rodbeditor.lua` (dofile base itemInfo) | `client/System/itemInfo_C.lua` |
+| Headgear view ID | `accessoryid.lua` + `accname.lua` inside your writable custom GRF | `accessoryid.lua` + `accname.lua` inside your writable custom GRF |
+| Item icon | In a writable custom GRF at `data/texture/유저인터페이스/item/<ResourceName>.bmp` (or as patch loose file) | `client/data/texture/유저인터페이스/item/<ResourceName>.bmp` (placeholder created if missing) |
+| Collection icon | In a writable custom GRF at `data/texture/유저인터페이스/collection/<ResourceName>.bmp` (or as patch loose file) | `client/data/texture/유저인터페이스/collection/<ResourceName>.bmp` (placeholder created if missing) |
+| Sprite | `custom.grf` at `data/sprite/아이템/` or `data/sprite/악세사리/남`, `여` (headgear) | same as PatchOnly (sprites always go into a writable GRF) |
 
 ---
 

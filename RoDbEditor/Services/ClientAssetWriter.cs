@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.IO;
@@ -8,6 +8,14 @@ namespace RoDbEditor.Services;
 
 /// <summary>
 /// Creates placeholder BMP files for items (inventory icon, collection) when missing.
+///
+/// Filesystem policy:
+/// - In LiveClient mode, placeholders are written as loose files under
+///   ClientRootPath\data\texture\유저인터페이스\item and \collection so that a single
+///   local client can see icons immediately.
+/// - In PatchOnly mode, callers should prefer SpriteAssignmentService to place
+///   real icons into a writable GRF; this helper is typically disabled by App
+///   when ClientWriteMode != LiveClient.
 /// Uses magenta (#FF00FF) background for transparency.
 /// </summary>
 public class ClientAssetWriter

@@ -11,6 +11,15 @@ using YamlDotNet.Serialization.NamingConventions;
 
 namespace RoDbEditor.Services;
 
+/// <summary>
+/// Server-side monster database facade.
+///
+/// Responsibilities:
+/// - Load base mob data from rAthena YAML under DataPath (db/re or db/pre-re, falling back to db).
+/// - Track overrides when multiple definitions for the same Id are encountered.
+/// - Persist edits and new mobs into db/import/mob_db.yml only, keeping base DB read-only.
+/// - Expose helpers for searching, next custom mob ID, and import paths.
+/// </summary>
 public class MobDbService
 {
     public const string MobDbFile = "mob_db.yml";
@@ -52,6 +61,18 @@ public class MobDbService
         }
     }
 
+    /// <summary>
+    /// Load monsters from rAthena YAML under the given dataPath.
+    ///
+    /// Base load behavior:
+    /// - Probes db/re/mob_db.yml, then db/pre-re/mob_db.yml, then db/mob_db.yml.
+    /// - Parses the Body section into MobEntry rows and records any duplicate IDs as overrides.
+    ///
+    /// Note: Import overlays for mobs live in db/import/mob_db.yml and are managed
+    /// by SaveMob/EnsureImportMobDbPath; they are not loaded here because rAthena
+    /// itself merges them on server start and RoDbEditor treats them as a pure
+    /// write-target for custom mobs and overrides.
+    /// </summary>
     public void LoadFromDataPath(string? dataPath)
     {
         _dataPath = dataPath;
@@ -320,6 +341,14 @@ public class MobDbService
         public bool IsUpdate { get; init; }
     }
 
+    /// <summary>
+    /// Save a monster row into the rAthena import overlay (db/import/mob_db.yml).
+    ///
+    /// Invariants:
+    /// - Base db/re or db/pre-re mob_db.yml is never modified.
+    /// - All edits and new mobs go to db/import/mob_db.yml (created on demand).
+    /// - The YAML document always has a MOB_DB v5 Header and a Body list.
+    /// </summary>
     public SaveResult? SaveMob(MobEntry mob)
     {
         // Always write edits and new mobs into the import overlay file

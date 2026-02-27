@@ -7,6 +7,16 @@ using RoDbEditor.Models;
 
 namespace RoDbEditor.Services;
 
+/// <summary>
+/// Read-only view over rAthena mob_skill_db for analysis and UI.
+///
+/// Responsibilities:
+/// - Load mob_skill_db.txt from DataPath, preferring db/import first, then db/re, db/pre-re, then db.
+/// - Parse rows into MobSkillDbRow with SourceFile/SourceLine metadata.
+/// - Provide indexed lookup of skills per mob for the MONSTER DETAILS panel.
+/// - This service does not write back to disk; edits are performed by opening the
+///   underlying text file in the user's editor.
+/// </summary>
 public sealed class MobSkillDbService
 {
     private readonly List<MobSkillDbRow> _all = new();

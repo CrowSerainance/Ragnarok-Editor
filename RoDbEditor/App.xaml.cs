@@ -118,12 +118,26 @@ public partial class App : System.Windows.Application
 
         ItemPathService = new ItemPathService(ItemDbService, GrfService, SpriteLookupService);
 
-        var clientRoot = !string.IsNullOrEmpty(Config.ClientRootPath) && Directory.Exists(Config.ClientRootPath) ? Config.ClientRootPath : null;
+        var clientRoot = !string.IsNullOrEmpty(Config.ClientRootPath) && Directory.Exists(Config.ClientRootPath)
+            ? Config.ClientRootPath
+            : null;
         if (!string.IsNullOrEmpty(clientRoot))
         {
-            ItemInfoLuaWriter = new ItemInfoLuaWriter(clientRoot);
+            // ClientRootPath is always used as a read source for System/ and GRFs.
+            // Whether we also write directly to itemInfo_C.lua and icons here depends
+            // on the configured ClientWriteMode; PatchOnly prefers patch outputs.
+            if (Config.ClientWriteMode == ClientWriteMode.LiveClient)
+            {
+                ItemInfoLuaWriter = new ItemInfoLuaWriter(clientRoot);
+                ClientAssetWriter = new ClientAssetWriter(clientRoot);
+            }
+            else
+            {
+                ItemInfoLuaWriter = null;
+                ClientAssetWriter = null;
+            }
+
             AccessoryIdWriter = new AccessoryIdWriter(clientRoot, GrfService, GrfWriterService);
-            ClientAssetWriter = new ClientAssetWriter(clientRoot);
             MobInfoLuaWriter = new MobInfoLuaWriter(clientRoot);
         }
         else
@@ -366,9 +380,21 @@ public partial class App : System.Windows.Application
             : null;
         if (!string.IsNullOrEmpty(clientRoot))
         {
-            ItemInfoLuaWriter = new ItemInfoLuaWriter(clientRoot);
+            // ClientRootPath is always used as a read source for System/ and GRFs.
+            // Whether we also write directly to itemInfo_C.lua and icons here depends
+            // on the configured ClientWriteMode; PatchOnly prefers patch outputs.
+            if (Config.ClientWriteMode == ClientWriteMode.LiveClient)
+            {
+                ItemInfoLuaWriter = new ItemInfoLuaWriter(clientRoot);
+                ClientAssetWriter = new ClientAssetWriter(clientRoot);
+            }
+            else
+            {
+                ItemInfoLuaWriter = null;
+                ClientAssetWriter = null;
+            }
+
             AccessoryIdWriter = new AccessoryIdWriter(clientRoot, GrfService, GrfWriterService);
-            ClientAssetWriter = new ClientAssetWriter(clientRoot);
             MobInfoLuaWriter = new MobInfoLuaWriter(clientRoot);
         }
         NpcScriptWriter = new NpcScriptWriter(Config.DataPath ?? clientRoot ?? string.Empty);

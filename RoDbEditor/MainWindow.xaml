@@ -532,19 +532,22 @@
                                         <RowDefinition Height="Auto"/>
                                         <RowDefinition Height="Auto"/>
                                     </Grid.RowDefinitions>
-                                    <TextBlock Grid.Row="0" Grid.Column="0" Text="RAthena location:" VerticalAlignment="Center" Margin="0,4"/>
+                                <TextBlock Grid.Row="0" Grid.Column="0" Text="RAthena location:" VerticalAlignment="Center" Margin="0,4"
+                                           ToolTip="Server DB root (rAthena). RoDbEditor reads base data from db/re or db/pre-re here and writes all edits to db/import/*.yml only."/>
                                     <TextBox x:Name="FileAssignRathenaPath" Grid.Row="0" Grid.Column="1" IsReadOnly="True" Padding="4,2" Margin="0,4" VerticalContentAlignment="Center"/>
                                     <StackPanel Grid.Row="0" Grid.Column="2" Orientation="Horizontal" Margin="4,4,0,4">
                                         <Button Content="Set..." Padding="8,4" Margin="0,0,4,0" Click="FileAssignSetRathena_Click"/>
                                         <Button Content="Open folder" Padding="8,4" Click="FileAssignOpenRathena_Click"/>
                                     </StackPanel>
-                                    <TextBlock Grid.Row="1" Grid.Column="0" Text="Client root:" VerticalAlignment="Center" Margin="0,4"/>
+                                    <TextBlock Grid.Row="1" Grid.Column="0" Text="Client root:" VerticalAlignment="Center" Margin="0,4"
+                                               ToolTip="Base client installation (contains System/ and GRF files). In Patch-only mode this is treated as read-mostly; in Live-client mode some writers may update files directly here."/>
                                     <TextBox x:Name="FileAssignClientRootPath" Grid.Row="1" Grid.Column="1" IsReadOnly="True" Padding="4,2" Margin="0,4" VerticalContentAlignment="Center"/>
                                     <StackPanel Grid.Row="1" Grid.Column="2" Orientation="Horizontal" Margin="4,4,0,4">
                                         <Button Content="Set..." Padding="8,4" Margin="0,0,4,0" Click="FileAssignSetClientRoot_Click"/>
                                         <Button Content="Open folder" Padding="8,4" Click="FileAssignOpenClientRoot_Click"/>
                                     </StackPanel>
-                                    <TextBlock Grid.Row="2" Grid.Column="0" Text="Patch output:" VerticalAlignment="Center" Margin="0,4"/>
+                                    <TextBlock Grid.Row="2" Grid.Column="0" Text="Patch output:" VerticalAlignment="Center" Margin="0,4"
+                                               ToolTip="Patch output root. RoDbEditor writes overlay System/ and data/ files here (e.g. itemInfo_rodbeditor.lua, npcidentity/jobname overlays) when generating patches."/>
                                     <TextBox x:Name="FileAssignPatchRootPath" Grid.Row="2" Grid.Column="1" IsReadOnly="True" Padding="4,2" Margin="0,4" VerticalContentAlignment="Center"/>
                                     <StackPanel Grid.Row="2" Grid.Column="2" Orientation="Horizontal" Margin="4,4,0,4">
                                         <Button Content="Set..." Padding="8,4" Margin="0,0,4,0" Click="FileAssignSetPatchRoot_Click"/>
@@ -556,10 +559,12 @@
                                     <TextBlock Grid.Row="4" Grid.Column="0" Text="Client-Side accessory:" VerticalAlignment="Center" Margin="0,4"/>
                                     <TextBox x:Name="FileAssignAccessoryPath" Grid.Row="4" Grid.Column="1" IsReadOnly="True" Padding="4,2" Margin="0,4" VerticalContentAlignment="Center"/>
                                     <Button Grid.Row="4" Grid.Column="2" Content="Open folder" Padding="8,4" Margin="4,4,0,4" Click="FileAssignOpenAccessory_Click"/>
-                                    <TextBlock Grid.Row="5" Grid.Column="0" Text="SPRITE ASSETS:" VerticalAlignment="Center" Margin="0,4"/>
+                                    <TextBlock Grid.Row="5" Grid.Column="0" Text="SPRITE ASSETS:" VerticalAlignment="Center" Margin="0,4"
+                                               ToolTip="Effective sprite source paths resolved from the GRF list. Sprites are read from these GRFs; new sprites are written to the configured custom GRF."/>
                                     <TextBox x:Name="FileAssignSpritePath" Grid.Row="5" Grid.Column="1" IsReadOnly="True" Padding="4,2" Margin="0,4" VerticalContentAlignment="Center"/>
                                     <Button Grid.Row="5" Grid.Column="2" Content="Open folder" Padding="8,4" Margin="4,4,0,4" Click="FileAssignOpenSprite_Click"/>
-                                    <TextBlock Grid.Row="6" Grid.Column="0" Text="Custom GRF:" VerticalAlignment="Center" Margin="0,4"/>
+                                    <TextBlock Grid.Row="6" Grid.Column="0" Text="Custom GRF:" VerticalAlignment="Center" Margin="0,4"
+                                               ToolTip="Writable custom GRF (TargetGrfPath or ClientRootPath + TargetGrfFileName). RoDbEditor adds sprites and accessory tables here; base GRFs like data.grf remain read-only."/>
                                     <TextBox x:Name="FileAssignGrfPath" Grid.Row="6" Grid.Column="1" IsReadOnly="True" Padding="4,2" Margin="0,4" VerticalContentAlignment="Center"/>
                                     <Button Grid.Row="6" Grid.Column="2" Content="Open in GRF Editor" Padding="8,4" Margin="4,4,0,4" Click="FileAssignOpenGrf_Click"/>
                                 </Grid>

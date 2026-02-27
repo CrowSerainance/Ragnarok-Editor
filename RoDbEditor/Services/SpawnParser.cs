@@ -7,6 +7,15 @@ using RoDbEditor.Models;
 
 namespace RoDbEditor.Services;
 
+/// <summary>
+/// Read-only index of monster spawns from rAthena NPC scripts.
+///
+/// Responsibilities:
+/// - Scan NPC script folders under DataPath (npc, npc/re, npc/pre-re, npc/custom, etc.).
+/// - Parse classic tab-based monster spawn lines and script-based monster/boss_monster/areamonster calls.
+/// - Expose aggregated SpawnEntry rows per mob for MONSTER DETAILS \"On Maps\" display and diagnostics.
+/// - Does not modify any NPC scripts; this is analysis-only.
+/// </summary>
 public class SpawnParser
 {
     private readonly List<SpawnEntry> _spawns = new();

@@ -5,17 +5,72 @@ using System.Linq;
 namespace RoDbEditor.Config;
 
 /// <summary>
-/// A single workspace profile (rAthena + client + patch paths and GRF list).
+/// How RoDbEditor is allowed to write client-side files.
+/// </summary>
+public enum ClientWriteMode
+{
+    /// <summary>
+    /// Prefer safe patch outputs: treat the client installation as read-mostly and
+    /// write itemInfo overlays, npcidentity/jobname overlays, and assets under ClientPatchRoot
+    /// or a dedicated custom GRF.
+    /// </summary>
+    PatchOnly = 0,
+
+    /// <summary>
+    /// Allow direct edits to the live client install under ClientRootPath
+    /// (e.g. System/itemInfo_C.lua and icons under data/texture).
+    /// This is convenient for single-user setups but less safe for shared clients.
+    /// </summary>
+    LiveClient = 1
+}
+
+/// <summary>
+/// A single workspace profile (server + client + patch paths, GRF list, and write mode).
 /// </summary>
 public class WorkspaceProfile
 {
+    /// <summary>Display name for the profile (shown in the FILE ASSIGNMENT UI).</summary>
     public string Name { get; set; } = "Default";
+
+    /// <summary>
+    /// rAthena root folder. Base DB is read from db/re or db/pre-re; only db/import is written.
+    /// </summary>
     public string? DataPath { get; set; }
+
+    /// <summary>
+    /// Base client installation root. Used as a read source for System/ scripts and GRF files.
+    /// In PatchOnly mode this should generally be treated as read-only.
+    /// </summary>
     public string? ClientRootPath { get; set; }
+
+    /// <summary>
+    /// Patch output root. RoDbEditor writes overlay System/ and data/ files here for distribution
+    /// via a patcher or GRF builder when running in PatchOnly mode.
+    /// </summary>
     public string? ClientPatchRoot { get; set; }
+
+    /// <summary>
+    /// Full path override for the target custom GRF that RoDbEditor may modify (sprites, accessory tables).
+    /// If null, ClientRootPath + TargetGrfFileName is used.
+    /// </summary>
     public string? TargetGrfPath { get; set; }
+
+    /// <summary>
+    /// File name of the writable custom GRF (default: custom.grf) when TargetGrfPath is not set.
+    /// </summary>
     public string TargetGrfFileName { get; set; } = "custom.grf";
+
+    /// <summary>
+    /// Ordered list of GRF files used as read sources for sprites and client data.
+    /// The order should mirror DATA.ini (index 0 = highest priority).
+    /// </summary>
     public List<string> GrfPaths { get; } = new();
+
+    /// <summary>
+    /// How RoDbEditor is allowed to write client-side data for this profile
+    /// (PatchOnly vs LiveClient). Defaults to PatchOnly for safety.
+    /// </summary>
+    public ClientWriteMode ClientWriteMode { get; set; } = ClientWriteMode.PatchOnly;
 
     public WorkspaceProfile Clone()
     {
@@ -26,7 +81,8 @@ public class WorkspaceProfile
             ClientRootPath = ClientRootPath,
             ClientPatchRoot = ClientPatchRoot,
             TargetGrfPath = TargetGrfPath,
-            TargetGrfFileName = TargetGrfFileName
+            TargetGrfFileName = TargetGrfFileName,
+            ClientWriteMode = ClientWriteMode
         };
         foreach (var path in GrfPaths)
             p.GrfPaths.Add(path);
@@ -35,7 +91,14 @@ public class WorkspaceProfile
 }
 
 /// <summary>
-/// Loads and holds RoDbEditor configuration (GRF paths, etc.).
+/// Loads and holds RoDbEditor configuration:
+/// - DataPath: rAthena root; only db/import is written.
+/// - ClientRootPath: base client install; primarily read, optionally written in LiveClient mode.
+/// - ClientPatchRoot: patch output root; preferred write target in PatchOnly mode.
+/// - TargetGrfPath/TargetGrfFileName: writable custom GRF used for sprites and accessory tables.
+/// - GrfPaths: ordered GRF list used for reads, mirroring DATA.ini priority where possible.
+/// - ClientWriteMode: whether writes go to the live client or patch outputs.
+///
 /// Config file: %AppData%\RoDbEditor\RoDbEditor.ini only (per-user, so the app folder stays portable).
 /// </summary>
 public class RoDbEditorConfig
@@ -50,8 +113,14 @@ public class RoDbEditorConfig
     /// <summary>Name of the currently active profile.</summary>
     public string? ActiveProfileName { get; set; }
 
-    /// <summary>Legacy single-profile fields; kept in sync with active profile for existing call sites.</summary>
+    /// <summary>
+    /// Legacy single-profile fields; kept in sync with active profile for existing call sites.
+    /// These mirror the active WorkspaceProfile and should not diverge from it.
+    /// </summary>
     public List<string> GrfPaths { get; } = new();
+    /// <summary>
+    /// rAthena root for the active profile. Only db/import is written; base DB remains read-only.
+    /// </summary>
     public string? DataPath { get; set; }
 
     /// <summary>Target GRF filename for asset assignment (default: custom.grf).</summary>
@@ -60,11 +129,24 @@ public class RoDbEditorConfig
     /// <summary>Full path override for target GRF. When set, used instead of ClientRoot + TargetGrfFileName.</summary>
     public string? TargetGrfPath { get; set; }
 
-    /// <summary>Ragnarok client root folder (contains System/ and GRF files).</summary>
+    /// <summary>
+    /// Ragnarok client root folder (contains System/ and GRF files).
+    /// In PatchOnly mode this is treated as read-mostly; in LiveClient mode some writers
+    /// may update files directly under this path for convenience.
+    /// </summary>
     public string? ClientRootPath { get; set; }
 
-    /// <summary>Patch output root where RoDbEditor writes System/ and data/ overlay files.</summary>
+    /// <summary>
+    /// Patch output root where RoDbEditor writes System/ and data/ overlay files when generating
+    /// patch content (e.g. itemInfo_rodbeditor.lua, npcidentity/jobname overlays).
+    /// </summary>
     public string? ClientPatchRoot { get; set; }
+
+    /// <summary>
+    /// How RoDbEditor is allowed to write client-side data for the active profile.
+    /// Defaults to PatchOnly and is synchronized with the active WorkspaceProfile.
+    /// </summary>
+    public ClientWriteMode ClientWriteMode { get; set; } = ClientWriteMode.PatchOnly;
 
     public static RoDbEditorConfig Load()
     {
@@ -144,6 +226,11 @@ public class RoDbEditorConfig
                         config.ClientRootPath = value;
                     if (string.Equals(key, "ClientPatchRoot", System.StringComparison.OrdinalIgnoreCase))
                         config.ClientPatchRoot = value;
+                    if (string.Equals(key, "ClientWriteMode", System.StringComparison.OrdinalIgnoreCase) && !string.IsNullOrEmpty(value))
+                    {
+                        if (System.Enum.TryParse<ClientWriteMode>(value, ignoreCase: true, out var mode))
+                            config.ClientWriteMode = mode;
+                    }
                 }
             }
 
@@ -198,6 +285,11 @@ public class RoDbEditorConfig
             profile.TargetGrfPath = value;
         else if (string.Equals(key, "TargetGrfFileName", System.StringComparison.OrdinalIgnoreCase) && !string.IsNullOrEmpty(value))
             profile.TargetGrfFileName = value;
+        else if (string.Equals(key, "ClientWriteMode", System.StringComparison.OrdinalIgnoreCase) && !string.IsNullOrEmpty(value))
+        {
+            if (System.Enum.TryParse<ClientWriteMode>(value, ignoreCase: true, out var mode))
+                profile.ClientWriteMode = mode;
+        }
         else if ((string.Equals(key, "Path", System.StringComparison.OrdinalIgnoreCase) || string.Equals(key, "GrfPath", System.StringComparison.OrdinalIgnoreCase)) && !string.IsNullOrEmpty(value))
             profile.GrfPaths.Add(value);
     }
@@ -238,6 +330,7 @@ public class RoDbEditorConfig
             if (!string.IsNullOrEmpty(profile.TargetGrfPath))
                 sb.AppendLine("TargetGrfPath=" + profile.TargetGrfPath);
             sb.AppendLine("TargetGrfFileName=" + (profile.TargetGrfFileName ?? "custom.grf"));
+            sb.AppendLine("ClientWriteMode=" + profile.ClientWriteMode);
             foreach (var path in profile.GrfPaths)
             {
                 if (!string.IsNullOrEmpty(path))
@@ -257,6 +350,7 @@ public class RoDbEditorConfig
             sb.AppendLine("ClientRootPath=" + ClientRootPath);
         if (!string.IsNullOrEmpty(ClientPatchRoot))
             sb.AppendLine("ClientPatchRoot=" + ClientPatchRoot);
+        sb.AppendLine("ClientWriteMode=" + ClientWriteMode);
         foreach (var path in GrfPaths)
         {
             if (!string.IsNullOrEmpty(path))
@@ -286,7 +380,8 @@ public class RoDbEditorConfig
             ClientRootPath = ClientRootPath,
             ClientPatchRoot = ClientPatchRoot,
             TargetGrfPath = TargetGrfPath,
-            TargetGrfFileName = TargetGrfFileName ?? "custom.grf"
+            TargetGrfFileName = TargetGrfFileName ?? "custom.grf",
+            ClientWriteMode = ClientWriteMode
         };
         foreach (var path in GrfPaths)
             legacy.GrfPaths.Add(path);
@@ -306,6 +401,7 @@ public class RoDbEditorConfig
         ClientPatchRoot = active.ClientPatchRoot;
         TargetGrfPath = active.TargetGrfPath;
         TargetGrfFileName = active.TargetGrfFileName ?? "custom.grf";
+        ClientWriteMode = active.ClientWriteMode;
         GrfPaths.Clear();
         foreach (var path in active.GrfPaths)
             GrfPaths.Add(path);

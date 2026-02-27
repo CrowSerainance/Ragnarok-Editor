@@ -10,7 +10,15 @@ using YamlDotNet.Serialization.NamingConventions;
 namespace RoDbEditor.Services;
 
 /// <summary>
-/// Loads and manages item_db from rAthena YAML, OR from GRF iteminfo.lub as fallback.
+/// Server-side item database facade.
+///
+/// Responsibilities:
+/// - Load base item data from rAthena YAML under DataPath (db/re, db/pre-re, or db).
+/// - Load import/overlay items from DataPath/db/import/item_db.yml (these override base items).
+/// - Optionally load items from GRF iteminfo.lub when no YAML data folder is available.
+/// - Expose a unified in-memory list of ItemEntry rows with SourceFile/SourceIndex metadata.
+/// - Persist edits and new items back to YAML, always preferring db/import for writes so the
+///   official base DB remains read-only.
 /// </summary>
 public class ItemDbService
 {
@@ -53,7 +61,27 @@ public class ItemDbService
 
     /// <summary>
     /// Load items from rAthena data path (YAML files).
-    /// Loads ALL item_db files: item_db.yml, item_db_equip.yml, item_db_etc.yml
+    ///
+    /// Search order:
+    /// - db/re
+    /// - db/pre-re
+    /// - db
+    /// - (fallback) dataPath itself
+    ///
+    /// For the first folder that contains any of:
+    /// - item_db.yml
+    /// - item_db_equip.yml
+    /// - item_db_etc.yml
+    /// - item_db_usable.yml
+    ///
+    /// this method:
+    /// - loads all present base files from that folder, then
+    /// - loads db/import/item_db.yml as an overlay using the same DataPath root.
+    ///
+    /// Overlay behavior:
+    /// - When a Body entry in import has the same Id as a base entry, the import
+    ///   entry replaces the base version and a DbOverrideRecord is recorded.
+    /// - New custom IDs (typically >= 50000) simply append to the in-memory list.
     /// </summary>
     public void LoadFromDataPath(string dataPath)
     {
@@ -235,6 +263,11 @@ public class ItemDbService
 
     /// <summary>
     /// Get the next available custom item ID (50000+ range).
+    ///
+    /// Convention:
+    /// - Item IDs &gt;= 50000 are treated as custom and are always written
+    ///   to db/import/item_db.yml via ResolveItemFilePath/GetImportItemDbPathForWrite.
+    /// - This keeps official item_db_equip.yml / etc. read-only.
     /// </summary>
     public int GetNextCustomItemId()
     {
@@ -249,7 +282,13 @@ public class ItemDbService
 
     /// <summary>
     /// Get the next available custom headgear View ID.
-    /// Starts from 32000 by default and skips any IDs already used in loaded items.
+    ///
+    /// Convention:
+    /// - Custom headgear View IDs start from the supplied base (default 32000).
+    /// - This helper returns the first unused positive integer &gt;= start across
+    ///   all currently loaded items that have a non-zero View.
+    /// - Callers (e.g. validation in MainWindow) use this to auto-assign View
+    ///   for Head_ / Costume_Head_ items that are missing one.
     /// </summary>
     public int GetNextCustomViewId(int start = 32000)
     {
