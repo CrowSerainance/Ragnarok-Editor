@@ -483,9 +483,50 @@ public class AccessoryIdWriter
         }
     }
 
+    /// <summary>Generate preview lines for accessoryid and accname (no file I/O). Used by output preview tab.</summary>
+    public static string GetPreviewLines(int viewId, string? resourceNameOrAegisName)
+    {
+        if (viewId <= 0) return "";
+        var raw = string.IsNullOrWhiteSpace(resourceNameOrAegisName) ? "Custom_Item" : resourceNameOrAegisName.Trim();
+        var resourceName = NormalizeResourceNamePublic(raw);
+        var constName = ToAccessoryConstantNamePublic(raw);
+        var accNameLine = $"[ACCESSORY_IDs.{constName}] = \"_{EscapeLua(resourceName)}\",";
+        var accIdLine = $"{constName} = {viewId},";
+        return "-- accessoryid.lua\n" + accIdLine + "\n\n-- accname.lua\n" + accNameLine + "\n";
+    }
+
     private static string EscapeLua(string s)
     {
         return s?.Replace("\\", "\\\\").Replace("\"", "\\\"") ?? "";
+    }
+
+    private static string ToAccessoryConstantNamePublic(string aegisName)
+    {
+        var sb = new StringBuilder();
+        foreach (var c in aegisName)
+        {
+            if (char.IsLetterOrDigit(c) || c == '_')
+                sb.Append(c == ' ' ? '_' : c);
+        }
+        var name = sb.ToString();
+        if (string.IsNullOrEmpty(name)) name = "Custom_Item";
+        return "ACCESSORY_" + name.Replace(" ", "_").ToUpperInvariant();
+    }
+
+    private static string NormalizeResourceNamePublic(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return "Custom_Item";
+        var sb = new StringBuilder();
+        foreach (var c in value.Trim())
+        {
+            if (char.IsLetterOrDigit(c) || c == '_')
+                sb.Append(c);
+            else if (char.IsWhiteSpace(c))
+                sb.Append('_');
+        }
+        var normalized = sb.ToString();
+        return string.IsNullOrWhiteSpace(normalized) ? "Custom_Item" : normalized;
     }
 
     private static string NormalizeResourceName(string value)

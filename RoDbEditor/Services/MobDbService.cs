@@ -583,16 +583,24 @@ public class MobDbService
 
     /// <summary>
     /// Get the next available custom mob ID (30000+ range).
+    /// When IdRegistryService is available and config ranges are set, delegates to it.
     /// </summary>
     public int GetNextCustomMobId()
     {
+        var registry = RoDbEditor.App.IdRegistryService;
+        var config = RoDbEditor.App.Config;
+        if (registry != null && config != null && config.MobIdMin <= config.MobIdMax)
+            return registry.AllocateNextMobId(config.MobIdMin, config.MobIdMax);
+
         int maxCustom = 29999;
         foreach (var mob in _mobs)
         {
             if (mob.Id >= 30000 && mob.Id > maxCustom)
                 maxCustom = mob.Id;
         }
-        return Math.Max(30000, maxCustom + 1);
+        var id = Math.Max(30000, maxCustom + 1);
+        registry?.ReserveMobId(id);
+        return id;
     }
 
     /// <summary>

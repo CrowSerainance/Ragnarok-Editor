@@ -11,6 +11,25 @@
         Title="RoDbEditor (GRF-based) — RateMyServer-style DB Editor" Height="720" Width="1280"
         MinHeight="500" MinWidth="900">
     <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="110" MinWidth="90" MaxWidth="140"/>
+            <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
+        <!-- Left sidebar: TOOLS (RDL-style) -->
+        <Border Grid.Column="0" BorderBrush="#ccc" BorderThickness="0,0,1,0" Background="#f8f8f8" Padding="6,8">
+            <StackPanel>
+                <TextBlock Text="TOOLS" FontWeight="SemiBold" Margin="0,0,0,6" FontSize="12"/>
+                <Button Content="Items" Margin="0,2" Padding="6,4" Click="SidebarItems_Click" ToolTip="Item list + editor"/>
+                <Button Content="Batch Import" Margin="0,2" Padding="6,4" Click="SidebarBatchImport_Click" ToolTip="Import folder → table → Generate All"/>
+                <Button Content="Monsters" Margin="0,2" Padding="6,4" Click="SidebarMonsters_Click" ToolTip="Mob list + editor"/>
+                <Button Content="NPCs" Margin="0,2" Padding="6,4" Click="SidebarNpcs_Click" ToolTip="NPC list + templates"/>
+                <Button Content="Package Builder" Margin="0,2" Padding="6,4" Click="SidebarPackageBuilder_Click" ToolTip="Random box weights"/>
+                <Separator Margin="0,8,0,6"/>
+                <Button Content="Workspace" Margin="0,2" Padding="6,4" Click="SidebarWorkspace_Click" ToolTip="Paths + ID ranges"/>
+                <Button Content="Clear cache" Margin="0,2" Padding="6,4" Click="SidebarClearCache_Click" ToolTip="Refresh ID registry and GRF caches"/>
+            </StackPanel>
+        </Border>
+        <Grid Grid.Column="1">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
@@ -45,6 +64,7 @@
                 <MenuItem Header="Append npcidentity/jobname overlay" Click="AppendNpcIdentity_Click"/>
             </MenuItem>
             <MenuItem Header="_Help">
+                <MenuItem Header="Setup Wizard..." Click="MenuSetupWizard_Click" ToolTip="Re-run first-run setup to change paths and write mode"/>
                 <MenuItem Header="Sprite Diagnostic..." Click="MenuSpriteDiagnostic_Click"/>
                 <MenuItem Header="About RoDbEditor"/>
             </MenuItem>
@@ -53,6 +73,8 @@
         <!-- Tabs: ITEMS, MONSTERS, NPCs, MAPS, QUESTS -->
         <TabControl x:Name="CategoryTabs" Grid.Row="1" Margin="8,4" SelectedIndex="0" SelectionChanged="CategoryTabs_SelectionChanged">
             <TabItem Header="ITEMS"/>
+            <TabItem Header="Batch Import" x:Name="BatchImportTab"/>
+            <TabItem Header="Package Builder" x:Name="PackageBuilderTab"/>
             <TabItem Header="MONSTERS"/>
             <TabItem Header="NPCs"/>
             <TabItem Header="MAPS"/>
@@ -70,8 +92,8 @@
                 <ColumnDefinition Width="*" MinWidth="280"/>
             </Grid.ColumnDefinitions>
 
-            <!-- Left: Search + virtualized list -->
-            <Grid Grid.Column="0">
+            <!-- Left: Search + virtualized list (or Batch Import grid when that tab is active) -->
+            <Grid Grid.Column="0" x:Name="LeftListGrid">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
@@ -108,6 +130,58 @@
                          VirtualizingStackPanel.VirtualizationMode="Recycling"
                          ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                          ScrollViewer.CanContentScroll="True"/>
+            </Grid>
+            <!-- Batch Import: DataGrid + buttons (visible when Batch Import tab selected) -->
+            <Grid Grid.Column="0" x:Name="BatchImportPanel" Visibility="Collapsed">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*" MinHeight="120"/>
+                </Grid.RowDefinitions>
+                <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,6">
+                    <Button Content="Import folder..." Padding="8,4" Margin="0,0,6,0" Click="BatchImportFolder_Click"/>
+                    <Button Content="New Item List" Padding="8,4" Margin="0,0,6,0" Click="BatchNewItemList_Click" ToolTip="Clear table and advance working ID block"/>
+                    <Button Content="Generate All" Padding="8,4" Click="BatchGenerateAll_Click" ToolTip="Write server + client files for all rows"/>
+                </StackPanel>
+                <DataGrid x:Name="BatchImportGrid" Grid.Row="1"
+                          AutoGenerateColumns="False" CanUserAddRows="False" CanUserDeleteRows="True" CanUserReorderColumns="False"
+                          SelectionMode="Single" SelectionChanged="BatchImportGrid_SelectionChanged"
+                          VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling"
+                          MinHeight="120" HeadersVisibility="Column" GridLinesVisibility="Horizontal">
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="ItemId" Binding="{Binding ItemId, UpdateSourceTrigger=PropertyChanged}" Width="60"/>
+                        <DataGridTextColumn Header="ViewId" Binding="{Binding ViewId, UpdateSourceTrigger=PropertyChanged}" Width="55"/>
+                        <DataGridTextColumn Header="DisplayName" Binding="{Binding DisplayName, UpdateSourceTrigger=PropertyChanged}" Width="*"/>
+                        <DataGridTextColumn Header="Type" Binding="{Binding Type, UpdateSourceTrigger=PropertyChanged}" Width="70"/>
+                        <DataGridTextColumn Header="Sprite" Binding="{Binding SpriteName, UpdateSourceTrigger=PropertyChanged}" Width="100"/>
+                        <DataGridTextColumn Header="Icon" Binding="{Binding IconName, UpdateSourceTrigger=PropertyChanged}" Width="80"/>
+                    </DataGrid.Columns>
+                </DataGrid>
+            </Grid>
+            <!-- Package Builder (visible when Package Builder tab selected) -->
+            <Grid Grid.Column="0" x:Name="PackageBuilderPanel" Visibility="Collapsed">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*" MinHeight="80"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="120"/>
+                </Grid.RowDefinitions>
+                <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,6">
+                    <Button Content="Add row" Padding="8,4" Margin="0,0,6,0" Click="PackageAddRow_Click"/>
+                    <Button Content="Fix total to 10000" Padding="8,4" Margin="0,0,6,0" Click="PackageFixWeight_Click" ToolTip="Scale weights so they sum to 10000"/>
+                    <TextBlock x:Name="PackageTotalWeight" Text="Total: 0 / 10000" VerticalAlignment="Center" Margin="8,0,0,0"/>
+                </StackPanel>
+                <DataGrid x:Name="PackageBuilderGrid" Grid.Row="1"
+                          AutoGenerateColumns="False" CanUserAddRows="False" CanUserDeleteRows="True"
+                          MinHeight="80" HeadersVisibility="Column" GridLinesVisibility="Horizontal"
+                          CellEditEnding="PackageBuilderGrid_CellEditEnding">
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="ItemId" Binding="{Binding ItemId, UpdateSourceTrigger=PropertyChanged}" Width="70"/>
+                        <DataGridTextColumn Header="Amount" Binding="{Binding Amount, UpdateSourceTrigger=PropertyChanged}" Width="60"/>
+                        <DataGridTextColumn Header="Weight" Binding="{Binding Weight, UpdateSourceTrigger=PropertyChanged}" Width="70"/>
+                    </DataGrid.Columns>
+                </DataGrid>
+                <TextBlock Grid.Row="2" Text="Script preview (getitem + probability):" Margin="0,6,0,2"/>
+                <TextBox x:Name="PackageScriptPreview" Grid.Row="3" IsReadOnly="True" FontFamily="Consolas" FontSize="11" VerticalScrollBarVisibility="Auto" TextWrapping="NoWrap" AcceptsReturn="True" Margin="0,0,0,4"/>
             </Grid>
 
             <GridSplitter Grid.Column="1" Width="6" HorizontalAlignment="Stretch" Background="#c0c0c0"
@@ -457,6 +531,52 @@
                         </ScrollViewer>
                         <!-- NPC details (NPCs tab) -->
                         <StackPanel x:Name="NpcDetailsPanel" Visibility="Collapsed">
+                            <Expander Header="NPC Generator (from template)" Margin="0,0,0,8" IsExpanded="False">
+                                <StackPanel Margin="0,6,0,0">
+                                    <Grid Margin="0,0,0,4">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="80"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                        </Grid.RowDefinitions>
+                                        <TextBlock Text="Template:" Grid.Row="0" Grid.Column="0" VerticalAlignment="Center" Margin="0,2"/>
+                                        <ComboBox x:Name="NpcTemplateType" Grid.Row="0" Grid.Column="1" Margin="0,2" SelectedIndex="0">
+                                            <ComboBoxItem Content="Dialogue (mes/next/close)"/>
+                                            <ComboBoxItem Content="Warp"/>
+                                            <ComboBoxItem Content="Shop"/>
+                                        </ComboBox>
+                                        <TextBlock Text="Map:" Grid.Row="1" Grid.Column="0" VerticalAlignment="Center" Margin="0,2"/>
+                                        <TextBox x:Name="NpcGenMap" Grid.Row="1" Grid.Column="1" Margin="0,2" Padding="4,2" Text="prontera"/>
+                                        <TextBlock Text="X, Y, Dir:" Grid.Row="2" Grid.Column="0" VerticalAlignment="Center" Margin="0,2"/>
+                                        <StackPanel Grid.Row="2" Grid.Column="1" Orientation="Horizontal" Margin="0,2">
+                                            <TextBox x:Name="NpcGenX" Width="50" Padding="4,2" Margin="0,0,4,0" Text="150"/>
+                                            <TextBox x:Name="NpcGenY" Width="50" Padding="4,2" Margin="0,0,4,0" Text="150"/>
+                                            <TextBox x:Name="NpcGenDir" Width="30" Padding="4,2" Text="4"/>
+                                        </StackPanel>
+                                        <TextBlock Text="Name:" Grid.Row="3" Grid.Column="0" VerticalAlignment="Center" Margin="0,2"/>
+                                        <TextBox x:Name="NpcGenName" Grid.Row="3" Grid.Column="1" Margin="0,2" Padding="4,2" Text="Custom NPC"/>
+                                        <TextBlock Text="Sprite ID:" Grid.Row="4" Grid.Column="0" VerticalAlignment="Center" Margin="0,2"/>
+                                        <TextBox x:Name="NpcGenSpriteId" Grid.Row="4" Grid.Column="1" Margin="0,2" Padding="4,2" Text="1"/>
+                                        <TextBlock Text="Warp target:" Grid.Row="5" Grid.Column="0" VerticalAlignment="Center" Margin="0,2"/>
+                                        <StackPanel Grid.Row="5" Grid.Column="1" Orientation="Horizontal" Margin="0,2">
+                                            <TextBox x:Name="NpcGenWarpMap" Width="100" Padding="4,2" Margin="0,0,4,0" Text="prontera"/>
+                                            <TextBox x:Name="NpcGenWarpX" Width="50" Padding="4,2" Margin="0,0,4,0" Text="156"/>
+                                            <TextBox x:Name="NpcGenWarpY" Width="50" Padding="4,2" Text="191"/>
+                                        </StackPanel>
+                                    </Grid>
+                                    <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                                        <Button Content="Generate script" Padding="8,4" Margin="0,0,8,0" Click="NpcGenGenerate_Click"/>
+                                        <Button Content="Copy GM test command" Padding="8,4" Click="NpcGenCopyGmCommand_Click" ToolTip="Copy @warp map x y"/>
+                                    </StackPanel>
+                                </StackPanel>
+                            </Expander>
                             <TextBlock Text="NPC DETAILS" FontWeight="SemiBold" Margin="0,0,0,8"/>
                             <TextBlock x:Name="NpcDetailName" Text="NAME: —" Margin="0,0,0,4"/>
                             <TextBlock x:Name="NpcDetailMapPos" Text="Map (X,Y): —" Margin="0,0,0,4"/>
@@ -504,6 +624,15 @@
                                 <Button x:Name="NpcExportButton" Content="COPY BUNDLE" Padding="12,6" Margin="0,0,8,0" Click="NpcExportButton_Click"/>
                                 <Button Content="CANCEL" Padding="12,6" Click="NpcCancelButton_Click"/>
                             </StackPanel>
+                        </StackPanel>
+                        <!-- Batch Import row inspector (when a batch row is selected) -->
+                        <StackPanel x:Name="BatchInspectorPanel" Visibility="Collapsed" Margin="0,0,0,8">
+                            <TextBlock Text="BATCH ROW — Deep edit" FontWeight="SemiBold" Margin="0,0,0,6"/>
+                            <TextBlock Text="Description" Margin="0,4,0,2"/>
+                            <TextBox x:Name="BatchInspectorDescription" MinHeight="60" TextWrapping="Wrap" AcceptsReturn="True" Padding="4" Margin="0,0,0,6" LostFocus="BatchInspectorDescription_LostFocus"/>
+                            <TextBlock Text="Script" Margin="0,4,0,2"/>
+                            <TextBox x:Name="BatchInspectorScript" MinHeight="60" TextWrapping="Wrap" AcceptsReturn="True" Padding="4" FontFamily="Consolas" FontSize="11" Margin="0,0,0,6" LostFocus="BatchInspectorScript_LostFocus"/>
+                            <TextBlock x:Name="BatchInspectorWarnings" Foreground="OrangeRed" TextWrapping="Wrap" Margin="0,4,0,0" FontSize="11"/>
                         </StackPanel>
                         <!-- FILE ASSIGNMENT tab -->
                         <ScrollViewer x:Name="FileAssignmentPanel" Visibility="Collapsed" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
@@ -568,6 +697,37 @@
                                     <TextBox x:Name="FileAssignGrfPath" Grid.Row="6" Grid.Column="1" IsReadOnly="True" Padding="4,2" Margin="0,4" VerticalContentAlignment="Center"/>
                                     <Button Grid.Row="6" Grid.Column="2" Content="Open in GRF Editor" Padding="8,4" Margin="4,4,0,4" Click="FileAssignOpenGrf_Click"/>
                                 </Grid>
+                                <Expander Header="ID Ranges (custom Item / View / Mob allocation)" Margin="0,8,0,0" IsExpanded="True">
+                                    <StackPanel Margin="0,6,0,4">
+                                        <TextBlock Text="Configure min/max for custom IDs. Last used shows the latest allocated ID. Manual override in items may show a warning if the ID is already in the registry." TextWrapping="Wrap" Margin="0,0,0,6" FontSize="11"/>
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="100"/>
+                                                <ColumnDefinition Width="70"/>
+                                                <ColumnDefinition Width="70"/>
+                                                <ColumnDefinition Width="*"/>
+                                            </Grid.ColumnDefinitions>
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="Auto"/>
+                                                <RowDefinition Height="Auto"/>
+                                                <RowDefinition Height="Auto"/>
+                                            </Grid.RowDefinitions>
+                                            <TextBlock Grid.Row="0" Grid.Column="0" Text="Item ID:" VerticalAlignment="Center" Margin="0,2"/>
+                                            <TextBox x:Name="FileAssignItemIdMin" Grid.Row="0" Grid.Column="1" Padding="4,2" Margin="0,2" VerticalContentAlignment="Center" LostFocus="FileAssignIdRange_LostFocus"/>
+                                            <TextBox x:Name="FileAssignItemIdMax" Grid.Row="0" Grid.Column="2" Padding="4,2" Margin="0,2" VerticalContentAlignment="Center" LostFocus="FileAssignIdRange_LostFocus"/>
+                                            <TextBlock x:Name="FileAssignItemIdLast" Grid.Row="0" Grid.Column="3" Text="Last: —" VerticalAlignment="Center" Margin="8,2,0,2" FontSize="11"/>
+                                            <TextBlock Grid.Row="1" Grid.Column="0" Text="View ID:" VerticalAlignment="Center" Margin="0,2"/>
+                                            <TextBox x:Name="FileAssignViewIdMin" Grid.Row="1" Grid.Column="1" Padding="4,2" Margin="0,2" VerticalContentAlignment="Center" LostFocus="FileAssignIdRange_LostFocus"/>
+                                            <TextBox x:Name="FileAssignViewIdMax" Grid.Row="1" Grid.Column="2" Padding="4,2" Margin="0,2" VerticalContentAlignment="Center" LostFocus="FileAssignIdRange_LostFocus"/>
+                                            <TextBlock x:Name="FileAssignViewIdLast" Grid.Row="1" Grid.Column="3" Text="Last: —" VerticalAlignment="Center" Margin="8,2,0,2" FontSize="11"/>
+                                            <TextBlock Grid.Row="2" Grid.Column="0" Text="Mob ID:" VerticalAlignment="Center" Margin="0,2"/>
+                                            <TextBox x:Name="FileAssignMobIdMin" Grid.Row="2" Grid.Column="1" Padding="4,2" Margin="0,2" VerticalContentAlignment="Center" LostFocus="FileAssignIdRange_LostFocus"/>
+                                            <TextBox x:Name="FileAssignMobIdMax" Grid.Row="2" Grid.Column="2" Padding="4,2" Margin="0,2" VerticalContentAlignment="Center" LostFocus="FileAssignIdRange_LostFocus"/>
+                                            <TextBlock x:Name="FileAssignMobIdLast" Grid.Row="2" Grid.Column="3" Text="Last: —" VerticalAlignment="Center" Margin="8,2,0,2" FontSize="11"/>
+                                        </Grid>
+                                        <Button Content="Refresh registry" Padding="8,4" Margin="0,6,0,0" HorizontalAlignment="Left" Click="FileAssignRefreshIdRegistry_Click" ToolTip="Rescan db/import and client accessory tables for used IDs"/>
+                                    </StackPanel>
+                                </Expander>
                                 <Expander Header="Custom Item Pipeline Reference" Margin="0,12,0,0" IsExpanded="False">
                                     <TextBlock TextWrapping="Wrap" FontSize="11" Margin="0,4,0,4">
                                         <Run Text="1. rAthena location: server db/import (item_db.yml, mob_db.yml, etc.). Use File → Select rAthena folder to set."/>
@@ -638,7 +798,52 @@
                         </ListView>
                     </Grid>
                 </TabItem>
+                <TabItem Header="Output preview">
+                    <TabControl x:Name="PreviewSubTabs" Margin="0,0,0,4">
+                            <TabItem Header="YAML" x:Name="PreviewYamlTab">
+                                <Grid>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="*"/>
+                                    </Grid.RowDefinitions>
+                                    <Button Grid.Row="0" Content="Copy to clipboard" Padding="6,3" Margin="0,0,0,4" HorizontalAlignment="Left" Click="PreviewCopyYaml_Click"/>
+                                    <TextBox x:Name="PreviewYamlText" Grid.Row="1" IsReadOnly="True" FontFamily="Consolas" FontSize="11" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" TextWrapping="NoWrap" AcceptsReturn="True" MinHeight="80"/>
+                                </Grid>
+                            </TabItem>
+                            <TabItem Header="Lua overlay" x:Name="PreviewLuaTab">
+                                <Grid>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="*"/>
+                                    </Grid.RowDefinitions>
+                                    <Button Grid.Row="0" Content="Copy to clipboard" Padding="6,3" Margin="0,0,0,4" HorizontalAlignment="Left" Click="PreviewCopyLua_Click"/>
+                                    <TextBox x:Name="PreviewLuaText" Grid.Row="1" IsReadOnly="True" FontFamily="Consolas" FontSize="11" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" TextWrapping="NoWrap" AcceptsReturn="True" MinHeight="80"/>
+                                </Grid>
+                            </TabItem>
+                            <TabItem Header="Accessory tables" x:Name="PreviewAccessoryTab">
+                                <Grid>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="*"/>
+                                    </Grid.RowDefinitions>
+                                    <Button Grid.Row="0" Content="Copy to clipboard" Padding="6,3" Margin="0,0,0,4" HorizontalAlignment="Left" Click="PreviewCopyAccessory_Click"/>
+                                    <TextBox x:Name="PreviewAccessoryText" Grid.Row="1" IsReadOnly="True" FontFamily="Consolas" FontSize="11" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" TextWrapping="NoWrap" AcceptsReturn="True" MinHeight="80"/>
+                                </Grid>
+                            </TabItem>
+                            <TabItem Header="NPC script" x:Name="PreviewNpcTab">
+                                <Grid>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="*"/>
+                                    </Grid.RowDefinitions>
+                                    <Button Grid.Row="0" Content="Copy to clipboard" Padding="6,3" Margin="0,0,0,4" HorizontalAlignment="Left" Click="PreviewCopyNpc_Click"/>
+                                    <TextBox x:Name="PreviewNpcText" Grid.Row="1" IsReadOnly="True" FontFamily="Consolas" FontSize="11" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" TextWrapping="NoWrap" AcceptsReturn="True" MinHeight="80"/>
+                                </Grid>
+                            </TabItem>
+                        </TabControl>
+                </TabItem>
             </TabControl>
         </Expander>
+        </Grid>
     </Grid>
 </Window>

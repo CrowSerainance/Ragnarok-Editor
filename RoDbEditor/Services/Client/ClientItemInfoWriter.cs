@@ -81,7 +81,8 @@ end
         return outPath;
     }
 
-    private static string RenderEntry(ClientItemInfoEntry e)
+    /// <summary>Render a single item entry as Lua table snippet for preview or overlay.</summary>
+    public static string RenderEntry(ClientItemInfoEntry e)
     {
         var uName = EscapeLua(e.UnidentifiedDisplayName ?? "????");
         var uRes = EscapeLua(e.UnidentifiedResourceName ?? (e.IdentifiedResourceName ?? ""));

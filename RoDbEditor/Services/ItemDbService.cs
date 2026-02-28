@@ -263,37 +263,43 @@ public class ItemDbService
 
     /// <summary>
     /// Get the next available custom item ID (50000+ range).
-    ///
-    /// Convention:
-    /// - Item IDs &gt;= 50000 are treated as custom and are always written
-    ///   to db/import/item_db.yml via ResolveItemFilePath/GetImportItemDbPathForWrite.
-    /// - This keeps official item_db_equip.yml / etc. read-only.
+    /// When IdRegistryService is available and config ranges are set, delegates to it;
+    /// otherwise uses in-memory items to compute next ID.
     /// </summary>
     public int GetNextCustomItemId()
     {
+        var registry = RoDbEditor.App.IdRegistryService;
+        var config = RoDbEditor.App.Config;
+        if (registry != null && config != null && config.ItemIdMin <= config.ItemIdMax)
+        {
+            var id = registry.AllocateNextItemId(config.ItemIdMin, config.ItemIdMax);
+            return id;
+        }
         int maxCustom = 49999;
         foreach (var item in _items)
         {
             if (item.Id >= 50000 && item.Id > maxCustom)
                 maxCustom = item.Id;
         }
-        return maxCustom + 1;
+        var nextId = maxCustom + 1;
+        registry?.ReserveItemId(nextId);
+        return nextId;
     }
 
     /// <summary>
     /// Get the next available custom headgear View ID.
-    ///
-    /// Convention:
-    /// - Custom headgear View IDs start from the supplied base (default 32000).
-    /// - This helper returns the first unused positive integer &gt;= start across
-    ///   all currently loaded items that have a non-zero View.
-    /// - Callers (e.g. validation in MainWindow) use this to auto-assign View
-    ///   for Head_ / Costume_Head_ items that are missing one.
+    /// When IdRegistryService is available and config ranges are set, delegates to it;
+    /// otherwise uses in-memory items.
     /// </summary>
     public int GetNextCustomViewId(int start = 32000)
     {
         if (start < 1)
             start = 1;
+
+        var registry = RoDbEditor.App.IdRegistryService;
+        var config = RoDbEditor.App.Config;
+        if (registry != null && config != null && config.ViewIdMin <= config.ViewIdMax)
+            return registry.AllocateNextViewId(config.ViewIdMin, config.ViewIdMax);
 
         var used = new HashSet<int>(_items
             .Where(i => i.View.HasValue && i.View.Value > 0)
@@ -303,6 +309,7 @@ public class ItemDbService
         while (used.Contains(next))
             next++;
 
+        registry?.ReserveViewId(next);
         return next;
     }
 
@@ -608,6 +615,22 @@ public class ItemDbService
             entry["UnEquipScript"] = item.UnEquipScript;
 
         return entry;
+    }
+
+    /// <summary>Generate YAML preview for a single item (Header + Body with one entry). Used by output preview tab.</summary>
+    public string GetItemYamlPreview(ItemEntry item)
+    {
+        var body = new List<object> { BuildItemEntry(item) };
+        var doc = new Dictionary<object, object>
+        {
+            ["Header"] = new Dictionary<object, object> { ["Type"] = "ITEM_DB", ["Version"] = 3 },
+            ["Body"] = body
+        };
+        var serializer = new SerializerBuilder()
+            .WithNamingConvention(PascalCaseNamingConvention.Instance)
+            .ConfigureDefaultValuesHandling(DefaultValuesHandling.OmitNull | DefaultValuesHandling.OmitDefaults)
+            .Build();
+        return serializer.Serialize(doc);
     }
 
     private class ItemDbDocument

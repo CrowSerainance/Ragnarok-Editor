@@ -49,6 +49,7 @@ public partial class App : System.Windows.Application
     public static MobAvailService MobAvailService { get; private set; } = null!;
     public static ClientNpcIdentityService ClientNpcIdentityService { get; private set; } = null!;
     public static ClientJobNameService ClientJobNameService { get; private set; } = null!;
+    public static IdRegistryService IdRegistryService { get; private set; } = null!;
     public static IReadOnlyDictionary<int, string> ItemInfoDescriptions { get; set; } = new Dictionary<int, string>();
     public static IHighlightingDefinition? RagnarokScriptHighlighting { get; private set; }
 
@@ -163,8 +164,19 @@ public partial class App : System.Windows.Application
         if (!string.IsNullOrEmpty(Config.DataPath))
             ReloadDataPath(Config.DataPath);
 
+        RefreshIdRegistry();
+
         if (GrfService.IsLoaded)
             ReloadFromGrf();
+    }
+
+    /// <summary>Refresh IdRegistryService from db/import and optionally client accessory tables.</summary>
+    public static void RefreshIdRegistry()
+    {
+        IdRegistryService.ScanServerDbImport(Config.DataPath);
+        IdRegistryService.ScanClientAccessoryTables(
+            path => GrfService?.IsLoaded == true ? GrfService.GetData(path) : null,
+            Config.ClientRootPath);
     }
 
     /// <summary>
@@ -337,10 +349,8 @@ public partial class App : System.Windows.Application
         });
     }
 
-    protected override void OnStartup(StartupEventArgs e)
+    private void Application_Startup(object sender, StartupEventArgs e)
     {
-        base.OnStartup(e);
-
         // Register GrfImage -> BitmapSource converter
         ImageConverterManager.AddConverter(new GrfImageToWpfConverter());
 
@@ -399,6 +409,7 @@ public partial class App : System.Windows.Application
         }
         NpcScriptWriter = new NpcScriptWriter(Config.DataPath ?? clientRoot ?? string.Empty);
         EntityDesignationService = new EntityDesignationService(NpcIndexService, MobDbService);
+        IdRegistryService = new IdRegistryService();
         BlueprintExportService = new BlueprintExportService();
         ClientItemInfoService = new ClientItemInfoService();
         ClientItemInfoWriter = new ClientItemInfoWriter();
@@ -417,6 +428,8 @@ public partial class App : System.Windows.Application
             ReloadDataPath(Config.DataPath);
         }
 
+        RefreshIdRegistry();
+
         if (!string.IsNullOrEmpty(Config.ClientRootPath))
         {
             var clientSys = Path.Combine(Config.ClientRootPath, "System");
@@ -433,6 +446,33 @@ public partial class App : System.Windows.Application
         if (GrfService.IsLoaded)
         {
             ReloadFromGrf();
+        }
+
+        var needWizard = !Config.HasCompletedWizard ||
+            (string.IsNullOrEmpty(Config.DataPath) && string.IsNullOrEmpty(Config.ClientRootPath));
+
+        if (needWizard)
+        {
+            var wiz = new SetupWizard();
+            wiz.ShowDialog();
+            if (wiz.CompletedSuccessfully && Config.GetActiveProfile() is { } profile)
+            {
+                ApplyWorkspaceProfile(profile);
+                var main = new MainWindow();
+                MainWindow = main;
+                main.Show();
+            }
+            else
+            {
+                Shutdown();
+                return;
+            }
+        }
+        else
+        {
+            var main = new MainWindow();
+            MainWindow = main;
+            main.Show();
         }
     }
 

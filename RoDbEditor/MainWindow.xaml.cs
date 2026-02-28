@@ -19,6 +19,7 @@ using RoDbEditor.Data;
 using RoDbEditor.Models;
 using RoDbEditor.Services;
 using RoDbEditor.Services.Analysis;
+using RoDbEditor.Services.Client;
 using RoDbEditor.Services.Blueprint;
 using RoDbEditor.Services.Export;
 using RoDbEditor.UI;
@@ -39,7 +40,14 @@ public partial class MainWindow : Window
     }
 
     private readonly List<AssetEntry> _allAssets = new();
+    private readonly System.Collections.ObjectModel.ObservableCollection<BatchItemRow> _batchRows = new();
+    private readonly System.Collections.ObjectModel.ObservableCollection<PackageEntry> _packageEntries = new();
     private string _currentCategory = "ITEMS";
+
+    private void PackageEntries_CollectionChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
+    {
+        RefreshPackagePreview();
+    }
     private string _originalItemScript = "";
     private readonly List<(string bonusType, int value)> _itemBonusList = new();
     private ItemEntry? _currentItemForEdit;
@@ -54,6 +62,7 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        _packageEntries.CollectionChanged += PackageEntries_CollectionChanged;
         Loaded += (_, _) =>
         {
             RefreshList();
@@ -132,12 +141,44 @@ public partial class MainWindow : Window
 
     private void CategoryTabs_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (CategoryTabs == null || CategoryTabs.SelectedIndex < 0 || CategoryTabs.SelectedIndex > 5) return;
-        var headers = new[] { "ITEMS", "MONSTERS", "NPCs", "MAPS", "QUESTS", "FILE_ASSIGNMENT" };
+        if (CategoryTabs == null || CategoryTabs.SelectedIndex < 0 || CategoryTabs.SelectedIndex > 7) return;
+        var headers = new[] { "ITEMS", "BATCH_IMPORT", "PACKAGE_BUILDER", "MONSTERS", "NPCs", "MAPS", "QUESTS", "FILE_ASSIGNMENT" };
         _currentCategory = headers[CategoryTabs.SelectedIndex];
 
         if (FileAssignmentPanel != null)
             FileAssignmentPanel.Visibility = Visibility.Collapsed;
+
+        if (BatchImportPanel != null)
+            BatchImportPanel.Visibility = _currentCategory == "BATCH_IMPORT" ? Visibility.Visible : Visibility.Collapsed;
+        if (PackageBuilderPanel != null)
+            PackageBuilderPanel.Visibility = _currentCategory == "PACKAGE_BUILDER" ? Visibility.Visible : Visibility.Collapsed;
+        if (LeftListGrid != null)
+            LeftListGrid.Visibility = (_currentCategory == "BATCH_IMPORT" || _currentCategory == "PACKAGE_BUILDER") ? Visibility.Collapsed : Visibility.Visible;
+
+        if (_currentCategory == "BATCH_IMPORT")
+        {
+            if (BatchImportGrid != null)
+                BatchImportGrid.ItemsSource = _batchRows;
+            ItemDetailsPanel.Visibility = Visibility.Collapsed;
+            MonsterDetailsPanel.Visibility = Visibility.Collapsed;
+            NpcDetailsPanel.Visibility = Visibility.Collapsed;
+            BatchInspectorPanel.Visibility = Visibility.Collapsed;
+            UpdateListLabel();
+            return;
+        }
+
+        if (_currentCategory == "PACKAGE_BUILDER")
+        {
+            if (PackageBuilderGrid != null)
+                PackageBuilderGrid.ItemsSource = _packageEntries;
+            ItemDetailsPanel.Visibility = Visibility.Collapsed;
+            MonsterDetailsPanel.Visibility = Visibility.Collapsed;
+            NpcDetailsPanel.Visibility = Visibility.Collapsed;
+            BatchInspectorPanel.Visibility = Visibility.Collapsed;
+            RefreshPackagePreview();
+            UpdateListLabel();
+            return;
+        }
 
         if (NpcMapFilterPanel != null)
             NpcMapFilterPanel.Visibility = _currentCategory == "NPCs" ? Visibility.Visible : Visibility.Collapsed;
@@ -192,9 +233,10 @@ public partial class MainWindow : Window
             if (SearchBox == null || AssetListBox == null)
                 return;
 
-            if (_currentCategory == "FILE_ASSIGNMENT")
+            if (_currentCategory == "FILE_ASSIGNMENT" || _currentCategory == "BATCH_IMPORT" || _currentCategory == "PACKAGE_BUILDER")
             {
-                AssetListBox.ItemsSource = null;
+                if (_currentCategory != "BATCH_IMPORT")
+                    AssetListBox.ItemsSource = null;
                 return;
             }
 
@@ -291,6 +333,7 @@ public partial class MainWindow : Window
             MonsterDetailsPanel.Visibility = Visibility.Collapsed;
             NpcDetailsPanel.Visibility = Visibility.Collapsed;
             ShowItemDetails(itemEntry);
+            RefreshOutputPreview();
             return;
         }
 
@@ -300,6 +343,7 @@ public partial class MainWindow : Window
             MonsterDetailsPanel.Visibility = Visibility.Visible;
             NpcDetailsPanel.Visibility = Visibility.Collapsed;
             ShowMonsterDetails(mobEntry);
+            RefreshOutputPreview();
             return;
         }
 
@@ -309,6 +353,7 @@ public partial class MainWindow : Window
             MonsterDetailsPanel.Visibility = Visibility.Collapsed;
             NpcDetailsPanel.Visibility = Visibility.Visible;
             ShowNpcDetails(npcEntry);
+            RefreshOutputPreview();
             return;
         }
 
@@ -318,6 +363,7 @@ public partial class MainWindow : Window
         MonsterDetailsPanel.Visibility = Visibility.Collapsed;
         NpcDetailsPanel.Visibility = Visibility.Collapsed;
         ShowAssetDetails(entry);
+        RefreshOutputPreview();
         return;
     }
 
@@ -345,6 +391,301 @@ public partial class MainWindow : Window
                 FileAssignmentPanel.Visibility = Visibility.Collapsed;
         }
         ClearDetails();
+        RefreshOutputPreview();
+    }
+
+    private void RefreshOutputPreview()
+    {
+        if (PreviewYamlText == null) return;
+
+        if (AssetListBox?.SelectedItem is ItemEntry item)
+        {
+            try
+            {
+                PreviewYamlText.Text = App.ItemDbService.GetItemYamlPreview(item);
+            }
+            catch (Exception ex)
+            {
+                PreviewYamlText.Text = "-- Error: " + ex.Message;
+            }
+
+            var clientEntry = new ClientItemInfoEntry
+            {
+                Id = item.Id,
+                IdentifiedDisplayName = item.DisplayName,
+                IdentifiedResourceName = item.ResourceName ?? item.AegisName,
+                UnidentifiedDisplayName = "????",
+                UnidentifiedResourceName = item.ResourceName ?? item.AegisName,
+                SlotCount = item.Slots ?? 0,
+                ClassNum = item.View ?? 0
+            };
+            clientEntry.IdentifiedDescriptionName.AddRange((item.Description ?? "TODO: description").Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries));
+            if (clientEntry.IdentifiedDescriptionName.Count == 0) clientEntry.IdentifiedDescriptionName.Add("TODO: description");
+            clientEntry.UnidentifiedDescriptionName.Add("Unidentified item.");
+            PreviewLuaText.Text = "  -- Item " + item.Id + "\n" + ClientItemInfoWriter.RenderEntry(clientEntry);
+
+            PreviewAccessoryText.Text = (item.View.HasValue && item.View.Value > 0)
+                ? AccessoryIdWriter.GetPreviewLines(item.View.Value, item.ResourceName ?? item.AegisName)
+                : "-- Select a headgear item with View ID to see accessory table lines.";
+
+            PreviewNpcText.Text = "-- Select an NPC to see script preview.";
+        }
+        else if (AssetListBox?.SelectedItem is NpcScriptEntry npc)
+        {
+            PreviewYamlText.Text = "-- Select an item to see YAML preview.";
+            PreviewLuaText.Text = "-- Select an item to see Lua overlay preview.";
+            PreviewAccessoryText.Text = "-- Select an item to see accessory preview.";
+            var map = npc.Map ?? "prontera";
+            var x = npc.X; var y = npc.Y; var dir = npc.Direction;
+            PreviewNpcText.Text = NpcScriptWriter.GetEntryScriptContent(map, x, y, dir, npc.Name ?? "Custom", npc.SpriteId ?? "1");
+        }
+        else
+        {
+            PreviewYamlText.Text = "-- Select an item or NPC to see output preview.";
+            PreviewLuaText.Text = "";
+            PreviewAccessoryText.Text = "";
+            PreviewNpcText.Text = "";
+        }
+    }
+
+    private void PreviewCopyYaml_Click(object sender, RoutedEventArgs e)
+    {
+        if (!string.IsNullOrEmpty(PreviewYamlText?.Text))
+            System.Windows.Clipboard.SetText(PreviewYamlText.Text);
+    }
+
+    private void PreviewCopyLua_Click(object sender, RoutedEventArgs e)
+    {
+        if (!string.IsNullOrEmpty(PreviewLuaText?.Text))
+            System.Windows.Clipboard.SetText(PreviewLuaText.Text);
+    }
+
+    private void PreviewCopyAccessory_Click(object sender, RoutedEventArgs e)
+    {
+        if (!string.IsNullOrEmpty(PreviewAccessoryText?.Text))
+            System.Windows.Clipboard.SetText(PreviewAccessoryText.Text);
+    }
+
+    private void PreviewCopyNpc_Click(object sender, RoutedEventArgs e)
+    {
+        if (!string.IsNullOrEmpty(PreviewNpcText?.Text))
+            System.Windows.Clipboard.SetText(PreviewNpcText.Text);
+    }
+
+    private void BatchImportFolder_Click(object sender, RoutedEventArgs e)
+    {
+        using var dlg = new System.Windows.Forms.FolderBrowserDialog
+        {
+            Description = "Select folder with icons (.bmp) and/or sprites (.spr, .act)",
+            UseDescriptionForTitle = true
+        };
+        if (dlg.ShowDialog() != System.Windows.Forms.DialogResult.OK) return;
+        var folder = dlg.SelectedPath;
+        if (string.IsNullOrEmpty(folder) || !Directory.Exists(folder)) return;
+        var existing = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var row in _batchRows)
+        {
+            if (!string.IsNullOrEmpty(row.ImportFileName))
+                existing.Add(row.ImportFileName);
+        }
+        var added = 0;
+        foreach (var path in Directory.EnumerateFiles(folder, "*.*", SearchOption.TopDirectoryOnly))
+        {
+            var ext = Path.GetExtension(path);
+            var baseName = Path.GetFileNameWithoutExtension(path);
+            var fileName = Path.GetFileName(path);
+            if (existing.Contains(fileName)) continue;
+            if (string.Equals(ext, ".bmp", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(ext, ".spr", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(ext, ".act", StringComparison.OrdinalIgnoreCase))
+            {
+                existing.Add(fileName);
+                var row = new BatchItemRow
+                {
+                    ImportFileName = fileName,
+                    DisplayName = baseName?.Replace("_", " ") ?? fileName,
+                    SpriteName = baseName ?? "",
+                    IconName = string.Equals(ext, ".bmp", StringComparison.OrdinalIgnoreCase) ? fileName : "",
+                    Type = "Equip"
+                };
+                _batchRows.Add(row);
+                added++;
+            }
+        }
+        System.Windows.MessageBox.Show(this, $"Added {added} row(s). Skipped duplicates.", "Batch Import", MessageBoxButton.OK, MessageBoxImage.Information);
+    }
+
+    private void BatchNewItemList_Click(object sender, RoutedEventArgs e)
+    {
+        _batchRows.Clear();
+        BatchInspectorPanel.Visibility = Visibility.Collapsed;
+        System.Windows.MessageBox.Show(this, "Table cleared. Next Generate All will allocate IDs from the configured range.", "Batch Import", MessageBoxButton.OK, MessageBoxImage.Information);
+    }
+
+    private void BatchGenerateAll_Click(object sender, RoutedEventArgs e)
+    {
+        if (string.IsNullOrEmpty(App.Config?.DataPath))
+        {
+            System.Windows.MessageBox.Show(this, "Set rAthena folder first (File > Select rAthena folder).", "Batch Import", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+        var written = 0;
+        var errors = new List<string>();
+        foreach (var row in _batchRows)
+        {
+            try
+            {
+                var itemId = row.ItemId > 0 ? row.ItemId : App.ItemDbService.GetNextCustomItemId();
+                var viewId = row.ViewId > 0 ? row.ViewId : (row.Type == "Equip" ? App.ItemDbService.GetNextCustomViewId(32000) : 0);
+                var entry = row.ToItemEntry(itemId, viewId);
+                var result = App.ItemDbService.SaveItem(entry);
+                if (result != null)
+                {
+                    written++;
+                    row.ItemId = itemId;
+                    row.ViewId = viewId;
+                    if (App.AccessoryIdWriter != null && viewId > 0)
+                        App.AccessoryIdWriter.WriteEntry(entry);
+                    if (App.Config.ClientWriteMode == Config.ClientWriteMode.LiveClient && App.ItemInfoLuaWriter != null)
+                    {
+                        var clientEntry = new ClientItemInfoEntry
+                        {
+                            Id = entry.Id,
+                            IdentifiedDisplayName = entry.DisplayName,
+                            IdentifiedResourceName = entry.ResourceName ?? entry.AegisName,
+                            UnidentifiedDisplayName = "????",
+                            UnidentifiedResourceName = entry.ResourceName ?? entry.AegisName,
+                            SlotCount = entry.Slots ?? 0,
+                            ClassNum = viewId
+                        };
+                        clientEntry.IdentifiedDescriptionName.AddRange((entry.Description ?? "").Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries));
+                        if (clientEntry.IdentifiedDescriptionName.Count == 0) clientEntry.IdentifiedDescriptionName.Add("TODO");
+                        clientEntry.UnidentifiedDescriptionName.Add("Unidentified.");
+                        App.ClientItemInfoService.Upsert(clientEntry);
+                    }
+                }
+                else
+                    errors.Add($"Row {row.DisplayName}: SaveItem failed.");
+            }
+            catch (Exception ex)
+            {
+                errors.Add($"Row {row.DisplayName}: {ex.Message}");
+            }
+        }
+        if (App.Config?.ClientWriteMode == Config.ClientWriteMode.LiveClient && App.ClientItemInfoWriter != null && !string.IsNullOrEmpty(App.Config.ClientPatchRoot))
+        {
+            var customItems = App.ItemDbService.Items.Where(i => i.Id >= 50000).ToList();
+            var list = new List<ClientItemInfoEntry>();
+            foreach (var item in customItems)
+            {
+                if (App.ClientItemInfoService.TryGet(item.Id, out var c) && c != null)
+                    list.Add(c);
+                else
+                    list.Add(new ClientItemInfoEntry { Id = item.Id, IdentifiedDisplayName = item.DisplayName, IdentifiedResourceName = item.ResourceName ?? item.AegisName, UnidentifiedDisplayName = "????", UnidentifiedResourceName = item.ResourceName ?? item.AegisName, SlotCount = item.Slots ?? 0, ClassNum = item.View ?? 0 });
+            }
+            try { App.ClientItemInfoWriter.WriteCustomFile(App.Config.ClientPatchRoot, list); } catch { }
+        }
+        var msg = $"Written: {written} item(s).";
+        if (errors.Count > 0)
+            msg += "\nErrors: " + string.Join("\n", errors.Take(5)) + (errors.Count > 5 ? "..." : "");
+        System.Windows.MessageBox.Show(this, msg, "Batch Import", MessageBoxButton.OK, errors.Count > 0 ? MessageBoxImage.Warning : MessageBoxImage.Information);
+    }
+
+    private void BatchImportGrid_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (BatchImportGrid?.SelectedItem is BatchItemRow row)
+        {
+            BatchInspectorPanel.Visibility = Visibility.Visible;
+            ItemDetailsPanel.Visibility = Visibility.Collapsed;
+            MonsterDetailsPanel.Visibility = Visibility.Collapsed;
+            NpcDetailsPanel.Visibility = Visibility.Collapsed;
+            BatchInspectorDescription.Text = row.Description;
+            BatchInspectorScript.Text = row.Script;
+            BatchInspectorWarnings.Text = (row.ItemId > 0 && App.IdRegistryService?.IsItemIdUsed(row.ItemId) == true) ? "ItemId already in registry." : "";
+        }
+        else
+        {
+            BatchInspectorPanel.Visibility = Visibility.Collapsed;
+        }
+    }
+
+    private void BatchInspectorDescription_LostFocus(object sender, RoutedEventArgs e)
+    {
+        if (BatchImportGrid?.SelectedItem is BatchItemRow row)
+            row.Description = BatchInspectorDescription?.Text ?? "";
+    }
+
+    private void BatchInspectorScript_LostFocus(object sender, RoutedEventArgs e)
+    {
+        if (BatchImportGrid?.SelectedItem is BatchItemRow row)
+            row.Script = BatchInspectorScript?.Text ?? "";
+    }
+
+    private void PackageAddRow_Click(object sender, RoutedEventArgs e)
+    {
+        _packageEntries.Add(new PackageEntry());
+        RefreshPackagePreview();
+    }
+
+    private void PackageFixWeight_Click(object sender, RoutedEventArgs e)
+    {
+        var total = _packageEntries.Sum(p => p.Weight);
+        if (total <= 0 || _packageEntries.Count == 0) return;
+        var scale = 10000.0 / total;
+        var remainder = 10000;
+        for (var i = 0; i < _packageEntries.Count; i++)
+        {
+            var entry = _packageEntries[i];
+            var raw = (int)Math.Round(entry.Weight * scale);
+            if (i == _packageEntries.Count - 1)
+                entry.Weight = remainder;
+            else
+            {
+                entry.Weight = raw;
+                remainder -= raw;
+            }
+        }
+        RefreshPackagePreview();
+    }
+
+    private void PackageBuilderGrid_CellEditEnding(object sender, DataGridCellEditEndingEventArgs e)
+    {
+        RefreshPackagePreview();
+    }
+
+    private void RefreshPackagePreview()
+    {
+        if (PackageTotalWeight == null || PackageScriptPreview == null) return;
+        var total = _packageEntries.Sum(p => p.Weight);
+        var valid = total == 10000;
+        PackageTotalWeight.Text = $"Total: {total} / 10000" + (valid ? " (OK)" : " — must equal 10000");
+        PackageTotalWeight.Foreground = valid ? System.Windows.Media.Brushes.Black : System.Windows.Media.Brushes.OrangeRed;
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("-- Package script glue (rAthena-style). Sum of weights must be 10000.");
+        sb.AppendLine("set .@r, rand(10000);");
+        var cum = 0;
+        foreach (var e in _packageEntries)
+        {
+            if (e.Weight <= 0) continue;
+            var next = cum + e.Weight;
+            sb.AppendLine($"if (.@r < {next}) {{ getitem {e.ItemId},{e.Amount}; end; }}");
+            cum = next;
+        }
+        sb.AppendLine("-- end package");
+        PackageScriptPreview.Text = sb.ToString();
+    }
+
+    private void SidebarItems_Click(object sender, RoutedEventArgs e) => CategoryTabs.SelectedIndex = 0;
+    private void SidebarBatchImport_Click(object sender, RoutedEventArgs e) => CategoryTabs.SelectedIndex = 1;
+    private void SidebarPackageBuilder_Click(object sender, RoutedEventArgs e) => CategoryTabs.SelectedIndex = 2;
+    private void SidebarMonsters_Click(object sender, RoutedEventArgs e) => CategoryTabs.SelectedIndex = 3;
+    private void SidebarNpcs_Click(object sender, RoutedEventArgs e) => CategoryTabs.SelectedIndex = 4;
+    private void SidebarWorkspace_Click(object sender, RoutedEventArgs e) => CategoryTabs.SelectedIndex = 7;
+    private void SidebarClearCache_Click(object sender, RoutedEventArgs e)
+    {
+        App.RefreshIdRegistry();
+        App.SpriteLookupService?.ClearCache();
+        System.Windows.MessageBox.Show(this, "ID registry and sprite cache refreshed.", "Clear cache", MessageBoxButton.OK, MessageBoxImage.Information);
     }
 
     private void SetPreviewMode(PreviewMode mode)
@@ -458,6 +799,70 @@ public partial class MainWindow : Window
     {
         if (AssetListBox.SelectedItem is NpcScriptEntry npc)
             ShowNpcDetails(npc);
+    }
+
+    private void NpcGenGenerate_Click(object sender, RoutedEventArgs e)
+    {
+        if (App.NpcScriptWriter == null || string.IsNullOrEmpty(App.Config?.DataPath))
+        {
+            System.Windows.MessageBox.Show(this, "Set rAthena folder first.", "NPC Generator", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+        var map = NpcGenMap?.Text?.Trim() ?? "prontera";
+        var name = NpcGenName?.Text?.Trim() ?? "Custom_NPC";
+        var spriteId = NpcGenSpriteId?.Text?.Trim() ?? "1";
+        if (!int.TryParse(NpcGenX?.Text, out var x)) x = 150;
+        if (!int.TryParse(NpcGenY?.Text, out var y)) y = 150;
+        if (!int.TryParse(NpcGenDir?.Text, out var dir)) dir = 4;
+        string? path = null;
+        var templateIndex = NpcTemplateType?.SelectedIndex ?? 0;
+        if (templateIndex == 0) // Dialogue
+        {
+            path = App.NpcScriptWriter.WriteEntry(map, x, y, dir, name, spriteId);
+        }
+        else if (templateIndex == 1) // Warp
+        {
+            var tMap = NpcGenWarpMap?.Text?.Trim() ?? "prontera";
+            if (!int.TryParse(NpcGenWarpX?.Text, out var tx)) tx = 156;
+            if (!int.TryParse(NpcGenWarpY?.Text, out var ty)) ty = 191;
+            path = App.NpcScriptWriter.WriteWarpNpc(map, x, y, dir, name, spriteId, tMap, tx, ty);
+        }
+        else // Shop
+        {
+            var entries = new List<NpcScriptWriter.ShopEntry>();
+            if (NpcShopGrid?.ItemsSource is System.Collections.IEnumerable list)
+            {
+                foreach (var item in list)
+                {
+                    if (item is ShopItemEntry shopItem)
+                        entries.Add(new NpcScriptWriter.ShopEntry(shopItem.ItemId, shopItem.Price));
+                }
+            }
+            path = App.NpcScriptWriter.WriteShopNpc(map, x, y, dir, name, spriteId, entries);
+        }
+        if (!string.IsNullOrEmpty(path))
+            System.Windows.MessageBox.Show(this, "Written: " + path, "NPC Generator", MessageBoxButton.OK, MessageBoxImage.Information);
+        else
+            System.Windows.MessageBox.Show(this, "Failed to write script.", "NPC Generator", MessageBoxButton.OK, MessageBoxImage.Warning);
+    }
+
+    private void NpcGenCopyGmCommand_Click(object sender, RoutedEventArgs e)
+    {
+        string map; int x, y;
+        if (AssetListBox?.SelectedItem is NpcScriptEntry npc)
+        {
+            map = npc.Map ?? "prontera";
+            x = npc.X; y = npc.Y;
+        }
+        else
+        {
+            map = NpcGenMap?.Text?.Trim() ?? "prontera";
+            if (!int.TryParse(NpcGenX?.Text, out x)) x = 150;
+            if (!int.TryParse(NpcGenY?.Text, out y)) y = 150;
+        }
+        var cmd = NpcScriptWriter.FormatWarpTestCommand(map, x, y);
+        System.Windows.Clipboard.SetText(cmd);
+        System.Windows.MessageBox.Show(this, "Copied: " + cmd, "NPC Generator", MessageBoxButton.OK, MessageBoxImage.Information);
     }
 
     private static MobEntry CloneMob(MobEntry source)
@@ -2095,6 +2500,18 @@ public partial class MainWindow : Window
         var grfPath = !string.IsNullOrEmpty(cfg?.TargetGrfPath) ? cfg.TargetGrfPath
             : (!string.IsNullOrEmpty(clientRoot) ? Path.Combine(clientRoot, cfg?.TargetGrfFileName ?? "custom.grf") : null);
         FileAssignGrfPath.Text = !string.IsNullOrEmpty(grfPath) ? grfPath : "(not configured)";
+
+        if (FileAssignItemIdMin != null) FileAssignItemIdMin.Text = (cfg?.ItemIdMin ?? 50000).ToString();
+        if (FileAssignItemIdMax != null) FileAssignItemIdMax.Text = (cfg?.ItemIdMax ?? 59999).ToString();
+        if (FileAssignViewIdMin != null) FileAssignViewIdMin.Text = (cfg?.ViewIdMin ?? 32000).ToString();
+        if (FileAssignViewIdMax != null) FileAssignViewIdMax.Text = (cfg?.ViewIdMax ?? 32999).ToString();
+        if (FileAssignMobIdMin != null) FileAssignMobIdMin.Text = (cfg?.MobIdMin ?? 30000).ToString();
+        if (FileAssignMobIdMax != null) FileAssignMobIdMax.Text = (cfg?.MobIdMax ?? 30999).ToString();
+
+        var reg = App.IdRegistryService;
+        if (FileAssignItemIdLast != null) FileAssignItemIdLast.Text = reg != null ? "Last: " + (reg.LastAllocatedItemId > 0 ? reg.LastAllocatedItemId.ToString() : "—") : "Last: —";
+        if (FileAssignViewIdLast != null) FileAssignViewIdLast.Text = reg != null ? "Last: " + (reg.LastAllocatedViewId > 0 ? reg.LastAllocatedViewId.ToString() : "—") : "Last: —";
+        if (FileAssignMobIdLast != null) FileAssignMobIdLast.Text = reg != null ? "Last: " + (reg.LastAllocatedMobId > 0 ? reg.LastAllocatedMobId.ToString() : "—") : "Last: —";
     }
 
     private void RefreshFileAssignProfileCombo()
@@ -2182,6 +2599,27 @@ public partial class MainWindow : Window
         PopulateFileAssignmentPaths();
         SetupFileWatcher(App.Config.DataPath ?? "");
         System.Windows.MessageBox.Show(this, "Profile applied.", "RoDbEditor", MessageBoxButton.OK, MessageBoxImage.Information);
+    }
+
+    private void FileAssignIdRange_LostFocus(object sender, RoutedEventArgs e)
+    {
+        var cfg = App.Config;
+        if (cfg == null) return;
+        var profile = cfg.GetActiveProfile();
+        if (profile == null) return;
+        if (int.TryParse(FileAssignItemIdMin?.Text, out var iMin)) { profile.ItemIdMin = iMin; cfg.ItemIdMin = iMin; }
+        if (int.TryParse(FileAssignItemIdMax?.Text, out var iMax)) { profile.ItemIdMax = iMax; cfg.ItemIdMax = iMax; }
+        if (int.TryParse(FileAssignViewIdMin?.Text, out var vMin)) { profile.ViewIdMin = vMin; cfg.ViewIdMin = vMin; }
+        if (int.TryParse(FileAssignViewIdMax?.Text, out var vMax)) { profile.ViewIdMax = vMax; cfg.ViewIdMax = vMax; }
+        if (int.TryParse(FileAssignMobIdMin?.Text, out var mMin)) { profile.MobIdMin = mMin; cfg.MobIdMin = mMin; }
+        if (int.TryParse(FileAssignMobIdMax?.Text, out var mMax)) { profile.MobIdMax = mMax; cfg.MobIdMax = mMax; }
+        cfg.Save();
+    }
+
+    private void FileAssignRefreshIdRegistry_Click(object sender, RoutedEventArgs e)
+    {
+        App.RefreshIdRegistry();
+        PopulateFileAssignmentPaths();
     }
 
     private void FileAssignSetRathena_Click(object sender, RoutedEventArgs e)
@@ -2505,6 +2943,18 @@ public partial class MainWindow : Window
     }
 
 
+
+    private void MenuSetupWizard_Click(object sender, RoutedEventArgs e)
+    {
+        var wiz = new SetupWizard();
+        wiz.Owner = this;
+        wiz.ShowDialog();
+        if (wiz.CompletedSuccessfully && App.Config.GetActiveProfile() is { } profile)
+        {
+            App.ApplyWorkspaceProfile(profile);
+            System.Windows.MessageBox.Show(this, "Setup saved. Workspace has been refreshed.", "Setup Wizard", MessageBoxButton.OK);
+        }
+    }
 
     private void MenuSpriteDiagnostic_Click(object sender, RoutedEventArgs e)
     {

@@ -72,6 +72,19 @@ public class WorkspaceProfile
     /// </summary>
     public ClientWriteMode ClientWriteMode { get; set; } = ClientWriteMode.PatchOnly;
 
+    /// <summary>Minimum custom item ID (default 50000). Used by IdRegistryService.</summary>
+    public int ItemIdMin { get; set; } = 50000;
+    /// <summary>Maximum custom item ID (default 59999).</summary>
+    public int ItemIdMax { get; set; } = 59999;
+    /// <summary>Minimum custom headgear view ID (default 32000).</summary>
+    public int ViewIdMin { get; set; } = 32000;
+    /// <summary>Maximum custom view ID (default 32999).</summary>
+    public int ViewIdMax { get; set; } = 32999;
+    /// <summary>Minimum custom mob ID (default 30000).</summary>
+    public int MobIdMin { get; set; } = 30000;
+    /// <summary>Maximum custom mob ID (default 30999).</summary>
+    public int MobIdMax { get; set; } = 30999;
+
     public WorkspaceProfile Clone()
     {
         var p = new WorkspaceProfile
@@ -82,7 +95,13 @@ public class WorkspaceProfile
             ClientPatchRoot = ClientPatchRoot,
             TargetGrfPath = TargetGrfPath,
             TargetGrfFileName = TargetGrfFileName,
-            ClientWriteMode = ClientWriteMode
+            ClientWriteMode = ClientWriteMode,
+            ItemIdMin = ItemIdMin,
+            ItemIdMax = ItemIdMax,
+            ViewIdMin = ViewIdMin,
+            ViewIdMax = ViewIdMax,
+            MobIdMin = MobIdMin,
+            MobIdMax = MobIdMax
         };
         foreach (var path in GrfPaths)
             p.GrfPaths.Add(path);
@@ -148,6 +167,20 @@ public class RoDbEditorConfig
     /// </summary>
     public ClientWriteMode ClientWriteMode { get; set; } = ClientWriteMode.PatchOnly;
 
+    /// <summary>Minimum custom item ID (default 50000). Mirrored from active profile.</summary>
+    public int ItemIdMin { get; set; } = 50000;
+    public int ItemIdMax { get; set; } = 59999;
+    public int ViewIdMin { get; set; } = 32000;
+    public int ViewIdMax { get; set; } = 32999;
+    public int MobIdMin { get; set; } = 30000;
+    public int MobIdMax { get; set; } = 30999;
+
+    /// <summary>
+    /// True after the first-run setup wizard has been completed.
+    /// When false and paths are empty, App shows SetupWizard instead of MainWindow.
+    /// </summary>
+    public bool HasCompletedWizard { get; set; }
+
     public static RoDbEditorConfig Load()
     {
         var config = new RoDbEditorConfig();
@@ -199,6 +232,8 @@ public class RoDbEditorConfig
                 {
                     if (string.Equals(key, "ActiveProfileName", System.StringComparison.OrdinalIgnoreCase) && !string.IsNullOrEmpty(value))
                         config.ActiveProfileName = value;
+                    if (string.Equals(key, "HasCompletedWizard", System.StringComparison.OrdinalIgnoreCase))
+                        config.HasCompletedWizard = value.Equals("true", System.StringComparison.OrdinalIgnoreCase) || value == "1";
                     continue;
                 }
 
@@ -231,6 +266,18 @@ public class RoDbEditorConfig
                         if (System.Enum.TryParse<ClientWriteMode>(value, ignoreCase: true, out var mode))
                             config.ClientWriteMode = mode;
                     }
+                    if (string.Equals(key, "ItemIdMin", System.StringComparison.OrdinalIgnoreCase) && int.TryParse(value, out var iMin))
+                        config.ItemIdMin = iMin;
+                    if (string.Equals(key, "ItemIdMax", System.StringComparison.OrdinalIgnoreCase) && int.TryParse(value, out var iMax))
+                        config.ItemIdMax = iMax;
+                    if (string.Equals(key, "ViewIdMin", System.StringComparison.OrdinalIgnoreCase) && int.TryParse(value, out var vMin))
+                        config.ViewIdMin = vMin;
+                    if (string.Equals(key, "ViewIdMax", System.StringComparison.OrdinalIgnoreCase) && int.TryParse(value, out var vMax))
+                        config.ViewIdMax = vMax;
+                    if (string.Equals(key, "MobIdMin", System.StringComparison.OrdinalIgnoreCase) && int.TryParse(value, out var mMin))
+                        config.MobIdMin = mMin;
+                    if (string.Equals(key, "MobIdMax", System.StringComparison.OrdinalIgnoreCase) && int.TryParse(value, out var mMax))
+                        config.MobIdMax = mMax;
                 }
             }
 
@@ -292,6 +339,18 @@ public class RoDbEditorConfig
         }
         else if ((string.Equals(key, "Path", System.StringComparison.OrdinalIgnoreCase) || string.Equals(key, "GrfPath", System.StringComparison.OrdinalIgnoreCase)) && !string.IsNullOrEmpty(value))
             profile.GrfPaths.Add(value);
+        else if (string.Equals(key, "ItemIdMin", System.StringComparison.OrdinalIgnoreCase) && int.TryParse(value, out var itemMin))
+            profile.ItemIdMin = itemMin;
+        else if (string.Equals(key, "ItemIdMax", System.StringComparison.OrdinalIgnoreCase) && int.TryParse(value, out var itemMax))
+            profile.ItemIdMax = itemMax;
+        else if (string.Equals(key, "ViewIdMin", System.StringComparison.OrdinalIgnoreCase) && int.TryParse(value, out var viewMin))
+            profile.ViewIdMin = viewMin;
+        else if (string.Equals(key, "ViewIdMax", System.StringComparison.OrdinalIgnoreCase) && int.TryParse(value, out var viewMax))
+            profile.ViewIdMax = viewMax;
+        else if (string.Equals(key, "MobIdMin", System.StringComparison.OrdinalIgnoreCase) && int.TryParse(value, out var mobMin))
+            profile.MobIdMin = mobMin;
+        else if (string.Equals(key, "MobIdMax", System.StringComparison.OrdinalIgnoreCase) && int.TryParse(value, out var mobMax))
+            profile.MobIdMax = mobMax;
     }
 
     /// <summary>Persist config to INI file (creates directory if needed).</summary>
@@ -311,9 +370,10 @@ public class RoDbEditorConfig
 
         var sb = new System.Text.StringBuilder();
 
-        // [Profiles] section: active profile name
+        // [Profiles] section: active profile name and wizard state
         sb.AppendLine("[" + SectionProfiles + "]");
         sb.AppendLine("ActiveProfileName=" + (ActiveProfileName ?? GetActiveProfile()?.Name ?? "Default"));
+        sb.AppendLine("HasCompletedWizard=" + (HasCompletedWizard ? "true" : "false"));
         sb.AppendLine();
 
         // [Profile:Name] sections: one per profile
@@ -331,6 +391,12 @@ public class RoDbEditorConfig
                 sb.AppendLine("TargetGrfPath=" + profile.TargetGrfPath);
             sb.AppendLine("TargetGrfFileName=" + (profile.TargetGrfFileName ?? "custom.grf"));
             sb.AppendLine("ClientWriteMode=" + profile.ClientWriteMode);
+            sb.AppendLine("ItemIdMin=" + profile.ItemIdMin);
+            sb.AppendLine("ItemIdMax=" + profile.ItemIdMax);
+            sb.AppendLine("ViewIdMin=" + profile.ViewIdMin);
+            sb.AppendLine("ViewIdMax=" + profile.ViewIdMax);
+            sb.AppendLine("MobIdMin=" + profile.MobIdMin);
+            sb.AppendLine("MobIdMax=" + profile.MobIdMax);
             foreach (var path in profile.GrfPaths)
             {
                 if (!string.IsNullOrEmpty(path))
@@ -351,6 +417,12 @@ public class RoDbEditorConfig
         if (!string.IsNullOrEmpty(ClientPatchRoot))
             sb.AppendLine("ClientPatchRoot=" + ClientPatchRoot);
         sb.AppendLine("ClientWriteMode=" + ClientWriteMode);
+        sb.AppendLine("ItemIdMin=" + ItemIdMin);
+        sb.AppendLine("ItemIdMax=" + ItemIdMax);
+        sb.AppendLine("ViewIdMin=" + ViewIdMin);
+        sb.AppendLine("ViewIdMax=" + ViewIdMax);
+        sb.AppendLine("MobIdMin=" + MobIdMin);
+        sb.AppendLine("MobIdMax=" + MobIdMax);
         foreach (var path in GrfPaths)
         {
             if (!string.IsNullOrEmpty(path))
@@ -381,7 +453,13 @@ public class RoDbEditorConfig
             ClientPatchRoot = ClientPatchRoot,
             TargetGrfPath = TargetGrfPath,
             TargetGrfFileName = TargetGrfFileName ?? "custom.grf",
-            ClientWriteMode = ClientWriteMode
+            ClientWriteMode = ClientWriteMode,
+            ItemIdMin = ItemIdMin,
+            ItemIdMax = ItemIdMax,
+            ViewIdMin = ViewIdMin,
+            ViewIdMax = ViewIdMax,
+            MobIdMin = MobIdMin,
+            MobIdMax = MobIdMax
         };
         foreach (var path in GrfPaths)
             legacy.GrfPaths.Add(path);
@@ -402,6 +480,12 @@ public class RoDbEditorConfig
         TargetGrfPath = active.TargetGrfPath;
         TargetGrfFileName = active.TargetGrfFileName ?? "custom.grf";
         ClientWriteMode = active.ClientWriteMode;
+        ItemIdMin = active.ItemIdMin;
+        ItemIdMax = active.ItemIdMax;
+        ViewIdMin = active.ViewIdMin;
+        ViewIdMax = active.ViewIdMax;
+        MobIdMin = active.MobIdMin;
+        MobIdMax = active.MobIdMax;
         GrfPaths.Clear();
         foreach (var path in active.GrfPaths)
             GrfPaths.Add(path);
